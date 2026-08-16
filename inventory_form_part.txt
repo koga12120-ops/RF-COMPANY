@@ -1,0 +1,127 @@
+    return sortDate === 'desc' ? dateB - dateA : dateA - dateB;
+  });
+
+  const uniqueSuppliers = Array.from(new Set(items.map(i => i.supplier).filter(Boolean)));
+
+
+  return (
+    <div className="space-y-6">
+      {/* Form Section */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+        <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">
+          {isEditing ? 'دەستکاریکردنی کاڵا' : 'داخڵکردنی کاڵای نوێ'}
+        </h3>
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">ناوی کاڵا</label>
+            <input
+              type="text"
+              required
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">بارکۆد (دەستی یان سکانەر)</label>
+            <input
+              type="text"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+              value={barcode}
+              onChange={(e) => setBarcode(e.target.value)}
+              dir="ltr"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">عددی کاڵا (بە کارتۆن)</label>
+            <input
+              type="number"
+              required
+              min="0"
+              step="any"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              value={cartonQuantity}
+              onChange={(e) => setCartonQuantity(e.target.value)}
+              dir="ltr"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">بڕی کارتۆن (هەر کارتۆنێک چەندی تێدایە)</label>
+            <input
+              type="number"
+              required
+              min="1"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              value={ratio}
+              onChange={(e) => setRatio(e.target.value)}
+              dir="ltr"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">نرخ بە کارتۆن</label>
+            <input
+              type="number"
+              required
+              min="0"
+              step="0.01"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              value={cartonCostPrice}
+              onChange={(e) => setCartonCostPrice(e.target.value)}
+              dir="ltr"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">نرخ بە تاک (بە عدد)</label>
+            <input
+              type="number"
+              required
+              min="0"
+              step="0.01"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              value={sellingPrice}
+              onChange={(e) => setSellingPrice(e.target.value)}
+              dir="ltr"
+            />
+          </div>
+          
+
+          <div>
+            <label className="block text-sm text-gray-600 mb-1">کۆمپانیا / شوێن</label>
+            <input
+              type="text"
+              list="companies-list"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              value={supplier}
+              onChange={(e) => setSupplier(e.target.value)}
+            />
+            <datalist id="companies-list">
+              {companies.map(c => <option key={c.id} value={c.name} />)}
+            </datalist>
+          </div>
+          <div className="lg:col-span-3 flex flex-col gap-3 mt-2">
+          <div className="flex gap-4 items-center mb-1">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" checked={paymentType === 'cash'} onChange={() => setPaymentType('cash')} className="text-indigo-600" />
+              <span className="text-sm font-medium text-slate-700">نەقد</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" checked={paymentType === 'debt'} onChange={() => setPaymentType('debt')} className="text-indigo-600" />
+              <span className="text-sm font-medium text-slate-700">قەرز</span>
+            </label>
+          </div>
+<div className="flex items-end gap-3">
+            <button
+              type="submit"
+              className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition flex items-center gap-2"
+            >
+              {isEditing ? <Edit2 size={18} /> : <Plus size={18} />}
+              <span>{isEditing ? 'پاشەکەوتکردنی گۆڕانکاری' : 'زیادکردنی کاڵا'}</span>
+            </button>
+            {isEditing && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="px-6 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition font-medium"
+              >
+                پاشگەزبوونەوە
+              </button>

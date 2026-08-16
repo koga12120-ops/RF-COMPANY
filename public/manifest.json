@@ -1,0 +1,15 @@
+{
+  "name": "کۆگای RF",
+  "short_name": "کۆگا",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/LOGO1.jpg",
+      "sizes": "192x192 512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}
