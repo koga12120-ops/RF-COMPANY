@@ -18,16 +18,19 @@ export default function InventoryView({ role }: { role: Role }) {
 
   const [pieceCost, setPieceCost] = useState('');
   const [piecePrice, setPiecePrice] = useState('');
+  const [pieceWholesale, setPieceWholesale] = useState('');
   const [pieceQuantity, setPieceQuantity] = useState('');
 
   const [packetRatio, setPacketRatio] = useState('');
   const [packetCost, setPacketCost] = useState('');
   const [packetPrice, setPacketPrice] = useState('');
+  const [packetWholesale, setPacketWholesale] = useState('');
   const [packetQuantity, setPacketQuantity] = useState('');
 
   const [cartonRatio, setCartonRatio] = useState('');
   const [cartonCost, setCartonCost] = useState('');
   const [cartonPrice, setCartonPrice] = useState('');
+  const [cartonWholesale, setCartonWholesale] = useState('');
   const [cartonQuantity, setCartonQuantity] = useState('');
 
   const [companies, setCompanies] = useState<any[]>([]);
@@ -92,14 +95,19 @@ export default function InventoryView({ role }: { role: Role }) {
       name,
       barcode,
       supplier,
+      
       costPrice: Number(pieceCost) || 0,
       sellingPrice: Number(piecePrice) || 0,
+      wholesalePrice: Number(pieceWholesale) || 0,
       packetRatio: pRatio,
       packetCostPrice: Number(packetCost) || 0,
       packetSellingPrice: Number(packetPrice) || 0,
+      packetWholesalePrice: Number(packetWholesale) || 0,
       ratio: cRatio,
       cartonCostPrice: Number(cartonCost) || 0,
       cartonSellingPrice: Number(cartonPrice) || 0,
+      cartonWholesalePrice: Number(cartonWholesale) || 0,
+
     };
 
     let costPricePerPiece = itemData.costPrice || (pRatio ? itemData.packetCostPrice / pRatio : 0) || (cRatio ? itemData.cartonCostPrice / cRatio : 0);
@@ -191,16 +199,19 @@ export default function InventoryView({ role }: { role: Role }) {
     
     setPieceCost(item.costPrice?.toString() || '');
     setPiecePrice(item.sellingPrice?.toString() || '');
+    setPieceWholesale(item.wholesalePrice?.toString() || '');
     setPieceQuantity(''); // Only for adding new quantity
 
     setPacketRatio(item.packetRatio?.toString() || '');
     setPacketCost(item.packetCostPrice?.toString() || '');
     setPacketPrice(item.packetSellingPrice?.toString() || '');
+    setPacketWholesale(item.packetWholesalePrice?.toString() || '');
     setPacketQuantity('');
 
     setCartonRatio(item.ratio?.toString() || '');
     setCartonCost(item.cartonCostPrice?.toString() || '');
     setCartonPrice(item.cartonSellingPrice?.toString() || '');
+    setCartonWholesale(item.cartonWholesalePrice?.toString() || '');
     setCartonQuantity('');
 
     setShowPacket(!!item.packetRatio || !!item.packetCostPrice || !!item.packetSellingPrice);
@@ -226,14 +237,17 @@ export default function InventoryView({ role }: { role: Role }) {
     setSupplier('');
     setPieceCost('');
     setPiecePrice('');
+    setPieceWholesale('');
     setPieceQuantity('');
     setPacketRatio('');
     setPacketCost('');
     setPacketPrice('');
+    setPacketWholesale('');
     setPacketQuantity('');
     setCartonRatio('');
     setCartonCost('');
     setCartonPrice('');
+    setCartonWholesale('');
     setCartonQuantity('');
     setPaymentType('cash');
     setShowPacket(false);
@@ -282,6 +296,7 @@ export default function InventoryView({ role }: { role: Role }) {
   const autoCalculate = () => {
     let pCost = Number(pieceCost) || 0;
     let pPrice = Number(piecePrice) || 0;
+    let pWholesale = Number(pieceWholesale) || 0;
     const cRatio = Number(cartonRatio) || 0;
     const pktRatio = Number(packetRatio) || 0;
 
@@ -294,6 +309,10 @@ export default function InventoryView({ role }: { role: Role }) {
       pPrice = Number(cartonPrice) / cRatio;
       setPiecePrice(pPrice.toString());
     }
+    if (pWholesale === 0 && showCarton && Number(cartonWholesale) > 0 && cRatio > 0) {
+      pWholesale = Number(cartonWholesale) / cRatio;
+      setPieceWholesale(pWholesale.toString());
+    }
 
     // 2. Try to deduce piece cost/price from packet if piece is empty
     if (pCost === 0 && showPacket && Number(packetCost) > 0 && pktRatio > 0) {
@@ -304,17 +323,23 @@ export default function InventoryView({ role }: { role: Role }) {
       pPrice = Number(packetPrice) / pktRatio;
       setPiecePrice(pPrice.toString());
     }
+    if (pWholesale === 0 && showPacket && Number(packetWholesale) > 0 && pktRatio > 0) {
+      pWholesale = Number(packetWholesale) / pktRatio;
+      setPieceWholesale(pWholesale.toString());
+    }
 
     // 3. Fill carton cost/price if empty
     if (showCarton && cRatio > 0) {
       if (!cartonCost && pCost > 0) setCartonCost((pCost * cRatio).toString());
       if (!cartonPrice && pPrice > 0) setCartonPrice((pPrice * cRatio).toString());
+      if (!cartonWholesale && pWholesale > 0) setCartonWholesale((pWholesale * cRatio).toString());
     }
 
     // 4. Fill packet cost/price if empty
     if (showPacket && pktRatio > 0) {
       if (!packetCost && pCost > 0) setPacketCost((pCost * pktRatio).toString());
       if (!packetPrice && pPrice > 0) setPacketPrice((pPrice * pktRatio).toString());
+      if (!packetWholesale && pWholesale > 0) setPacketWholesale((pWholesale * pktRatio).toString());
     }
   };
 
@@ -393,7 +418,8 @@ export default function InventoryView({ role }: { role: Role }) {
             {/* Piece Group */}
             {showPiece && (
               <div className="p-4 border border-indigo-100 rounded-xl bg-indigo-50/30 space-y-3 relative">
-                <button type="button" onClick={() => { setShowPiece(false); setPieceCost(''); setPiecePrice(''); setPieceQuantity(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
+                <button type="button" onClick={() => { setShowPiece(false); setPieceCost(''); setPiecePrice('');
+    setPieceWholesale(''); setPieceQuantity(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
                   <Trash2 size={16} />
                 </button>
                 <h4 className="font-bold text-indigo-800">بە دانە</h4>
@@ -405,17 +431,24 @@ export default function InventoryView({ role }: { role: Role }) {
                   <label className="block text-xs text-gray-500 mb-1">تێچوو بۆ هەر دانەیەک</label>
                   <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={pieceCost} onChange={(e) => setPieceCost(e.target.value)} dir="ltr" />
                 </div>
+                
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">نرخی فرۆشتن بۆ دانە</label>
                   <input type="number" min="0" step="any" required={showPiece} className="w-full px-2 py-1.5 border rounded-md text-sm" value={piecePrice} onChange={(e) => setPiecePrice(e.target.value)} dir="ltr" />
                 </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">نرخی کۆگا (کۆمەڵ)</label>
+                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={pieceWholesale} onChange={(e) => setPieceWholesale(e.target.value)} dir="ltr" />
+                </div>
+
               </div>
             )}
 
             {/* Packet Group */}
             {showPacket && (
               <div className="p-4 border border-slate-100 rounded-xl bg-slate-50 space-y-3 relative">
-                <button type="button" onClick={() => { setShowPacket(false); setPacketRatio(''); setPacketQuantity(''); setPacketCost(''); setPacketPrice(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
+                <button type="button" onClick={() => { setShowPacket(false); setPacketRatio(''); setPacketQuantity(''); setPacketCost(''); setPacketPrice('');
+    setPacketWholesale(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
                   <Trash2 size={16} />
                 </button>
                 <h4 className="font-bold text-slate-700">بە پاکەت</h4>
@@ -431,17 +464,24 @@ export default function InventoryView({ role }: { role: Role }) {
                   <label className="block text-xs text-gray-500 mb-1">تێچوو بۆ پاکەت</label>
                   <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetCost} onChange={(e) => setPacketCost(e.target.value)} dir="ltr" />
                 </div>
+                
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">نرخی فرۆشتنی پاکەت</label>
                   <input type="number" min="0" step="any" required={showPacket} className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetPrice} onChange={(e) => setPacketPrice(e.target.value)} dir="ltr" />
                 </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">نرخی کۆگا (پاکەت)</label>
+                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetWholesale} onChange={(e) => setPacketWholesale(e.target.value)} dir="ltr" />
+                </div>
+
               </div>
             )}
 
             {/* Carton Group */}
             {showCarton && (
               <div className="p-4 border border-slate-100 rounded-xl bg-slate-50 space-y-3 relative">
-                <button type="button" onClick={() => { setShowCarton(false); setCartonRatio(''); setCartonQuantity(''); setCartonCost(''); setCartonPrice(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
+                <button type="button" onClick={() => { setShowCarton(false); setCartonRatio(''); setCartonQuantity(''); setCartonCost(''); setCartonPrice('');
+    setCartonWholesale(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
                   <Trash2 size={16} />
                 </button>
                 <h4 className="font-bold text-slate-700">بە کارتۆن</h4>
@@ -457,10 +497,16 @@ export default function InventoryView({ role }: { role: Role }) {
                   <label className="block text-xs text-gray-500 mb-1">تێچوو بۆ کارتۆن</label>
                   <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonCost} onChange={(e) => setCartonCost(e.target.value)} dir="ltr" />
                 </div>
+                
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">نرخی فرۆشتنی کارتۆن</label>
                   <input type="number" min="0" step="any" required={showCarton} className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonPrice} onChange={(e) => setCartonPrice(e.target.value)} dir="ltr" />
                 </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">نرخی کۆگا (کارتۆن)</label>
+                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonWholesale} onChange={(e) => setCartonWholesale(e.target.value)} dir="ltr" />
+                </div>
+
               </div>
             )}
           </div>

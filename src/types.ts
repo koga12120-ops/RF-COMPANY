@@ -15,14 +15,17 @@ export interface Item {
   
   costPrice: number;
   sellingPrice: number;
+  wholesalePrice?: number;
   
   packetRatio?: number;
   packetCostPrice?: number;
   packetSellingPrice?: number;
+  packetWholesalePrice?: number;
 
   ratio: number; // carton ratio
   cartonCostPrice?: number;
   cartonSellingPrice?: number;
+  cartonWholesalePrice?: number;
 }
 
 export interface Market {
@@ -30,6 +33,7 @@ export interface Market {
   name: string;
   location: string;
   phone: string;
+  type?: 'market' | 'warehouse'; // مارکێت یان کۆگا
   createdAt: number;
 }
 

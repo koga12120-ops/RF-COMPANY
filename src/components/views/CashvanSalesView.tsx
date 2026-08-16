@@ -48,6 +48,23 @@ export default function CashvanSalesView() {
     };
   }, [userName]);
 
+
+  const calcPrice = (item: any, unit: string, marketName: string) => {
+    const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
+    if (isWholesale) {
+      if (unit === 'carton') return item.cartonWholesalePrice || item.cartonSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.ratio || 1));
+      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.packetRatio || 1));
+      return item.wholesalePrice || item.sellingPrice || 0;
+    } else {
+      if (unit === 'carton') return item.cartonSellingPrice || (item.sellingPrice * (item.ratio || 1));
+      if (unit === 'packet') return item.packetSellingPrice || (item.sellingPrice * (item.packetRatio || 1));
+      return item.sellingPrice || 0;
+    }
+  };
+
+  useEffect(() => {
+    setCart(prev => prev.map(p => ({ ...p, finalPrice: calcPrice(p, p.unit || 'piece', selectedMarket) })));
+  }, [selectedMarket, markets]);
   const addToCart = (item: any) => {
     setCart(prev => {
       const existing = prev.find(p => p.id === item.id);
@@ -64,7 +81,7 @@ export default function CashvanSalesView() {
         alert('بڕی داواکراو بەردەست نییە');
         return prev;
       }
-      return [...prev, { ...item, cartQty: 1, finalPrice: item.sellingPrice, unit: 'piece' }];
+      return [...prev, { ...item, cartQty: 1, finalPrice: calcPrice(item, 'piece', selectedMarket), unit: 'piece' }];
     });
   };
 
@@ -88,9 +105,7 @@ export default function CashvanSalesView() {
         return prev.filter(p => p.id !== id);
       }
       
-      const price = newUnit === 'carton' ? (item.cartonSellingPrice || item.sellingPrice * (item.ratio || 1)) : 
-                    (newUnit === 'packet' ? (item.packetSellingPrice || item.sellingPrice * (item.packetRatio || 1)) : 
-                    item.sellingPrice);
+      const price = calcPrice(item, newUnit, selectedMarket);
       
       return prev.map(p => p.id === id ? { ...p, cartQty: qty, unit: newUnit, finalPrice: price } : p);
     });
@@ -105,7 +120,7 @@ export default function CashvanSalesView() {
 
     try {
       if (selectedMarket && !markets.find(m => m.name === selectedMarket)) {
-        await addDoc(collection(db, 'markets'), { name: selectedMarket, location: '', phone: '', createdAt: Date.now() });
+        await addDoc(collection(db, 'markets'), { name: selectedMarket, location: '', phone: '', type: 'market', createdAt: Date.now() });
       }
       
       const totalAmount = cart.reduce((acc, curr) => acc + (curr.finalPrice * curr.cartQty), 0);
@@ -277,7 +292,7 @@ export default function CashvanSalesView() {
                 <div>
                   <div className="font-bold text-slate-800">{item.name}</div>
                   <div className="text-xs text-slate-500 mt-1">
-                    نرخ: {item.sellingPrice.toLocaleString()} | بەردەست: <span className="font-bold text-indigo-600">{item.quantity}</span>
+                    نرخ: {calcPrice(item, 'piece', selectedMarket).toLocaleString()} | بەردەست: <span className="font-bold text-indigo-600">{item.quantity}</span>
                   </div>
                 </div>
                 <button

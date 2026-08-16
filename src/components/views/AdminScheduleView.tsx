@@ -74,6 +74,18 @@ export default function AdminScheduleView() {
     }));
   };
 
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [schedule, selectedRep, saving]);
+
   const handleSave = async () => {
     if (!selectedRep) return;
     setSaving(true);

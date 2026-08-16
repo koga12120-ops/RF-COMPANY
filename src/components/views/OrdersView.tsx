@@ -92,11 +92,19 @@ export default function OrdersView({ role }: { role: Role }) {
     }
   };
 
-  const getPriceByUnit = (item: Item, unit: string) => {
-    if (unit === 'carton') return item.cartonSellingPrice || (item.sellingPrice * (item.ratio || 1));
-    if (unit === 'packet') return item.packetSellingPrice || (item.sellingPrice * (item.packetRatio || 1));
-    return item.sellingPrice || 0;
+  const calcPrice = (item: Item, unit: string) => {
+    const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
+    if (isWholesale) {
+      if (unit === 'carton') return item.cartonWholesalePrice || item.cartonSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.ratio || 1));
+      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.packetRatio || 1));
+      return item.wholesalePrice || item.sellingPrice || 0;
+    } else {
+      if (unit === 'carton') return item.cartonSellingPrice || (item.sellingPrice * (item.ratio || 1));
+      if (unit === 'packet') return item.packetSellingPrice || (item.sellingPrice * (item.packetRatio || 1));
+      return item.sellingPrice || 0;
+    }
   };
+
 
   const getPiecesByUnit = (item: Item, unit: string, qty: number) => {
     if (unit === 'carton') return qty * (item.ratio || 1);
@@ -161,7 +169,7 @@ export default function OrdersView({ role }: { role: Role }) {
     }
 
     const totalAmount = selectedItems.reduce((acc, curr) => {
-      const price = curr.unit === 'carton' ? (curr.item.cartonSellingPrice || (curr.item.sellingPrice * (curr.item.ratio || 1))) : (curr.unit === 'packet' ? (curr.item.packetSellingPrice || (curr.item.sellingPrice * (curr.item.packetRatio || 1))) : curr.item.sellingPrice);
+      const price = calcPrice(curr.item, curr.unit);
       return acc + (price * curr.quantity);
     }, 0);
 
@@ -175,7 +183,7 @@ export default function OrdersView({ role }: { role: Role }) {
     const orderItems = selectedItems.map(si => ({
       itemId: si.item.id,
       name: si.item.name,
-      price: si.unit === 'carton' ? (si.item.cartonSellingPrice || (si.item.sellingPrice * (si.item.ratio || 1))) : (si.unit === 'packet' ? (si.item.packetSellingPrice || (si.item.sellingPrice * (si.item.packetRatio || 1))) : si.item.sellingPrice),
+      price: calcPrice(si.item, si.unit),
       quantity: si.quantity,
       unit: si.unit
     }));
@@ -185,7 +193,7 @@ export default function OrdersView({ role }: { role: Role }) {
         await addDoc(collection(db, 'reps'), { name: repName, phone: '', totalSales: 0, totalProfit: 0, createdAt: Date.now() });
       }
       if (marketName && !markets.find(m => m.name === marketName)) {
-        await addDoc(collection(db, 'markets'), { name: marketName, phone: '', location: location || '', createdAt: Date.now() });
+        await addDoc(collection(db, 'markets'), { name: marketName, phone: '', location: location || '', type: 'market', createdAt: Date.now() });
       }
 
       await addDoc(collection(db, 'orders'), {
@@ -476,7 +484,7 @@ export default function OrdersView({ role }: { role: Role }) {
                     <div key={item.id} className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-200 shadow-sm">
                       <div>
                         <div className="font-semibold text-slate-800 text-sm">{item.name}</div>
-                        <div className="text-xs text-slate-500 mt-0.5">بەردەستە: <span dir="ltr">{item.quantity}</span> | نرخ: <span dir="ltr">{item.sellingPrice}</span></div>
+                        <div className="text-xs text-slate-500 mt-0.5">بەردەستە: <span dir="ltr">{item.quantity}</span> | نرخ: <span dir="ltr">{calcPrice(item, "piece")}</span></div>
                       </div>
                       <button
                         type="button"

@@ -221,7 +221,10 @@ export default function LedgerView() {
                            t.type === 'expense' ? 'خەرجی' : 
                            t.type === 'return_expense' ? 'گەڕانەوە' : 
                            t.type === 'cash' ? 'نەقد' :
-                           t.type === 'paid_debt' ? 'واسڵکراو' : 'قەرز'}
+                           t.type === 'paid_debt' ? 'واسڵکراو' : 
+                           t.type === 'company_cash' ? 'نەقدی کۆمپانیا' :
+                           t.type === 'company_paid_debt' ? 'پاردانەوە' :
+                           t.type === 'company_debt' ? 'قەرزی کۆمپانیا' : 'قەرز'}
                         </span>
                       </td>
                       <td className="px-4 py-4 text-slate-900 font-medium">{t.description}</td>

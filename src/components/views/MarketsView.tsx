@@ -14,6 +14,7 @@ export default function MarketsView() {
   const [name, setName] = useState('');
   const [location, setLocation] = useState('');
   const [phone, setPhone] = useState('');
+  const [type, setType] = useState<'market' | 'warehouse'>('market');
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
@@ -70,12 +71,16 @@ export default function MarketsView() {
     setName('');
     setLocation('');
     setPhone('');
+    setType('market');
+    setType('market');
   };
 
   const handleEdit = (market: Market) => {
     setName(market.name);
     setLocation(market.location);
     setPhone(market.phone);
+    setType(market.type || 'market');
+    setType(market.type || 'market');
     setIsEditing(true);
     setEditingId(market.id);
   };
@@ -92,6 +97,8 @@ export default function MarketsView() {
     setName('');
     setLocation('');
     setPhone('');
+    setType('market');
+    setType('market');
     setIsEditing(false);
     setEditingId(null);
   };
@@ -102,9 +109,9 @@ export default function MarketsView() {
         <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">
           {isEditing ? 'دەستکاریکردنی مارکێت' : 'زیادکردنی مارکێتی نوێ'}
         </h3>
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 items-end">
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
           <div>
-            <label className="block text-sm text-slate-600 mb-1">ناوی مارکێت / شوێن</label>
+            <label className="block text-sm text-slate-600 mb-1">ناوی شوێن</label>
             <input
               type="text"
               required
@@ -112,6 +119,17 @@ export default function MarketsView() {
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
+          </div>
+          <div>
+            <label className="block text-sm text-slate-600 mb-1">جۆری کڕیار</label>
+            <select
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              value={type}
+              onChange={(e) => setType(e.target.value as 'market' | 'warehouse')}
+            >
+              <option value="market">مارکێت (فرۆشتن بە نرخی ئاسایی)</option>
+              <option value="warehouse">کۆگا/جوملە (فرۆشتن بە نرخی کۆگا)</option>
+            </select>
           </div>
           <div>
             <label className="block text-sm text-slate-600 mb-1">ناونیشان / گەڕەک</label>
@@ -163,9 +181,10 @@ export default function MarketsView() {
         ) : (
           <div className="flex-1 overflow-x-auto">
             <table className="w-full text-right">
-              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">ناوی مارکێت</th>
+                  <th className="px-4 py-3 font-semibold">ناوی شوێن</th>
+                  <th className="px-4 py-3 font-semibold">جۆر</th>
                   <th className="px-4 py-3 font-semibold">ناونیشان</th>
                   <th className="px-4 py-3 font-semibold">تەلەفۆن</th>
                   <th className="px-4 py-3 font-semibold">کردارەکان</th>
@@ -173,8 +192,13 @@ export default function MarketsView() {
               </thead>
               <tbody className="text-sm divide-y divide-slate-50">
                 {markets.map(market => (
-                  <tr key={market.id} className="hover:bg-slate-50/50 transition">
+                                    <tr key={market.id} className="hover:bg-slate-50/50 transition">
                     <td className="px-4 py-4 font-medium text-slate-900">{market.name}</td>
+                    <td className="px-4 py-4">
+                      <span className={`px-2 py-1 rounded text-xs font-bold ${market.type === 'warehouse' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                        {market.type === 'warehouse' ? 'کۆگا/جوملە' : 'مارکێت'}
+                      </span>
+                    </td>
                     <td className="px-4 py-4 text-slate-600">{market.location}</td>
                     <td className="px-4 py-4 text-slate-500 font-mono text-xs" dir="ltr">{market.phone || '-'}</td>
                     <td className="px-4 py-4">
