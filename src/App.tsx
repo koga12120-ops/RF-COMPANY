@@ -14,6 +14,14 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
+    // Initialize theme
+    const savedTheme = localStorage.getItem('app-theme') || 'light';
+    const root = document.documentElement;
+    root.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
+    root.classList.add(`theme-${savedTheme}`);
+  }, []);
+
+  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
       if (firebaseUser) {
