@@ -31,14 +31,7 @@ export default function RepScheduleView() {
   useEffect(() => {
     const init = async () => {
       if (!auth.currentUser) return;
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-      const userName = userDoc.data()?.name;
-      if (!userName) return;
-
-      const repsSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', userName)));
-      if (!repsSnap.empty) {
-        setRepId(repsSnap.docs[0].id);
-      }
+      setRepId(auth.currentUser.uid);
     };
     init();
   }, []);
@@ -120,41 +113,62 @@ export default function RepScheduleView() {
   return (
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-        <div className="flex items-center gap-2 border-b border-slate-100 pb-4 mb-4">
+        <div className="flex items-center gap-2 border-b border-slate-100 pb-4 mb-6">
           <Calendar className="text-indigo-600" size={24} />
-          <h2 className="text-lg font-bold text-slate-800">خشتەی سەردانەکانی ئەمڕۆ</h2>
+          <h2 className="text-lg font-bold text-slate-800">خشتەی سەردانەکانی هەفتە</h2>
         </div>
 
-        {pendingMarkets.length === 0 ? (
-          <div className="text-center py-16 bg-emerald-50 rounded-xl border border-dashed border-emerald-200">
-            <CheckCircle2 size={48} className="mx-auto text-emerald-500 mb-3" />
-            <h3 className="text-lg font-bold text-emerald-800">هیچ سەردانێک نەماوە!</h3>
-            <p className="text-emerald-600 mt-1">هەموو سەردانەکانی ئەمڕۆت ئەنجامداوە.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {pendingMarkets.map(({ marketId, assignedDay }) => {
-              const market = markets[marketId];
-              if (!market) return null;
-              const isDelayed = assignedDay !== currentDayStr;
-
-              return (
-                <div key={marketId} className={`p-4 rounded-xl border ${isDelayed ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'} shadow-sm flex flex-col justify-between h-full`}>
-                  <div>
-                    <div className="flex justify-between items-start mb-2">
-                      <h3 className="font-bold text-slate-800 text-lg truncate pr-2">{market.name}</h3>
-                      {isDelayed && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-medium whitespace-nowrap">دواکەوتوو ({DAY_NAMES[assignedDay]})</span>}
-                    </div>
-                    <div className="flex items-center gap-1.5 text-sm text-slate-600 mb-4"><MapPin size={16} className="text-slate-400" /> {market.location || 'بێ ناونیشان'}</div>
-                  </div>
-                  <button onClick={() => handleVisit(marketId)} className="w-full py-2.5 bg-indigo-600 text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-indigo-700 transition">
-                    <CheckCircle2 size={18} /><span>سەردانم کرد</span>
-                  </button>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {WEEK_DAYS.map(day => {
+            const dayMarkets = schedule[day] || [];
+            const isToday = day === currentDayStr;
+            
+            return (
+              <div key={day} className={`border rounded-xl overflow-hidden flex flex-col ${isToday ? 'border-indigo-300 ring-1 ring-indigo-300 shadow-md' : 'border-slate-200 shadow-sm'}`}>
+                <div className={`${isToday ? 'bg-indigo-50 text-indigo-800' : 'bg-slate-50 text-slate-700'} px-4 py-3 border-b ${isToday ? 'border-indigo-200' : 'border-slate-200'} font-bold flex justify-between items-center`}>
+                  <span>{DAY_NAMES[day]} {isToday && '(ئەمڕۆ)'}</span>
+                  <span className={`text-xs px-2 py-1 rounded-full ${isToday ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-200 text-slate-600'}`}>
+                    {dayMarkets.length} سەردان
+                  </span>
                 </div>
-              );
-            })}
-          </div>
-        )}
+                
+                <div className={`p-4 flex-1 ${isToday ? 'bg-white' : 'bg-slate-50/50'}`}>
+                  {dayMarkets.length === 0 ? (
+                    <div className="text-center text-slate-400 text-sm py-4">هیچ سەردانێک نییە</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {dayMarkets.map(mId => {
+                        const market = markets[mId];
+                        const isVisited = visits[mId];
+                        if (!market) return null;
+                        
+                        return (
+                          <div key={mId} className={`p-3 rounded-lg border ${isVisited ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200'} shadow-sm`}>
+                            <div className="flex justify-between items-start mb-2">
+                              <h3 className={`font-bold text-sm truncate pr-2 ${isVisited ? 'text-emerald-800 line-through' : 'text-slate-800'}`}>{market.name}</h3>
+                              {isVisited && <CheckCircle2 size={16} className="text-emerald-500 shrink-0" />}
+                            </div>
+                            <div className="flex justify-between items-center mt-2">
+                              <div className="text-xs text-slate-500 truncate max-w-[60%]">{market.location || '-'}</div>
+                              {!isVisited && (
+                                <button 
+                                  onClick={() => handleVisit(mId)} 
+                                  className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 rounded-md text-xs font-bold hover:bg-indigo-100 transition"
+                                >
+                                  سەردانم کرد
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

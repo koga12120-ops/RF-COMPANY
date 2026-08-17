@@ -57,6 +57,7 @@ export default function MarketsView() {
         name,
         location,
         phone,
+        type,
       });
       setIsEditing(false);
       setEditingId(null);
@@ -65,13 +66,13 @@ export default function MarketsView() {
         name,
         location,
         phone,
+        type,
         createdAt: Date.now()
       });
     }
     setName('');
     setLocation('');
     setPhone('');
-    setType('market');
     setType('market');
   };
 

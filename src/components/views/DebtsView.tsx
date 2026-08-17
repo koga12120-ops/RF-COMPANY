@@ -46,7 +46,10 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
     try {
       if (relatedEntityId && !suggestions.find(s => s.name === relatedEntityId)) {
         const collectionName = type.includes('company') ? 'companies' : 'markets';
-        await addDoc(collection(db, collectionName), { name: relatedEntityId, location: '', phone: '', createdAt: Date.now() });
+        const docData: any = { name: relatedEntityId, location: '', phone: '', createdAt: Date.now() };
+        if (collectionName === 'markets') docData.type = 'market';
+        if (collectionName === 'companies') docData.type = 'warehouse';
+        await addDoc(collection(db, collectionName), docData);
       }
 
       await addDoc(collection(db, 'transactions'), {

@@ -52,6 +52,15 @@ export default function InventoryView({ role }: { role: Role }) {
       setItems(itemsData);
       setLoading(false);
     });
+
+    const qComp = query(collection(db, 'companies'));
+    const unsubComp = onSnapshot(qComp, (snapshot) => {
+      const compData: any[] = [];
+      snapshot.forEach((doc) => {
+        compData.push({ id: doc.id, ...doc.data() });
+      });
+      setCompanies(compData);
+    });
     const formatStock = (item: Item) => {
     let pieces = item.quantity || 0;
     const cRatio = item.ratio || 0;
@@ -87,8 +96,8 @@ export default function InventoryView({ role }: { role: Role }) {
     const pRatio = Number(packetRatio) || 0;
     const cRatio = Number(cartonRatio) || 0;
     
-    let totalPiecesToAdd = (Number(pieceQuantity) || 0) + 
-                           ((Number(packetQuantity) || 0) * (pRatio || 1)) + 
+    let totalPieces = (Number(pieceQuantity) || 0) +
+                           ((Number(packetQuantity) || 0) * (pRatio || 1)) +
                            ((Number(cartonQuantity) || 0) * (cRatio || 1));
 
     const itemData: any = {
@@ -107,29 +116,29 @@ export default function InventoryView({ role }: { role: Role }) {
       cartonCostPrice: Number(cartonCost) || 0,
       cartonSellingPrice: Number(cartonPrice) || 0,
       cartonWholesalePrice: Number(cartonWholesale) || 0,
-
     };
 
     let costPricePerPiece = itemData.costPrice || (pRatio ? itemData.packetCostPrice / pRatio : 0) || (cRatio ? itemData.cartonCostPrice / cRatio : 0);
 
     try {
       if (supplier && !companies.find(c => c.name === supplier)) {
-        await addDoc(collection(db, 'companies'), { name: supplier, location: '', phone: '', createdAt: Date.now() });
+        await addDoc(collection(db, 'companies'), { name: supplier, location: '', phone: '', type: 'warehouse', createdAt: Date.now() });
       }
       
       if (isEditing) {
         const oldItem = items.find(i => i.id === editId);
-        const oldQuantity = oldItem ? oldItem.quantity : 0;
+        const oldQuantity = oldItem ? (oldItem.quantity || 0) : 0;
+        const quantityAdded = totalPieces - oldQuantity;
         
         // سیستمە پێشکەوتووەکەی حساباتی تێچوو (Weighted Average Cost)
-        if (totalPiecesToAdd > 0 && oldQuantity > 0 && oldItem) {
+        if (quantityAdded > 0 && oldQuantity > 0 && oldItem) {
           const oldCost = oldItem.costPrice || 0;
           const newCost = costPricePerPiece;
           
           if (oldCost > 0 && newCost > 0) {
             const totalOldValue = oldQuantity * oldCost;
-            const totalNewValue = totalPiecesToAdd * newCost;
-            const avgCost = (totalOldValue + totalNewValue) / (oldQuantity + totalPiecesToAdd);
+            const totalNewValue = quantityAdded * newCost;
+            const avgCost = (totalOldValue + totalNewValue) / (oldQuantity + quantityAdded);
             
             itemData.costPrice = Number(avgCost.toFixed(2));
             if (pRatio > 0) itemData.packetCostPrice = Number((avgCost * pRatio).toFixed(2));
@@ -140,12 +149,11 @@ export default function InventoryView({ role }: { role: Role }) {
           }
         }
 
-        itemData.quantity = oldQuantity + totalPiecesToAdd; // Add to existing stock
+        itemData.quantity = totalPieces; // Set absolute new stock
         
         await updateDoc(doc(db, 'items', editId), itemData);
         
-        if (totalPiecesToAdd > 0) {
-          const quantityAdded = totalPiecesToAdd;
+        if (quantityAdded > 0) {
           await addDoc(collection(db, 'stock_history'), {
             itemId: editId,
             itemName: name,
@@ -162,27 +170,27 @@ export default function InventoryView({ role }: { role: Role }) {
           });
         }
       } else {
-        itemData.quantity = totalPiecesToAdd;
+        itemData.quantity = totalPieces;
         const docRef = await addDoc(collection(db, 'items'), { ...itemData, createdAt: Date.now() });
         
-        if (totalPiecesToAdd > 0) {
+        if (totalPieces > 0) {
           await addDoc(collection(db, 'stock_history'), {
             itemId: docRef.id,
             itemName: name,
-            quantityAdded: totalPiecesToAdd,
+            quantityAdded: totalPieces,
             date: Date.now()
           });
           
           await addDoc(collection(db, 'transactions'), {
             type: paymentType === 'cash' ? 'company_cash' : 'company_debt',
-            amount: costPricePerPiece * totalPiecesToAdd,
+            amount: costPricePerPiece * totalPieces,
             date: Date.now(),
             description: paymentType === 'cash' ? `نەقدی کڕینی کاڵای ${name}` : `قەرزی کڕینی کاڵای ${name}`,
             relatedEntityId: supplier || 'نەزانراو'
           });
         }
-
       }
+      resetForm();
       resetForm();
     } catch (error) {
       console.error("Error saving document: ", error);
@@ -200,19 +208,38 @@ export default function InventoryView({ role }: { role: Role }) {
     setPieceCost(item.costPrice?.toString() || '');
     setPiecePrice(item.sellingPrice?.toString() || '');
     setPieceWholesale(item.wholesalePrice?.toString() || '');
-    setPieceQuantity(''); // Only for adding new quantity
-
+    
     setPacketRatio(item.packetRatio?.toString() || '');
     setPacketCost(item.packetCostPrice?.toString() || '');
     setPacketPrice(item.packetSellingPrice?.toString() || '');
     setPacketWholesale(item.packetWholesalePrice?.toString() || '');
-    setPacketQuantity('');
-
+    
     setCartonRatio(item.ratio?.toString() || '');
     setCartonCost(item.cartonCostPrice?.toString() || '');
     setCartonPrice(item.cartonSellingPrice?.toString() || '');
     setCartonWholesale(item.cartonWholesalePrice?.toString() || '');
-    setCartonQuantity('');
+
+    // Calculate existing quantity breakdown
+    let pieces = item.quantity || 0;
+    const cRatio = item.ratio || 0;
+    const pRatio = item.packetRatio || 0;
+    let cartons = 0;
+    let packets = 0;
+    
+    if (cRatio > 0) {
+      cartons = Math.floor(pieces / cRatio);
+      pieces = pieces % cRatio;
+    }
+    if (pRatio > 0) {
+      packets = Math.floor(pieces / pRatio);
+      pieces = pieces % pRatio;
+    }
+    
+    setPieceQuantity(pieces ? pieces.toString() : '0');
+    setPacketQuantity(packets ? packets.toString() : '0');
+    setCartonQuantity(cartons ? cartons.toString() : '0');
+    
+    setPaymentType('cash');
 
     setShowPacket(!!item.packetRatio || !!item.packetCostPrice || !!item.packetSellingPrice);
     setShowCarton(!!item.ratio || !!item.cartonCostPrice || !!item.cartonSellingPrice);
@@ -224,6 +251,7 @@ export default function InventoryView({ role }: { role: Role }) {
   const handleDelete = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'items', id));
+      if (editId === id) resetForm();
     } catch (error) {
       console.error("Error deleting document: ", error);
     }

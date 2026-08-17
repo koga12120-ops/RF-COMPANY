@@ -42,6 +42,16 @@ interface DashboardProps {
 export default function Dashboard({ role, onLogout }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<string>('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark' | 'sepia'>(() => {
+    return (localStorage.getItem('app-theme') as any) || 'light';
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
+    root.classList.add(`theme-${theme}`);
+    localStorage.setItem('app-theme', theme);
+  }, [theme]);
   const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
   const prevCountRef = useRef(0);
 

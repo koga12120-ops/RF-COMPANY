@@ -1,1 +1,18 @@
 @import "tailwindcss";
+
+/* Themes */
+html.theme-dark {
+  filter: invert(0.9) hue-rotate(180deg);
+  background-color: #111;
+}
+
+html.theme-dark img,
+html.theme-dark video,
+html.theme-dark svg {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+html.theme-sepia {
+  filter: sepia(0.3) contrast(0.95);
+  background-color: #fefce8;
+}

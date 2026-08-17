@@ -11,16 +11,44 @@ export default function OrdersView({ role }: { role: Role }) {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [reps, setReps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Schedule states for Reps
+  const [repSchedule, setRepSchedule] = useState<Record<string, string[]>>({});
+  const [repVisits, setRepVisits] = useState<Record<string, boolean>>({});
 
   // Auto-fill rep name
   useEffect(() => {
     const fetchUser = async () => {
-      if (auth.currentUser && (role === 'sales_rep' || role === 'cashvan')) {
+      if (auth.currentUser && role === 'sales_rep') {
         const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-        const userName = userDoc.data()?.name;
-        if (userName) {
-          setRepName(userName);
+        if (userDoc.exists()) {
+          setRepName(userDoc.data().name);
         }
+        
+        // Listen to schedule
+        const unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
+          if (docSnap.exists()) {
+            setRepSchedule(docSnap.data().schedule || {});
+          }
+        });
+        
+        // Listen to visits for the week
+        const d = new Date();
+        d.setHours(0, 0, 0, 0);
+        const day = d.getDay();
+        const diff = day === 6 ? 0 : day + 1;
+        d.setDate(d.getDate() - diff);
+        const weekId = `week_${d.toISOString().split('T')[0]}`;
+        
+        const qVisits = query(collection(db, 'schedule_visits'), 
+          where('repId', '==', auth.currentUser.uid),
+          where('weekId', '==', weekId)
+        );
+        const unsubVisits = onSnapshot(qVisits, (snap) => {
+          const visitedMap: Record<string, boolean> = {};
+          snap.forEach(d => { visitedMap[d.data().marketId] = true; });
+          setRepVisits(visitedMap);
+        });
       }
     };
     fetchUser();
@@ -93,18 +121,42 @@ export default function OrdersView({ role }: { role: Role }) {
   };
 
   const calcPrice = (item: Item, unit: string) => {
+    if (!item) return 0;
     const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
     if (isWholesale) {
-      if (unit === 'carton') return item.cartonWholesalePrice || item.cartonSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.ratio || 1));
-      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.packetRatio || 1));
+      if (unit === 'carton') return item.cartonWholesalePrice || item.cartonSellingPrice || (((item.wholesalePrice || item.sellingPrice || 0)) * (item.ratio || 1));
+      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || (((item.wholesalePrice || item.sellingPrice || 0)) * (item.packetRatio || 1));
       return item.wholesalePrice || item.sellingPrice || 0;
     } else {
-      if (unit === 'carton') return item.cartonSellingPrice || (item.sellingPrice * (item.ratio || 1));
-      if (unit === 'packet') return item.packetSellingPrice || (item.sellingPrice * (item.packetRatio || 1));
+      if (unit === 'carton') return item.cartonSellingPrice || ((item.sellingPrice || 0) * (item.ratio || 1));
+      if (unit === 'packet') return item.packetSellingPrice || ((item.sellingPrice || 0) * (item.packetRatio || 1));
       return item.sellingPrice || 0;
     }
   };
 
+
+  // Filter markets for reps based on schedule
+  const currentDayStr = new Date().getDay().toString();
+  const WEEK_DAYS = ['6', '0', '1', '2', '3', '4'];
+  const todayIndex = WEEK_DAYS.indexOf(currentDayStr);
+  
+  let displayMarkets = markets;
+  if (role === 'sales_rep') {
+    const activeDays = todayIndex === -1 ? WEEK_DAYS : WEEK_DAYS.slice(0, todayIndex + 1);
+    const validMarketIds = new Set<string>();
+    
+    activeDays.forEach(day => {
+      const dayMarkets = repSchedule[day] || [];
+      dayMarkets.forEach(mId => {
+        // Only include if it's today's market, OR if it's a previous day's market that hasn't been visited yet
+        if (day === currentDayStr || !repVisits[mId]) {
+          validMarketIds.add(mId);
+        }
+      });
+    });
+    
+    displayMarkets = markets.filter(m => validMarketIds.has(m.id));
+  }
 
   const getPiecesByUnit = (item: Item, unit: string, qty: number) => {
     if (unit === 'carton') return qty * (item.ratio || 1);
