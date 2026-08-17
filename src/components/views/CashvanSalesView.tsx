@@ -263,9 +263,12 @@ export default function CashvanSalesView() {
     printWindow.document.close();
   };
 
-  const filteredInv = inventory.filter(i => 
-    i.quantity > 0 && (i.name.toLowerCase().includes(searchTerm.toLowerCase()) || (i.barcode && i.barcode.includes(searchTerm)))
-  );
+  const filteredInv = inventory.filter(i => {
+    if (i.quantity <= 0) return false;
+    const nameMatch = i.name ? i.name.toLowerCase().includes(searchTerm.toLowerCase()) : false;
+    const barcodeMatch = i.barcode ? i.barcode.includes(searchTerm) : false;
+    return nameMatch || barcodeMatch;
+  });
 
   return (
     <div className="space-y-6" onKeyDown={(e) => { if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') handleSale(); }}>

@@ -96,9 +96,11 @@ export default function ReturnsView({ role }: { role: Role }) {
     }
   };
 
-  const filteredItems = items.filter(item => 
-    item.name.includes(searchTerm) || item.barcode.includes(searchTerm)
-  );
+  const filteredItems = items.filter(item => {
+    const nameMatch = item.name ? item.name.includes(searchTerm) : false;
+    const barcodeMatch = item.barcode ? item.barcode.includes(searchTerm) : false;
+    return nameMatch || barcodeMatch;
+  });
 
   if (loading) return <div>چاوەڕێبە...</div>;
 
