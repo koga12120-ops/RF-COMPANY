@@ -98,14 +98,22 @@ export default function RepScheduleView() {
 
   // Calculate pending markets (from start of week up to today, if not visited)
   const todayIndex = WEEK_DAYS.indexOf(currentDayStr);
-  const activeDays = todayIndex === -1 ? WEEK_DAYS : WEEK_DAYS.slice(0, todayIndex + 1);
+  
+  const displaySchedule: Record<string, string[]> = {};
+  WEEK_DAYS.forEach(d => displaySchedule[d] = []);
 
-  const pendingMarkets: { marketId: string, assignedDay: string }[] = [];
-  activeDays.forEach(day => {
-    const dayMarkets = schedule[day] || [];
-    dayMarkets.forEach(mId => {
-      if (!visits[mId]) {
-        pendingMarkets.push({ marketId: mId, assignedDay: day });
+  WEEK_DAYS.forEach(day => {
+    const originalMarkets = schedule[day] || [];
+    originalMarkets.forEach(mId => {
+      const isPast = WEEK_DAYS.indexOf(day) < todayIndex;
+      if (isPast && !visits[mId]) {
+        if (todayIndex !== -1) {
+          displaySchedule[currentDayStr].push(mId);
+        } else {
+          displaySchedule[day].push(mId);
+        }
+      } else {
+        displaySchedule[day].push(mId);
       }
     });
   });
@@ -120,7 +128,7 @@ export default function RepScheduleView() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {WEEK_DAYS.map(day => {
-            const dayMarkets = schedule[day] || [];
+            const dayMarkets = displaySchedule[day] || [];
             const isToday = day === currentDayStr;
             
             return (

@@ -503,7 +503,7 @@ export default function OrdersView({ role }: { role: Role }) {
                   onChange={handleMarketChange}
                 />
                 <datalist id="market-list">
-                  {markets.map(m => (
+                  {displayMarkets.map(m => (
                     <option key={m.id} value={m.name} />
                   ))}
                 </datalist>
@@ -579,7 +579,7 @@ export default function OrdersView({ role }: { role: Role }) {
                             <button type="button" onClick={() => handleQuantityDelta(si.item.id, 1)} className="px-2 text-xl font-bold text-slate-500 hover:text-indigo-600 focus:outline-none">+</button>
                           </div>
                           <span className="font-bold min-w-[80px] text-left text-slate-800 text-sm" dir="ltr">
-                            {(si.quantity * getPriceByUnit(si.item, si.unit || 'piece')).toLocaleString()}
+                            {(si.quantity * calcPrice(si.item, si.unit || 'piece')).toLocaleString()}
                           </span>
                         </div>
                       </div>
@@ -589,7 +589,7 @@ export default function OrdersView({ role }: { role: Role }) {
                 <div className="mt-4 pt-4 border-t border-slate-200 flex justify-between items-center">
                   <div className="font-bold text-slate-800 text-sm">کۆی گشتی:</div>
                   <div className="font-bold text-xl text-indigo-600" dir="ltr">
-                    {selectedItems.reduce((acc, curr) => acc + (curr.quantity * getPriceByUnit(curr.item, curr.unit || 'piece')), 0).toLocaleString()}
+                    {selectedItems.reduce((acc, curr) => acc + (curr.quantity * calcPrice(curr.item, curr.unit || 'piece')), 0).toLocaleString()}
                   </div>
                 </div>
               </div>
