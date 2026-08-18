@@ -33,10 +33,10 @@ export default function AdminCashvanView() {
     try {
       // Create a ledger transaction
       await addDoc(collection(db, 'transactions'), {
-        type: 'cash',
+        type: sale.paymentType || 'cash',
         amount: sale.totalAmount,
         date: Date.now(),
-        description: `فرۆشتنی نەقدی کاشڤان (${sale.cashvanName}) بۆ (${sale.marketName})`,
+        description: `فرۆشتنی کاشڤان (${sale.cashvanName}) بۆ (${sale.marketName})`,
         relatedEntityId: sale.marketName || 'نەزانراو'
       } as Transaction);
 

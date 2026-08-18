@@ -67,9 +67,12 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
     setRoleState(null);
     setUser(null);
+    setIsAuthenticated(false);
+    setTimeout(async () => {
+      await signOut(auth);
+    }, 10);
   };
 
   if (loading) {

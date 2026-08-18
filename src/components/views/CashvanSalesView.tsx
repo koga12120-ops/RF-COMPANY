@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, getDocs, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { CashvanSale } from '../../types';
 import { Search, Plus, Printer, Trash2, CheckCircle2 } from 'lucide-react';
@@ -13,12 +13,43 @@ export default function CashvanSalesView() {
   const [selectedMarket, setSelectedMarket] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [repSchedule, setRepSchedule] = useState<Record<string, string[]>>({});
+  const [repVisits, setRepVisits] = useState<Record<string, boolean>>({});
   const [sales, setSales] = useState<CashvanSale[]>([]);
 
   const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو';
   
   useEffect(() => {
-    if (!userName) return;
+        if (!userName) return;
+    const fetchUser = async () => {
+      if (auth.currentUser) {
+        // Listen to schedule
+        const unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
+          if (docSnap.exists()) {
+            setRepSchedule(docSnap.data().schedule || {});
+          }
+        });
+        
+        // Listen to visits for the week
+        const d = new Date();
+        d.setHours(0, 0, 0, 0);
+        const day = d.getDay();
+        const diff = day === 6 ? 0 : day + 1;
+        d.setDate(d.getDate() - diff);
+        const weekId = `week_${d.toISOString().split('T')[0]}`;
+        
+        const qVisits = query(collection(db, 'schedule_visits'), 
+          where('repId', '==', auth.currentUser.uid),
+          where('weekId', '==', weekId)
+        );
+        const unsubVisits = onSnapshot(qVisits, (snap) => {
+          const visitedMap: Record<string, boolean> = {};
+          snap.forEach(d => { visitedMap[d.data().marketId] = true; });
+          setRepVisits(visitedMap);
+        });
+      }
+    };
+    fetchUser();
 
     // Get Cashvan's inventory
     const qInv = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', userName));
@@ -37,7 +68,7 @@ export default function CashvanSalesView() {
     const unsubSales = onSnapshot(query(collection(db, 'cashvan_sales'), where('cashvanName', '==', userName)), (snapshot) => {
       const data: CashvanSale[] = [];
       snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanSale));
-      setSales(data.sort((a,b) => b.date - a.date));
+      setSales(data.filter(s => s.status !== 'deleted').sort((a,b) => b.date - a.date));
       setLoading(false);
     });
 
@@ -56,9 +87,9 @@ export default function CashvanSalesView() {
       if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.packetRatio || 1));
       return item.wholesalePrice || item.sellingPrice || 0;
     } else {
-      if (unit === 'carton') return item.cartonSellingPrice || (item.sellingPrice * (item.ratio || 1));
-      if (unit === 'packet') return item.packetSellingPrice || (item.sellingPrice * (item.packetRatio || 1));
-      return item.sellingPrice || 0;
+            if (unit === 'carton') return item.cartonSellingPrice || item.cartonWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.ratio || 1));
+      if (unit === 'packet') return item.packetSellingPrice || item.packetWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.packetRatio || 1));
+      return item.sellingPrice || item.wholesalePrice || 0;
     }
   };
 
@@ -115,6 +146,25 @@ export default function CashvanSalesView() {
     setCart(prev => prev.map(p => p.id === id ? { ...p, finalPrice: price } : p));
   };
 
+  // Filter markets for reps based on schedule
+  const currentDayStr = new Date().getDay().toString();
+  const WEEK_DAYS = ['6', '0', '1', '2', '3', '4'];
+  const todayIndex = WEEK_DAYS.indexOf(currentDayStr);
+  
+  const activeDays = todayIndex === -1 ? WEEK_DAYS : WEEK_DAYS.slice(0, todayIndex + 1);
+  const validMarketIds = new Set<string>();
+  
+  activeDays.forEach(day => {
+    const dayMarkets = repSchedule[day] || [];
+    dayMarkets.forEach(mId => {
+      if (day === currentDayStr || !repVisits[mId]) {
+        validMarketIds.add(mId);
+      }
+    });
+  });
+  
+  const displayMarkets = markets.filter(m => validMarketIds.has(m.id));
+
   const handleSale = async () => {
     if (!selectedMarket || cart.length === 0) return;
 
@@ -142,7 +192,8 @@ export default function CashvanSalesView() {
         totalAmount,
         totalProfit,
         date: Date.now(),
-        status: 'pending_accounting'
+        status: 'pending_accounting',
+        paymentType
       };
 
       const docRef = await addDoc(collection(db, 'cashvan_sales'), saleData);
@@ -168,6 +219,45 @@ export default function CashvanSalesView() {
     }
   };
 
+
+  const handleDeleteSale = async (sale: any, isEdit: boolean = false) => {
+    try {
+      if (isEdit) { await deleteDoc(doc(db, 'cashvan_sales', sale.id)); } else { await updateDoc(doc(db, 'cashvan_sales', sale.id), { status: 'deleted', deletedBy: userName }); }
+      for (const item of sale.items) {
+        const q = query(collection(db, 'cashvan_inventory'), where('itemId', '==', item.itemId), where('cashvanName', '==', sale.cashvanName));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const itemDoc = snap.docs[0];
+          const totalPieces = item.unit === 'carton' ? item.quantity * (item.ratio || 1) : (item.unit === 'packet' ? item.quantity * (item.packetRatio || 1) : item.quantity);
+          await updateDoc(doc(db, 'cashvan_inventory', itemDoc.id), {
+            quantity: (itemDoc.data().quantity || 0) + totalPieces
+          });
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleEditSale = async (sale: any) => {
+    await handleDeleteSale(sale, true);
+    setSelectedMarket(sale.marketName);
+    const newCart = sale.items.map(i => {
+      const invItem = inventory.find(inv => inv.itemId === i.itemId) || { id: i.itemId, itemId: i.itemId, name: i.name, quantity: 999, costPrice: 0 } as any;
+      return {
+        ...invItem,
+        cartQty: i.quantity,
+        unit: i.unit,
+        finalPrice: i.price,
+        barcode: i.barcode,
+        ratio: i.ratio,
+        packetRatio: i.packetRatio
+      };
+    });
+    setCart(newCart);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  
   const printReceipt = async (sale: any, invoiceId: string, providedWindow?: Window | null) => {
     const printWindow = providedWindow || window.open('', '', 'width=300,height=600');
     if (!printWindow) return;
@@ -319,19 +409,17 @@ export default function CashvanSalesView() {
           
           <div className="mb-4">
             <label className="block text-sm text-slate-600 mb-1">کڕیار / مارکێت هەڵبژێرە</label>
-            <input
-              type="text"
-              list="markets-list"
+            <select
+              required
               className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 transition"
               value={selectedMarket}
               onChange={(e) => setSelectedMarket(e.target.value)}
-              placeholder="ناوی مارکێت بنووسە..."
-            />
-            <datalist id="markets-list">
-              {markets.map(m => (
-                <option key={m.id} value={m.name} />
+            >
+              <option value="" disabled>-- هەڵبژێرە --</option>
+              {displayMarkets.map(m => (
+                <option key={m.id} value={m.name}>{m.name}</option>
               ))}
-            </datalist>
+            </select>
           </div>
 
           <div className="flex-1 overflow-y-auto overflow-x-auto mb-4 pr-2 border border-slate-200 rounded-lg">
@@ -376,7 +464,7 @@ export default function CashvanSalesView() {
                               value={c.unit || 'piece'}
                               onChange={(e) => updateCartQty(c.id, c.cartQty, e.target.value as any)}
                             >
-                              <option value="piece">دانە</option>
+                              { (c.sellingPrice > 0 || c.wholesalePrice > 0 || (!c.ratio && !c.packetRatio)) && <option value="piece">دانە</option> }
                               {c.packetRatio > 0 && <option value="packet">پاکەت</option>}
                               {c.ratio > 0 && <option value="carton">کارتۆن</option>}
                             </select>
@@ -461,9 +549,9 @@ export default function CashvanSalesView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
-              {sales.map(sale => (
+              {sales.map((sale, index) => (
                 <tr key={sale.id} className="hover:bg-slate-50/50 transition">
-                  <td className="p-3 font-mono text-xs">{sale.id.slice(-6).toUpperCase()}</td>
+                  <td className="p-3 font-mono text-xs">{String(sales.length - index).padStart(6, '0')}</td>
                   <td className="p-3 font-medium text-slate-800">{sale.marketName}</td>
                   <td className="p-3 text-slate-500">{format(sale.date, 'HH:mm - yyyy/MM/dd')}</td>
                   <td className="p-3 font-bold text-indigo-600" dir="ltr">{sale.totalAmount.toLocaleString()}</td>
@@ -474,13 +562,16 @@ export default function CashvanSalesView() {
                       {sale.status === 'accounted' ? 'چووەتە حیسابات' : 'چاوەڕێی حیسابات'}
                     </span>
                   </td>
-                  <td className="p-3">
-                    <button
-                      onClick={() => printReceipt(sale, sale.id)}
-                      className="text-blue-600 hover:bg-blue-50 p-1.5 rounded transition"
-                    >
-                      <Printer size={16} />
-                    </button>
+                                    <td className="p-3">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => printReceipt(sale, String(sales.length - index).padStart(6, '0'))} className="p-1.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100"><Printer size={16} /></button>
+                      {sale.status !== 'accounted' && (
+                        <>
+                          <button onClick={() => handleEditSale(sale)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"><Edit2 size={16} /></button>
+                          <button onClick={() => handleDeleteSale(sale)} className="p-1.5 bg-red-50 text-red-600 rounded hover:bg-red-100"><Trash2 size={16} /></button>
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

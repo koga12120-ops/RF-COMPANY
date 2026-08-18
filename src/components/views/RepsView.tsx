@@ -12,7 +12,6 @@ export default function RepsView() {
   const [phone, setPhone] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editId, setEditId] = useState('');
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     const qReps = query(collection(db, 'reps'));
@@ -158,19 +157,12 @@ export default function RepsView() {
                         >
                           دەستکاری
                         </button>
-                        {deletingId === rep.id ? (
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => handleDelete(rep.id)} className="text-white bg-red-600 px-2 py-1 rounded text-xs font-bold">دڵنیام</button>
-                            <button onClick={() => setDeletingId(null)} className="text-slate-600 bg-slate-100 px-2 py-1 rounded text-xs font-bold">پاشگەز</button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setDeletingId(rep.id)}
-                            className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded transition"
-                          >
-                            سڕینەوە
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleDelete(rep.id)}
+                          className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded transition"
+                        >
+                          سڕینەوە
+                        </button>
                       </div>
                     </td>
                   </tr>

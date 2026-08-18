@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, getDocs, where, addDoc, updateDoc, doc, onSnapshot, query, orderBy, deleteDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { Order, Item, Role, Market } from '../../types';
-import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2 } from 'lucide-react';
+import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2 } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function OrdersView({ role }: { role: Role }) {
@@ -56,6 +56,7 @@ export default function OrdersView({ role }: { role: Role }) {
 
   // New Order State
   const [showNewOrder, setShowNewOrder] = useState(false);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [repName, setRepName] = useState('');
   const [marketName, setMarketName] = useState('');
   const [location, setLocation] = useState('');
@@ -74,7 +75,7 @@ export default function OrdersView({ role }: { role: Role }) {
       snapshot.forEach((doc) => {
         ordersData.push({ id: doc.id, ...doc.data() } as Order);
       });
-      setOrders(ordersData);
+      setOrders(ordersData.filter(o => o.status !== 'deleted'));
     });
 
     const qItems = query(collection(db, 'items'));
@@ -128,9 +129,9 @@ export default function OrdersView({ role }: { role: Role }) {
       if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || (((item.wholesalePrice || item.sellingPrice || 0)) * (item.packetRatio || 1));
       return item.wholesalePrice || item.sellingPrice || 0;
     } else {
-      if (unit === 'carton') return item.cartonSellingPrice || ((item.sellingPrice || 0) * (item.ratio || 1));
-      if (unit === 'packet') return item.packetSellingPrice || ((item.sellingPrice || 0) * (item.packetRatio || 1));
-      return item.sellingPrice || 0;
+            if (unit === 'carton') return item.cartonSellingPrice || item.cartonWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.ratio || 1));
+      if (unit === 'packet') return item.packetSellingPrice || item.packetWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.packetRatio || 1));
+      return item.sellingPrice || item.wholesalePrice || 0;
     }
   };
 
@@ -144,17 +145,16 @@ export default function OrdersView({ role }: { role: Role }) {
   if (role === 'sales_rep') {
     const activeDays = todayIndex === -1 ? WEEK_DAYS : WEEK_DAYS.slice(0, todayIndex + 1);
     const validMarketIds = new Set<string>();
-    
+
     activeDays.forEach(day => {
       const dayMarkets = repSchedule[day] || [];
       dayMarkets.forEach(mId => {
-        // Only include if it's today's market, OR if it's a previous day's market that hasn't been visited yet
         if (day === currentDayStr || !repVisits[mId]) {
           validMarketIds.add(mId);
         }
       });
     });
-    
+
     displayMarkets = markets.filter(m => validMarketIds.has(m.id));
   }
 
@@ -162,6 +162,13 @@ export default function OrdersView({ role }: { role: Role }) {
     if (unit === 'carton') return qty * (item.ratio || 1);
     if (unit === 'packet') return qty * (item.packetRatio || 1);
     return qty;
+  };
+
+  const getDefaultUnit = (item: Item) => {
+    if (item.sellingPrice > 0 || item.wholesalePrice > 0 || (!item.ratio && !item.packetRatio)) return 'piece';
+    if (item.packetRatio > 0 && (item.packetSellingPrice > 0 || item.packetWholesalePrice > 0)) return 'packet';
+    if (item.ratio > 0 && (item.cartonSellingPrice > 0 || item.cartonWholesalePrice > 0)) return 'carton';
+    return 'piece';
   };
 
   const handleAddItemToOrder = (item: Item) => {
@@ -181,7 +188,8 @@ export default function OrdersView({ role }: { role: Role }) {
         alert('بڕی داواکراو لە کۆگا بەردەست نییە');
         return;
       }
-      setSelectedItems([...selectedItems, { item, quantity: 1, unit: 'piece' }]);
+      const unit = getDefaultUnit(item);
+      setSelectedItems([...selectedItems, { item, quantity: 1, unit }]);
     }
   };
 
@@ -264,7 +272,7 @@ export default function OrdersView({ role }: { role: Role }) {
       setMarketName('');
       setLocation('');
       setSelectedItems([]);
-      alert('داواکارییەکە بەسەرکەوتووی نێردرا');
+      
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا');
@@ -327,16 +335,47 @@ export default function OrdersView({ role }: { role: Role }) {
     }
   };
 
-  const handleDeleteOrder = async (id: string) => {
+  const handleEditOrder = (order: Order) => {
+    setRepName(order.repName);
+    setMarketName(order.marketName);
+    setLocation(order.location);
+    // order.items might not have the full 'item' object, just itemId
+    // we need to match it with the inventory items
+    const mappedItems = order.items.map(oi => {
+      const fullItem = items.find(i => i.id === oi.itemId) || {
+        id: oi.itemId,
+        name: oi.name,
+        quantity: 9999, // dummy so it doesn't fail
+        costPrice: 0,
+        sellingPrice: oi.price,
+        wholesalePrice: 0,
+        barcode: '',
+        ratio: 1,
+        packetRatio: 1
+      } as unknown as Item;
+      
+      return {
+        item: fullItem,
+        quantity: oi.quantity,
+        unit: oi.unit || 'piece'
+      };
+    });
+    setSelectedItems(mappedItems);
+    setEditingOrderId(order.id);
+    setShowNewOrder(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDeleteOrder = async (id: string, isEdit: boolean = false) => {
     try {
-      await deleteDoc(doc(db, 'orders', id));
+      if (isEdit) { await deleteDoc(doc(db, 'orders', id)); } else { const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو'; await updateDoc(doc(db, 'orders', id), { status: 'deleted', deletedBy: userName }); }
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی ئۆردەر');
     }
   };
 
-  const printOrder = async (order: Order) => {
+  const printOrder = async (order: Order, invoiceId: string) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
     
@@ -381,7 +420,7 @@ export default function OrdersView({ role }: { role: Role }) {
             <p style="margin: 5px 0;"><strong>مەندووب:</strong> ${order.repName}</p>
           </div>
           <div style="text-align: left; flex: 1;">
-            <p style="margin: 5px 0;"><strong>ژ.وەسڵ:</strong> ${order.id.slice(-6).toUpperCase()}</p>
+            <p style="margin: 5px 0;"><strong>ژ.وەسڵ:</strong> ${String(orders.length - index).padStart(6, '0')}</p>
             <p style="margin: 5px 0;"><strong>بەروار:</strong> ${format(order.timestamp, 'yyyy/MM/dd')}</p>
             <p style="margin: 5px 0;"><strong>کات:</strong> ${format(order.timestamp, 'HH:mm')}</p>
           </div>
@@ -494,19 +533,24 @@ export default function OrdersView({ role }: { role: Role }) {
               </div>
               <div>
                 <label className="block text-sm text-slate-600 mb-1">ناوی مارکێت / شوێن</label>
-                <input
-                  type="text"
+                <select
                   required
-                  list="market-list"
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                   value={marketName}
-                  onChange={handleMarketChange}
-                />
-                <datalist id="market-list">
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setMarketName(val);
+                    const existingMarket = displayMarkets.find(m => m.name === val);
+                    if (existingMarket) {
+                      setLocation(existingMarket.location);
+                    }
+                  }}
+                >
+                  <option value="" disabled>-- هەڵبژێرە --</option>
                   {displayMarkets.map(m => (
-                    <option key={m.id} value={m.name} />
+                    <option key={m.id} value={m.name}>{m.name}</option>
                   ))}
-                </datalist>
+                </select>
               </div>
               <div>
                 <label className="block text-sm text-slate-600 mb-1">ناونیشان / گەڕەک</label>
@@ -569,7 +613,7 @@ export default function OrdersView({ role }: { role: Role }) {
                             value={si.unit || 'piece'}
                             onChange={(e) => handleUpdateItemQuantity(si.item.id, si.quantity, e.target.value)}
                           >
-                            <option value="piece">دانە</option>
+                            { (si.item.sellingPrice > 0 || si.item.wholesalePrice > 0 || (!si.item.ratio && !si.item.packetRatio)) && <option value="piece">دانە</option> }
                             {si.item.packetRatio > 0 && <option value="packet">پاکەت</option>}
                             {si.item.ratio > 0 && <option value="carton">کارتۆن</option>}
                           </select>
@@ -647,7 +691,7 @@ export default function OrdersView({ role }: { role: Role }) {
                 <div className="flex gap-2">
                   {(role === 'admin' || role === 'warehouse') && (
                     <button
-                      onClick={() => printOrder(order)}
+                      onClick={() => printOrder(order, String(orders.length - index).padStart(6, '0'))}
                       className="p-2.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
                       title="چاپکردن"
                     >
@@ -677,7 +721,16 @@ export default function OrdersView({ role }: { role: Role }) {
                   {order.paymentStatus === 'debt' && (
                     <div className="px-3 py-2 bg-amber-50 text-amber-700 rounded-lg text-sm font-bold border border-amber-100 flex items-center justify-center">قەرزە</div>
                   )}
-                  {role === 'admin' && (
+                                    {true && (
+                    <button
+                      onClick={() => handleEditOrder(order)}
+                      className="p-2.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
+                      title="دەستکاری"
+                    >
+                      <Edit2 size={20} />
+                    </button>
+                  )}
+                  {true && (
                     <button
                       onClick={() => handleDeleteOrder(order.id)}
                       className="p-2.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"

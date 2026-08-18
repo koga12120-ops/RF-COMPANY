@@ -95,8 +95,8 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
   ];
 
   const repMenu = [
-    { id: 'orders', label: 'ئۆردەری پێشەکی (قەرز/نەقد)', icon: ShoppingCart },
-    { id: 'cashvan_sales', label: 'فرۆشتنی نەقدی ڕاستەوخۆ', icon: Truck },
+    { id: 'orders', label: 'تەڵەبیە', icon: ShoppingCart },
+    { id: 'cashvan_sales', label: 'کاشڤان', icon: Truck },
     { id: 'rep_schedule', label: 'خشتەی سەردانەکان', icon: Store },
   ];
 

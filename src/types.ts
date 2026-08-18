@@ -109,6 +109,7 @@ export interface CashvanTransfer {
 
 export interface CashvanSale {
   id: string;
+  paymentType?: 'cash' | 'debt';
   cashvanName: string;
   marketName: string;
   items: {
