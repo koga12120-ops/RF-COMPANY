@@ -87,7 +87,7 @@ export default function InventoryView({ role }: { role: Role }) {
     return parts.join(' و ');
   };
 
-  return () => unsubscribe();
+  return () => { unsubscribe(); unsubComp(); };
   }, []);
 
   const handleSubmit = async (e?: React.FormEvent | React.KeyboardEvent) => {

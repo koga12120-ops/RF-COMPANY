@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, updateDoc, doc, addDoc, getDocs, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, updateDoc, doc, addDoc, getDocs, where, deleteDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { CashvanSale, CashvanTransfer, Transaction } from '../../types';
-import { Truck, CheckCircle2, DollarSign, History } from 'lucide-react';
+import { Truck, CheckCircle2, DollarSign, History, Trash2, Edit2, Printer, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function AdminCashvanView() {
@@ -28,6 +28,106 @@ export default function AdminCashvanView() {
       unsubTransfers();
     };
   }, []);
+
+
+
+  const printStatement = async (entityName: string) => {
+    if (!entityName || entityName === 'نەزانراو' || entityName === '') {
+      alert('ناوی مارکێت دیاری نەکراوە بۆ چاپکردنی کەشف حیساب');
+      return;
+    }
+    const q = query(collection(db, 'transactions'), where('relatedEntityId', '==', entityName));
+    const snap = await getDocs(q);
+    const allTrans: Transaction[] = [];
+    snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
+    
+    allTrans.sort((a,b) => a.date - b.date);
+    
+    let totalDebt = 0;
+    let totalPaid = 0;
+    let totalCash = 0;
+
+    const rowsHtml = allTrans.map(t => {
+      let typeLabel = '';
+      if (t.type.includes('debt') && !t.type.includes('paid')) { typeLabel = 'قەرز'; totalDebt += t.amount || 0; }
+      else if (t.type.includes('paid')) { typeLabel = 'واسڵکراو'; totalPaid += t.amount || 0; }
+      else { typeLabel = 'نەقد/تر'; totalCash += t.amount || 0; }
+      
+      return `<tr>
+        <td dir="ltr">${format(t.date, 'yyyy-MM-dd HH:mm')}</td>
+        <td>${typeLabel}</td>
+        <td>${t.description}</td>
+        <td dir="ltr">${(t.amount || 0).toLocaleString()}</td>
+      </tr>`;
+    }).join('');
+    
+    let finalBalance = totalDebt - totalPaid;
+    
+    const html = `
+    <html dir="rtl">
+      <head>
+        <title>کەشف حیساب - ${entityName}</title>
+        <style>
+          body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
+          th { background-color: #f8f9fa; }
+          .header { text-align: center; margin-bottom: 20px; }
+          .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2>کۆمپانیای RF</h2>
+          <h3>کەشف حیساب - ${entityName}</h3>
+          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
+        </div>
+        <table style="width: 100%">
+          <thead><tr><th>بەروار و کات</th><th>جۆر</th><th>وردەکاری</th><th>بڕی پارە</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div class="summary">
+          <p>کۆی قەرزەکان: <span dir="ltr">${totalDebt.toLocaleString()}</span></p>
+          <p>کۆی واسڵکراو: <span dir="ltr">${totalPaid.toLocaleString()}</span></p>
+          <p>کۆی نەقد: <span dir="ltr">${totalCash.toLocaleString()}</span></p>
+          <hr style="margin: 10px 0;" />
+          <h3 style="margin: 0; font-size: 20px;">ماوەی قەرز (باڵانس): <span dir="ltr">${finalBalance.toLocaleString()}</span> د.ع</h3>
+        </div>
+        <script>window.onload = () => window.print();</script>
+      </body>
+    </html>`;
+    const win = window.open('', '_blank');
+    win?.document.write(html);
+    win?.document.close();
+  };
+
+  const handleDeleteSale = async (id: string) => {
+    if (window.confirm('دڵنیایت لە سڕینەوەی ئەم وەسڵە؟')) {
+      await deleteDoc(doc(db, 'cashvan_sales', id));
+    }
+  };
+
+  const handleEditSale = async (sale: CashvanSale) => {
+    const newAmount = window.prompt('کۆی گشتی نوێ بنووسە:', sale.totalAmount.toString());
+    if (newAmount !== null && !isNaN(Number(newAmount))) {
+      await updateDoc(doc(db, 'cashvan_sales', sale.id), { totalAmount: Number(newAmount) });
+    }
+  };
+
+
+  const handleEditTransfer = async (t: CashvanTransfer) => {
+    const newTotal = window.prompt('کۆی تێچووی نوێ بنووسە:', t.totalValue.toString());
+    if (newTotal !== null && !isNaN(Number(newTotal))) {
+      await updateDoc(doc(db, 'cashvan_transfers', t.id), { totalValue: Number(newTotal) });
+    }
+  };
+
+  const handleDeleteTransfer = async (id: string) => {
+    if (window.confirm('دڵنیایت لە سڕینەوەی ئەم کاڵا پێدانە؟')) {
+      await deleteDoc(doc(db, 'cashvan_transfers', id));
+    }
+  };
 
   const handleAccount = async (sale: CashvanSale) => {
     try {
@@ -107,7 +207,7 @@ export default function AdminCashvanView() {
                     <th className="p-4">کاشڤان</th>
                     <th className="p-4">مارکێت</th>
                     <th className="p-4">بەروار</th>
-                    <th className="p-4">بڕی پارە</th>
+                                        <th className="p-4">بڕی پارە</th>
                     <th className="p-4">کردارەکان</th>
                   </tr>
                 </thead>
@@ -119,12 +219,17 @@ export default function AdminCashvanView() {
                       <td className="p-4 text-slate-500">{format(sale.date, 'yyyy/MM/dd HH:mm')}</td>
                       <td className="p-4 font-bold text-indigo-600" dir="ltr">{sale.totalAmount.toLocaleString()}</td>
                       <td className="p-4">
-                        <button
-                          onClick={() => handleAccount(sale)}
-                          className="px-4 py-1.5 bg-green-50 text-green-700 hover:bg-green-100 font-bold rounded-lg transition flex items-center gap-2"
-                        >
-                          <CheckCircle2 size={16} /> ناردن بۆ حیسابات
-                        </button>
+                                                <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleAccount(sale)}
+                            className="px-4 py-1.5 bg-green-50 text-green-700 hover:bg-green-100 font-bold rounded-lg transition flex items-center gap-2"
+                          >
+                            <CheckCircle2 size={16} /> ناردن بۆ حیسابات
+                          </button>
+                                                    <button onClick={() => printStatement(sale.marketName)} className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100" title="کەشف حیساب"><FileText size={16}/></button>
+                          <button onClick={() => handleEditSale(sale)} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><Edit2 size={16}/></button>
+                          <button onClick={() => handleDeleteSale(sale.id)} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"><Trash2 size={16}/></button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -150,6 +255,7 @@ export default function AdminCashvanView() {
                     <th className="p-4">مارکێت</th>
                     <th className="p-4">بەروار</th>
                     <th className="p-4">بڕی پارە</th>
+                  <th className="p-4">کردارەکان</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
@@ -158,7 +264,14 @@ export default function AdminCashvanView() {
                       <td className="p-4 font-medium">{sale.cashvanName}</td>
                       <td className="p-4">{sale.marketName}</td>
                       <td className="p-4">{format(sale.date, 'yyyy/MM/dd HH:mm')}</td>
-                      <td className="p-4" dir="ltr">{sale.totalAmount.toLocaleString()}</td>
+                                            <td className="p-4" dir="ltr">{sale.totalAmount.toLocaleString()}</td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                                                    <button onClick={() => printStatement(sale.marketName)} className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100" title="کەشف حیساب"><FileText size={16}/></button>
+                          <button onClick={() => handleEditSale(sale)} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><Edit2 size={16}/></button>
+                          <button onClick={() => handleDeleteSale(sale.id)} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"><Trash2 size={16}/></button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -182,7 +295,8 @@ export default function AdminCashvanView() {
                   <th className="p-4">کاشڤان</th>
                   <th className="p-4">بەروار</th>
                   <th className="p-4">وردەکاری</th>
-                  <th className="p-4">کۆی تێچوو</th>
+                                    <th className="p-4">کۆی تێچوو</th>
+                  <th className="p-4">کردارەکان</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
@@ -194,7 +308,13 @@ export default function AdminCashvanView() {
                       {t.items.slice(0, 2).map(i => `${i.name} (${i.quantity})`).join(', ')}
                       {t.items.length > 2 ? ' ...' : ''}
                     </td>
-                    <td className="p-4 font-bold text-indigo-600" dir="ltr">{t.totalValue.toLocaleString()} د.ع</td>
+                                        <td className="p-4 font-bold text-indigo-600" dir="ltr">{t.totalValue.toLocaleString()} د.ع</td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => handleEditTransfer(t)} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><Edit2 size={16}/></button>
+                        <button onClick={() => handleDeleteTransfer(t.id)} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"><Trash2 size={16}/></button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
                 {transfers.length === 0 && (

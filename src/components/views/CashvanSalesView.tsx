@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
-import { CashvanSale } from '../../types';
-import { Search, Plus, Printer, Trash2, CheckCircle2 } from 'lucide-react';
+import { CashvanSale, Transaction } from '../../types';
+import { Search, Plus, Printer, Trash2, CheckCircle2, FileText, Edit2 } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function CashvanSalesView() {
   const [inventory, setInventory] = useState<any[]>([]);
   const [markets, setMarkets] = useState<any[]>([]);
   const [cart, setCart] = useState<(any & {unit?: 'piece'|'carton'})[]>([]);
+  const [paymentType, setPaymentType] = useState<'cash'|'debt'>('cash');
   
   const [selectedMarket, setSelectedMarket] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -20,11 +21,15 @@ export default function CashvanSalesView() {
   const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو';
   
   useEffect(() => {
-        if (!userName) return;
+    if (!userName) return;
+    
+    let unsubSched = () => {};
+    let unsubVisits = () => {};
+
     const fetchUser = async () => {
       if (auth.currentUser) {
         // Listen to schedule
-        const unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
+        unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
           if (docSnap.exists()) {
             setRepSchedule(docSnap.data().schedule || {});
           }
@@ -42,7 +47,7 @@ export default function CashvanSalesView() {
           where('repId', '==', auth.currentUser.uid),
           where('weekId', '==', weekId)
         );
-        const unsubVisits = onSnapshot(qVisits, (snap) => {
+        unsubVisits = onSnapshot(qVisits, (snap) => {
           const visitedMap: Record<string, boolean> = {};
           snap.forEach(d => { visitedMap[d.data().marketId] = true; });
           setRepVisits(visitedMap);
@@ -76,6 +81,8 @@ export default function CashvanSalesView() {
       unsubInv();
       unsubMarkets();
       unsubSales();
+      if (unsubSched) unsubSched();
+      if (unsubVisits) unsubVisits();
     };
   }, [userName]);
 
@@ -219,6 +226,78 @@ export default function CashvanSalesView() {
     }
   };
 
+
+
+  const printStatement = async (entityName: string) => {
+    if (!entityName || entityName === 'نەزانراو' || entityName === '') {
+      alert('ناوی مارکێت دیاری نەکراوە بۆ چاپکردنی کەشف حیساب');
+      return;
+    }
+    const q = query(collection(db, 'transactions'), where('relatedEntityId', '==', entityName));
+    const snap = await getDocs(q);
+    const allTrans: Transaction[] = [];
+    snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
+    
+    allTrans.sort((a,b) => a.date - b.date);
+    
+    let totalDebt = 0;
+    let totalPaid = 0;
+    let totalCash = 0;
+
+    const rowsHtml = allTrans.map(t => {
+      let typeLabel = '';
+      if (t.type.includes('debt') && !t.type.includes('paid')) { typeLabel = 'قەرز'; totalDebt += t.amount || 0; }
+      else if (t.type.includes('paid')) { typeLabel = 'واسڵکراو'; totalPaid += t.amount || 0; }
+      else { typeLabel = 'نەقد/تر'; totalCash += t.amount || 0; }
+      
+      return `<tr>
+        <td dir="ltr">${format(t.date, 'yyyy-MM-dd HH:mm')}</td>
+        <td>${typeLabel}</td>
+        <td>${t.description}</td>
+        <td dir="ltr">${(t.amount || 0).toLocaleString()}</td>
+      </tr>`;
+    }).join('');
+    
+    let finalBalance = totalDebt - totalPaid;
+    
+    const html = `
+    <html dir="rtl">
+      <head>
+        <title>کەشف حیساب - ${entityName}</title>
+        <style>
+          body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
+          th { background-color: #f8f9fa; }
+          .header { text-align: center; margin-bottom: 20px; }
+          .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2>کۆمپانیای RF</h2>
+          <h3>کەشف حیساب - ${entityName}</h3>
+          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
+        </div>
+        <table style="width: 100%">
+          <thead><tr><th>بەروار و کات</th><th>جۆر</th><th>وردەکاری</th><th>بڕی پارە</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div class="summary">
+          <p>کۆی قەرزەکان: <span dir="ltr">${totalDebt.toLocaleString()}</span></p>
+          <p>کۆی واسڵکراو: <span dir="ltr">${totalPaid.toLocaleString()}</span></p>
+          <p>کۆی نەقد: <span dir="ltr">${totalCash.toLocaleString()}</span></p>
+          <hr style="margin: 10px 0;" />
+          <h3 style="margin: 0; font-size: 20px;">ماوەی قەرز (باڵانس): <span dir="ltr">${finalBalance.toLocaleString()}</span> د.ع</h3>
+        </div>
+        <script>window.onload = () => window.print();</script>
+      </body>
+    </html>`;
+    const win = window.open('', '_blank');
+    win?.document.write(html);
+    win?.document.close();
+  };
 
   const handleDeleteSale = async (sale: any, isEdit: boolean = false) => {
     try {
@@ -519,7 +598,18 @@ export default function CashvanSalesView() {
                 {cart.reduce((a, c) => a + (c.finalPrice * c.cartQty), 0).toLocaleString()} د.ع
               </span>
             </div>
-            <button
+            
+          <div className="flex gap-4 mb-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="payment" checked={paymentType === 'cash'} onChange={() => setPaymentType('cash')} />
+              <span>نەقد</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="payment" checked={paymentType === 'debt'} onChange={() => setPaymentType('debt')} />
+              <span>قەرز</span>
+            </label>
+          </div>
+<button
               onClick={handleSale}
               disabled={cart.length === 0 || !selectedMarket}
               className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold flex justify-center items-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition shadow-sm"
@@ -564,7 +654,8 @@ export default function CashvanSalesView() {
                   </td>
                                     <td className="p-3">
                     <div className="flex items-center gap-2">
-                      <button onClick={() => printReceipt(sale, String(sales.length - index).padStart(6, '0'))} className="p-1.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100"><Printer size={16} /></button>
+                                            <button onClick={() => printReceipt(sale, String(sales.length - index).padStart(6, '0'))} className="p-1.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100" title="چاپکردنی تەنها ئەمە"><Printer size={16} /></button>
+                      <button onClick={() => printStatement(sale.marketName)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="کەشف حیساب"><FileText size={16} /></button>
                       {sale.status !== 'accounted' && (
                         <>
                           <button onClick={() => handleEditSale(sale)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"><Edit2 size={16} /></button>

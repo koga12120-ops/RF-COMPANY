@@ -7,6 +7,7 @@ import { Users, Plus, Edit2, Trash2 } from 'lucide-react';
 export default function RepsView() {
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');

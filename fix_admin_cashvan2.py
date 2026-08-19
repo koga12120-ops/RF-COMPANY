@@ -1,0 +1,25 @@
+import re
+
+with open('src/components/views/AdminCashvanView.tsx', 'r') as f:
+    content = f.read()
+
+edit_transfer = """
+  const handleEditTransfer = async (t: CashvanTransfer) => {
+    const newTotal = window.prompt('کۆی تێچووی نوێ بنووسە:', t.totalValue.toString());
+    if (newTotal !== null && !isNaN(Number(newTotal))) {
+      await updateDoc(doc(db, 'cashvan_transfers', t.id), { totalValue: Number(newTotal) });
+    }
+  };
+"""
+
+content = content.replace("  const handleDeleteTransfer = async", edit_transfer + "\n  const handleDeleteTransfer = async")
+
+td_replace = """                      <button onClick={() => handleEditTransfer(t)} className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><Edit2 size={16}/></button>
+                      <button onClick={() => handleDeleteTransfer(t.id)} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"><Trash2 size={16}/></button>"""
+
+content = re.sub(r'<button onClick=\{\(\) => handleDeleteTransfer\(t\.id\)\} className="p-1\.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"><Trash2 size=\{16\}/></button>', td_replace, content)
+
+with open('src/components/views/AdminCashvanView.tsx', 'w') as f:
+    f.write(content)
+
+print("done")

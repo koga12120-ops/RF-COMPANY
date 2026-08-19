@@ -18,6 +18,10 @@ export default function OrdersView({ role }: { role: Role }) {
 
   // Auto-fill rep name
   useEffect(() => {
+    let unsubSched = () => {};
+    let unsubVisits = () => {};
+    
+
     const fetchUser = async () => {
       if (auth.currentUser && role === 'sales_rep') {
         const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
@@ -26,7 +30,7 @@ export default function OrdersView({ role }: { role: Role }) {
         }
         
         // Listen to schedule
-        const unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
+        unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
           if (docSnap.exists()) {
             setRepSchedule(docSnap.data().schedule || {});
           }
@@ -44,7 +48,7 @@ export default function OrdersView({ role }: { role: Role }) {
           where('repId', '==', auth.currentUser.uid),
           where('weekId', '==', weekId)
         );
-        const unsubVisits = onSnapshot(qVisits, (snap) => {
+        unsubVisits = onSnapshot(qVisits, (snap) => {
           const visitedMap: Record<string, boolean> = {};
           snap.forEach(d => { visitedMap[d.data().marketId] = true; });
           setRepVisits(visitedMap);
@@ -69,6 +73,8 @@ export default function OrdersView({ role }: { role: Role }) {
   const [settlingOrder, setSettlingOrder] = useState<Order | null>(null);
 
   useEffect(() => {
+    let unsubSched = () => {};
+    let unsubVisits = () => {};
     const qOrders = query(collection(db, 'orders'), orderBy('timestamp', 'desc'));
     const unsubOrders = onSnapshot(qOrders, (snapshot) => {
       const ordersData: Order[] = [];
@@ -109,6 +115,8 @@ export default function OrdersView({ role }: { role: Role }) {
       unsubItems();
       unsubMarkets();
       unsubReps();
+      if (unsubSched) unsubSched();
+      if (unsubVisits) unsubVisits();
     };
   }, []);
 
@@ -420,7 +428,7 @@ export default function OrdersView({ role }: { role: Role }) {
             <p style="margin: 5px 0;"><strong>مەندووب:</strong> ${order.repName}</p>
           </div>
           <div style="text-align: left; flex: 1;">
-            <p style="margin: 5px 0;"><strong>ژ.وەسڵ:</strong> ${String(orders.length - index).padStart(6, '0')}</p>
+            <p style="margin: 5px 0;"><strong>ژ.وەسڵ:</strong> ${invoiceId.padStart(6, '0')}</p>
             <p style="margin: 5px 0;"><strong>بەروار:</strong> ${format(order.timestamp, 'yyyy/MM/dd')}</p>
             <p style="margin: 5px 0;"><strong>کات:</strong> ${format(order.timestamp, 'HH:mm')}</p>
           </div>
@@ -660,7 +668,7 @@ export default function OrdersView({ role }: { role: Role }) {
             هیچ داواکارییەک نییە
           </div>
         ) : (
-          orders.map((order) => (
+          orders.map((order, index) => (
             <div key={order.id} className={`p-5 rounded-2xl shadow-sm border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${order.status === 'pending' ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-3">

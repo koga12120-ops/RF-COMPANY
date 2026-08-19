@@ -72,7 +72,7 @@ export default function App() {
     setIsAuthenticated(false);
     setTimeout(async () => {
       await signOut(auth);
-    }, 10);
+    }, 500);
   };
 
   if (loading) {
