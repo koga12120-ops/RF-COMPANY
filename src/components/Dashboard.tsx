@@ -32,6 +32,7 @@ import { Truck, Undo2 } from 'lucide-react';
 
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import StockHistoryView from './views/StockHistoryView';
 
 interface DashboardProps {
@@ -58,19 +59,25 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
   useEffect(() => {
     if (role !== 'admin' && role !== 'warehouse') return;
     const q = query(collection(db, 'orders'), where('status', '==', 'pending'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const count = snapshot.size;
-      setPendingOrdersCount(count);
-      
-      if (count > prevCountRef.current) {
-        // Play notification sound
-        try {
-          const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
-          audio.play().catch(e => console.log('Audio play prevented by browser'));
-        } catch(e) {}
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const count = snapshot.size;
+        setPendingOrdersCount(count);
+        
+        if (count > prevCountRef.current) {
+          // Play notification sound
+          try {
+            const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+            audio.play().catch(e => console.log('Audio play prevented by browser'));
+          } catch(e) {}
+        }
+        prevCountRef.current = count;
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'orders');
       }
-      prevCountRef.current = count;
-    });
+    );
     return () => unsubscribe();
   }, [role]);
 

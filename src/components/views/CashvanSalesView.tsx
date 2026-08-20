@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { CashvanSale, Transaction } from '../../types';
-import { Search, Plus, Printer, Trash2, CheckCircle2, FileText, Edit2 } from 'lucide-react';
+import { Search, Plus, Printer, Trash2, CheckCircle2, FileText, Edit2, AlertTriangle, X } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function CashvanSalesView() {
@@ -17,6 +18,8 @@ export default function CashvanSalesView() {
   const [repSchedule, setRepSchedule] = useState<Record<string, string[]>>({});
   const [repVisits, setRepVisits] = useState<Record<string, boolean>>({});
   const [sales, setSales] = useState<CashvanSale[]>([]);
+  const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو';
   
@@ -29,11 +32,17 @@ export default function CashvanSalesView() {
     const fetchUser = async () => {
       if (auth.currentUser) {
         // Listen to schedule
-        unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
-          if (docSnap.exists()) {
-            setRepSchedule(docSnap.data().schedule || {});
+        unsubSched = onSnapshot(
+          doc(db, 'schedules', auth.currentUser.uid),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              setRepSchedule(docSnap.data().schedule || {});
+            }
+          },
+          (error) => {
+            handleFirestoreError(error, OperationType.GET, 'schedules');
           }
-        });
+        );
         
         // Listen to visits for the week
         const d = new Date();
@@ -47,35 +56,59 @@ export default function CashvanSalesView() {
           where('repId', '==', auth.currentUser.uid),
           where('weekId', '==', weekId)
         );
-        unsubVisits = onSnapshot(qVisits, (snap) => {
-          const visitedMap: Record<string, boolean> = {};
-          snap.forEach(d => { visitedMap[d.data().marketId] = true; });
-          setRepVisits(visitedMap);
-        });
+        unsubVisits = onSnapshot(
+          qVisits,
+          (snap) => {
+            const visitedMap: Record<string, boolean> = {};
+            snap.forEach(d => { visitedMap[d.data().marketId] = true; });
+            setRepVisits(visitedMap);
+          },
+          (error) => {
+            handleFirestoreError(error, OperationType.GET, 'schedule_visits');
+          }
+        );
       }
     };
     fetchUser();
 
     // Get Cashvan's inventory
     const qInv = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', userName));
-    const unsubInv = onSnapshot(qInv, (snapshot) => {
-      const data: any[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-      setInventory(data);
-    });
+    const unsubInv = onSnapshot(
+      qInv,
+      (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+        setInventory(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvan_inventory');
+      }
+    );
 
-    const unsubMarkets = onSnapshot(query(collection(db, 'markets')), (snapshot) => {
-      const data: any[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-      setMarkets(data);
-    });
+    const unsubMarkets = onSnapshot(
+      query(collection(db, 'markets')),
+      (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+        setMarkets(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'markets');
+      }
+    );
     
-    const unsubSales = onSnapshot(query(collection(db, 'cashvan_sales'), where('cashvanName', '==', userName)), (snapshot) => {
-      const data: CashvanSale[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanSale));
-      setSales(data.filter(s => s.status !== 'deleted').sort((a,b) => b.date - a.date));
-      setLoading(false);
-    });
+    const unsubSales = onSnapshot(
+      query(collection(db, 'cashvan_sales'), where('cashvanName', '==', userName)),
+      (snapshot) => {
+        const data: CashvanSale[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanSale));
+        setSales(data.filter(s => s.status !== 'deleted').sort((a,b) => b.date - a.date));
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvan_sales');
+      }
+    );
 
     return () => {
       unsubInv();
@@ -299,10 +332,45 @@ export default function CashvanSalesView() {
     win?.document.close();
   };
 
-  const handleDeleteSale = async (sale: any, isEdit: boolean = false) => {
+  const confirmDeleteSale = async () => {
+    if (!deletingSale) return;
+    setIsProcessing(true);
     try {
-      if (isEdit) { await deleteDoc(doc(db, 'cashvan_sales', sale.id)); } else { await updateDoc(doc(db, 'cashvan_sales', sale.id), { status: 'deleted', deletedBy: userName }); }
-      for (const item of sale.items) {
+      await deleteDoc(doc(db, 'cashvan_sales', deletingSale.id));
+      for (const item of (deletingSale.items || [])) {
+        try {
+          const q = query(
+            collection(db, 'cashvan_inventory'), 
+            where('itemId', '==', item.itemId), 
+            where('cashvanName', '==', deletingSale.cashvanName)
+          );
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            const itemDoc = snap.docs[0];
+            const totalPieces = item.unit === 'carton' 
+              ? item.quantity * (item.ratio || 1) 
+              : (item.unit === 'packet' ? item.quantity * (item.packetRatio || 1) : item.quantity);
+            await updateDoc(doc(db, 'cashvan_inventory', itemDoc.id), {
+              quantity: (itemDoc.data().quantity || 0) + totalPieces
+            });
+          }
+        } catch (itemErr) {
+          console.warn('Inventory restore error:', itemErr);
+        }
+      }
+      setDeletingSale(null);
+    } catch (e: any) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە: ' + (e.message || e));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleEditSale = async (sale: any) => {
+    try {
+      await deleteDoc(doc(db, 'cashvan_sales', sale.id));
+      for (const item of (sale.items || [])) {
         const q = query(collection(db, 'cashvan_inventory'), where('itemId', '==', item.itemId), where('cashvanName', '==', sale.cashvanName));
         const snap = await getDocs(q);
         if (!snap.empty) {
@@ -313,28 +381,25 @@ export default function CashvanSalesView() {
           });
         }
       }
-    } catch (e) {
+      setSelectedMarket(sale.marketName);
+      const newCart = sale.items.map((i: any) => {
+        const invItem = inventory.find(inv => inv.itemId === i.itemId) || { id: i.itemId, itemId: i.itemId, name: i.name, quantity: 999, costPrice: 0 } as any;
+        return {
+          ...invItem,
+          cartQty: i.quantity,
+          unit: i.unit,
+          finalPrice: i.price,
+          barcode: i.barcode,
+          ratio: i.ratio,
+          packetRatio: i.packetRatio
+        };
+      });
+      setCart(newCart);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e: any) {
       console.error(e);
+      alert('هەڵە لە دەستکاریکردن: ' + e.message);
     }
-  };
-
-  const handleEditSale = async (sale: any) => {
-    await handleDeleteSale(sale, true);
-    setSelectedMarket(sale.marketName);
-    const newCart = sale.items.map(i => {
-      const invItem = inventory.find(inv => inv.itemId === i.itemId) || { id: i.itemId, itemId: i.itemId, name: i.name, quantity: 999, costPrice: 0 } as any;
-      return {
-        ...invItem,
-        cartQty: i.quantity,
-        unit: i.unit,
-        finalPrice: i.price,
-        barcode: i.barcode,
-        ratio: i.ratio,
-        packetRatio: i.packetRatio
-      };
-    });
-    setCart(newCart);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   
   const printReceipt = async (sale: any, invoiceId: string, providedWindow?: Window | null) => {
@@ -658,8 +723,8 @@ export default function CashvanSalesView() {
                       <button onClick={() => printStatement(sale.marketName)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="کەشف حیساب"><FileText size={16} /></button>
                       {sale.status !== 'accounted' && (
                         <>
-                          <button onClick={() => handleEditSale(sale)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"><Edit2 size={16} /></button>
-                          <button onClick={() => handleDeleteSale(sale)} className="p-1.5 bg-red-50 text-red-600 rounded hover:bg-red-100"><Trash2 size={16} /></button>
+                          <button onClick={() => handleEditSale(sale)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="دەستکاری"><Edit2 size={16} /></button>
+                          <button onClick={() => setDeletingSale(sale)} className="p-1.5 bg-red-50 text-red-600 rounded hover:bg-red-100" title="سڕینەوە"><Trash2 size={16} /></button>
                         </>
                       )}
                     </div>
@@ -673,6 +738,63 @@ export default function CashvanSalesView() {
           </table>
         </div>
       </section>
+
+      {/* Delete Sale Modal */}
+      {deletingSale && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-red-50">
+              <h3 className="font-bold text-red-800 text-base flex items-center gap-2">
+                <AlertTriangle className="text-red-600" size={20} />
+                سڕینەوەی وەسڵی فرۆشتن
+              </h3>
+              <button 
+                onClick={() => setDeletingSale(null)} 
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
+                disabled={isProcessing}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-slate-700 text-sm leading-relaxed">
+                ئایا دڵنیایت لە سڕینەوەی وەسڵی مارکێتی (<strong className="text-slate-900">{deletingSale.marketName}</strong>)؟ بڕی کاڵاکان دەگەڕێنەوە ناو سەیارەکەت.
+              </p>
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-sm space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">مارکێت:</span>
+                  <span className="font-bold text-slate-800">{deletingSale.marketName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">بڕی پارە:</span>
+                  <span className="font-bold text-indigo-600 font-mono" dir="ltr">{deletingSale.totalAmount.toLocaleString()} د.ع</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={confirmDeleteSale}
+                  disabled={isProcessing}
+                  className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                >
+                  <Trash2 size={18} />
+                  {isProcessing ? 'دەسڕێتەوە...' : 'بەڵێ، بسڕەوە'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeletingSale(null)}
+                  disabled={isProcessing}
+                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

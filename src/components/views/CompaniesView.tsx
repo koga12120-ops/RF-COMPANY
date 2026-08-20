@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Company, Item } from '../../types';
 import { Building2, Plus, Edit2, Trash2, History, X } from 'lucide-react';
 import { format } from 'date-fns';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function CompaniesView() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingCompany, setDeletingCompany] = useState<Company | null>(null);
   
   // Form states
   const [name, setName] = useState('');
@@ -22,31 +25,43 @@ export default function CompaniesView() {
   useEffect(() => {
     if (!selectedCompany) return;
     const qItems = query(collection(db, 'items'));
-    const unsub = onSnapshot(qItems, (snapshot) => {
-      const data: Item[] = [];
-      snapshot.forEach((doc) => {
-        const item = { id: doc.id, ...doc.data() } as Item;
-        if (item.supplier === selectedCompany.name) {
-          data.push(item);
-        }
-      });
-      // Sort by createdAt descending
-      data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      setCompanyItems(data);
-    });
+    const unsub = onSnapshot(
+      qItems,
+      (snapshot) => {
+        const data: Item[] = [];
+        snapshot.forEach((doc) => {
+          const item = { id: doc.id, ...doc.data() } as Item;
+          if (item.supplier === selectedCompany.name) {
+            data.push(item);
+          }
+        });
+        // Sort by createdAt descending
+        data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        setCompanyItems(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'items');
+      }
+    );
     return () => unsub();
   }, [selectedCompany]);
 
   useEffect(() => {
     const q = query(collection(db, 'companies'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data: Company[] = [];
-      snapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() } as Company);
-      });
-      setCompanies(data);
-      setLoading(false);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const data: Company[] = [];
+        snapshot.forEach((doc) => {
+          data.push({ id: doc.id, ...doc.data() } as Company);
+        });
+        setCompanies(data);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'companies');
+      }
+    );
     return () => unsub();
   }, []);
 
@@ -81,11 +96,15 @@ export default function CompaniesView() {
     setEditingId(company.id);
   };
 
-  const handleDelete = async (id: string) => {
+  const confirmDeleteCompany = async () => {
+    if (!deletingCompany) return;
     try {
-      await deleteDoc(doc(db, 'companies', id));
+      await deleteDoc(doc(db, 'companies', deletingCompany.id));
+      if (editingId === deletingCompany.id) resetForm();
+      setDeletingCompany(null);
     } catch (error) {
       console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی کۆمپانیا');
     }
   };
 
@@ -193,7 +212,7 @@ export default function CompaniesView() {
                           <Edit2 size={16} /> دەستکاری
                         </button>
                         <button
-                          onClick={() => handleDelete(company.id)}
+                          onClick={() => setDeletingCompany(company)}
                           className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded transition flex items-center gap-1"
                         >
                           <Trash2 size={16} /> سڕینەوە
@@ -214,6 +233,20 @@ export default function CompaniesView() {
           </div>
         )}
       </section>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingCompany}
+        onClose={() => setDeletingCompany(null)}
+        onConfirm={confirmDeleteCompany}
+        title="سڕینەوەی کۆمپانیا"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم کۆمپانیایە؟"
+        itemName={deletingCompany?.name}
+        details={deletingCompany ? [
+          { label: 'شوێن / ناونیشان', value: deletingCompany.location || '-' },
+          { label: 'ژمارەی مۆبایل', value: deletingCompany.phone || '-' }
+        ] : []}
+      />
 
       {selectedCompany && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">

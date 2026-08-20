@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, where, addDoc, updateDoc, doc, onSnapshot, query, orderBy, deleteDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Order, Item, Role, Market } from '../../types';
 import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2 } from 'lucide-react';
 import { format } from 'date-fns';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function OrdersView({ role }: { role: Role }) {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -11,6 +13,7 @@ export default function OrdersView({ role }: { role: Role }) {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [reps, setReps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
   
   // Schedule states for Reps
   const [repSchedule, setRepSchedule] = useState<Record<string, string[]>>({});
@@ -30,11 +33,17 @@ export default function OrdersView({ role }: { role: Role }) {
         }
         
         // Listen to schedule
-        unsubSched = onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (docSnap) => {
-          if (docSnap.exists()) {
-            setRepSchedule(docSnap.data().schedule || {});
+        unsubSched = onSnapshot(
+          doc(db, 'schedules', auth.currentUser.uid),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              setRepSchedule(docSnap.data().schedule || {});
+            }
+          },
+          (error) => {
+            handleFirestoreError(error, OperationType.GET, 'schedules');
           }
-        });
+        );
         
         // Listen to visits for the week
         const d = new Date();
@@ -48,11 +57,17 @@ export default function OrdersView({ role }: { role: Role }) {
           where('repId', '==', auth.currentUser.uid),
           where('weekId', '==', weekId)
         );
-        unsubVisits = onSnapshot(qVisits, (snap) => {
-          const visitedMap: Record<string, boolean> = {};
-          snap.forEach(d => { visitedMap[d.data().marketId] = true; });
-          setRepVisits(visitedMap);
-        });
+        unsubVisits = onSnapshot(
+          qVisits,
+          (snap) => {
+            const visitedMap: Record<string, boolean> = {};
+            snap.forEach(d => { visitedMap[d.data().marketId] = true; });
+            setRepVisits(visitedMap);
+          },
+          (error) => {
+            handleFirestoreError(error, OperationType.GET, 'schedule_visits');
+          }
+        );
       }
     };
     fetchUser();
@@ -76,39 +91,63 @@ export default function OrdersView({ role }: { role: Role }) {
     let unsubSched = () => {};
     let unsubVisits = () => {};
     const qOrders = query(collection(db, 'orders'), orderBy('timestamp', 'desc'));
-    const unsubOrders = onSnapshot(qOrders, (snapshot) => {
-      const ordersData: Order[] = [];
-      snapshot.forEach((doc) => {
-        ordersData.push({ id: doc.id, ...doc.data() } as Order);
-      });
-      setOrders(ordersData.filter(o => o.status !== 'deleted'));
-    });
+    const unsubOrders = onSnapshot(
+      qOrders,
+      (snapshot) => {
+        const ordersData: Order[] = [];
+        snapshot.forEach((doc) => {
+          ordersData.push({ id: doc.id, ...doc.data() } as Order);
+        });
+        setOrders(ordersData.filter(o => o.status !== 'deleted'));
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'orders');
+      }
+    );
 
     const qItems = query(collection(db, 'items'));
-    const unsubItems = onSnapshot(qItems, (snapshot) => {
-      const itemsData: Item[] = [];
-      snapshot.forEach((doc) => {
-        itemsData.push({ id: doc.id, ...doc.data() } as Item);
-      });
-      setItems(itemsData);
-    });
+    const unsubItems = onSnapshot(
+      qItems,
+      (snapshot) => {
+        const itemsData: Item[] = [];
+        snapshot.forEach((doc) => {
+          itemsData.push({ id: doc.id, ...doc.data() } as Item);
+        });
+        setItems(itemsData);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'items');
+      }
+    );
 
     const qMarkets = query(collection(db, 'markets'));
-    const unsubMarkets = onSnapshot(qMarkets, (snapshot) => {
-      const marketsData: Market[] = [];
-      snapshot.forEach((doc) => {
-        marketsData.push({ id: doc.id, ...doc.data() } as Market);
-      });
-      setMarkets(marketsData);
-      setLoading(false);
-    });
+    const unsubMarkets = onSnapshot(
+      qMarkets,
+      (snapshot) => {
+        const marketsData: Market[] = [];
+        snapshot.forEach((doc) => {
+          marketsData.push({ id: doc.id, ...doc.data() } as Market);
+        });
+        setMarkets(marketsData);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'markets');
+      }
+    );
 
     const qReps = query(collection(db, 'reps'));
-    const unsubReps = onSnapshot(qReps, (snapshot) => {
-      const repsData: any[] = [];
-      snapshot.forEach(doc => repsData.push({ id: doc.id, ...doc.data() }));
-      setReps(repsData);
-    });
+    const unsubReps = onSnapshot(
+      qReps,
+      (snapshot) => {
+        const repsData: any[] = [];
+        snapshot.forEach(doc => repsData.push({ id: doc.id, ...doc.data() }));
+        setReps(repsData);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'reps');
+      }
+    );
 
     return () => {
       unsubOrders();
@@ -264,16 +303,30 @@ export default function OrdersView({ role }: { role: Role }) {
         await addDoc(collection(db, 'markets'), { name: marketName, phone: '', location: location || '', type: 'market', createdAt: Date.now() });
       }
 
-      await addDoc(collection(db, 'orders'), {
-        repName,
-        marketName,
-        location,
-        totalAmount,
-        totalProfit,
-        items: orderItems,
-        status: 'pending',
-        timestamp: Date.now()
-      });
+      if (editingOrderId) {
+        await updateDoc(doc(db, 'orders', editingOrderId), {
+          repName,
+          marketName,
+          location,
+          totalAmount,
+          totalProfit,
+          items: orderItems,
+          status: 'pending',
+          timestamp: Date.now()
+        });
+        setEditingOrderId(null);
+      } else {
+        await addDoc(collection(db, 'orders'), {
+          repName,
+          marketName,
+          location,
+          totalAmount,
+          totalProfit,
+          items: orderItems,
+          status: 'pending',
+          timestamp: Date.now()
+        });
+      }
       
       setShowNewOrder(false);
       setRepName('');
@@ -290,7 +343,7 @@ export default function OrdersView({ role }: { role: Role }) {
   const updateOrderStatus = async (order: Order, status: Order['status']) => {
     try {
       if (status === 'completed' && order.status !== 'completed') {
-        for (const item of order.items) {
+        for (const item of (order.items || [])) {
           const itemRef = doc(db, 'items', item.itemId);
           const itemSnap = await getDoc(itemRef);
           if (itemSnap.exists()) {
@@ -349,7 +402,7 @@ export default function OrdersView({ role }: { role: Role }) {
     setLocation(order.location);
     // order.items might not have the full 'item' object, just itemId
     // we need to match it with the inventory items
-    const mappedItems = order.items.map(oi => {
+    const mappedItems = (order.items || []).map(oi => {
       const fullItem = items.find(i => i.id === oi.itemId) || {
         id: oi.itemId,
         name: oi.name,
@@ -374,9 +427,12 @@ export default function OrdersView({ role }: { role: Role }) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleDeleteOrder = async (id: string, isEdit: boolean = false) => {
+  const confirmDeleteOrder = async () => {
+    if (!deletingOrder) return;
     try {
-      if (isEdit) { await deleteDoc(doc(db, 'orders', id)); } else { const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو'; await updateDoc(doc(db, 'orders', id), { status: 'deleted', deletedBy: userName }); }
+      const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو';
+      await updateDoc(doc(db, 'orders', deletingOrder.id), { status: 'deleted', deletedBy: userName });
+      setDeletingOrder(null);
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی ئۆردەر');
@@ -450,7 +506,7 @@ export default function OrdersView({ role }: { role: Role }) {
             </tr>
           </thead>
           <tbody>
-            ${order.items.map((item, index) => {
+            ${(order.items || []).map((item, index) => {
               const globalItem = items.find(i => i.id === item.itemId);
               const barcode = globalItem?.barcode || '-';
               const ratio = globalItem?.ratio || 1;
@@ -686,7 +742,7 @@ export default function OrdersView({ role }: { role: Role }) {
                   <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>مەندووب:</strong> {order.repName}</div>
                   <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>شوێن:</strong> {order.location}</div>
                   <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>بەروار:</strong> <span dir="ltr" className="font-mono text-xs">{format(order.timestamp, 'yyyy-MM-dd HH:mm')}</span></div>
-                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>ژمارەی کاڵا:</strong> {order.items.reduce((acc, curr) => acc + curr.quantity, 0)} دانە</div>
+                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>ژمارەی کاڵا:</strong> {(order.items || []).reduce((acc, curr) => acc + curr.quantity, 0)} دانە</div>
                 </div>
               </div>
 
@@ -740,7 +796,7 @@ export default function OrdersView({ role }: { role: Role }) {
                   )}
                   {true && (
                     <button
-                      onClick={() => handleDeleteOrder(order.id)}
+                      onClick={() => setDeletingOrder(order)}
                       className="p-2.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
                       title="سڕینەوە"
                     >
@@ -753,6 +809,20 @@ export default function OrdersView({ role }: { role: Role }) {
           ))
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingOrder}
+        onClose={() => setDeletingOrder(null)}
+        onConfirm={confirmDeleteOrder}
+        title="سڕینەوەی ئۆردەر"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم ئۆردەرە؟"
+        details={deletingOrder ? [
+          { label: 'ناوی مارکێت', value: deletingOrder.marketName || '-' },
+          { label: 'کۆی گشتی', value: `${(deletingOrder.totalAmount || 0).toLocaleString()} د.ع` },
+          { label: 'مەندووب', value: deletingOrder.repName || '-' }
+        ] : []}
+      />
 
       {/* Settlement Modal */}
       {settlingOrder && (

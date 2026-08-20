@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Market } from '../../types';
 import { Store, Plus, Edit2, Trash2, History, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { Order } from '../../types';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function MarketsView() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingMarket, setDeletingMarket] = useState<Market | null>(null);
 
   // Form states
   const [name, setName] = useState('');
@@ -22,14 +25,20 @@ export default function MarketsView() {
 
   useEffect(() => {
     const q = query(collection(db, 'markets'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data: Market[] = [];
-      snapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() } as Market);
-      });
-      setMarkets(data);
-      setLoading(false);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const data: Market[] = [];
+        snapshot.forEach((doc) => {
+          data.push({ id: doc.id, ...doc.data() } as Market);
+        });
+        setMarkets(data);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'markets');
+      }
+    );
     return () => unsub();
   }, []);
 
@@ -37,16 +46,22 @@ export default function MarketsView() {
   useEffect(() => {
     if (!selectedMarket) return;
     const qOrders = query(collection(db, 'orders'), orderBy('timestamp', 'desc'));
-    const unsub = onSnapshot(qOrders, (snapshot) => {
-      const data: Order[] = [];
-      snapshot.forEach((doc) => {
-        const order = { id: doc.id, ...doc.data() } as Order;
-        if (order.marketName === selectedMarket.name) {
-          data.push(order);
-        }
-      });
-      setOrders(data);
-    });
+    const unsub = onSnapshot(
+      qOrders,
+      (snapshot) => {
+        const data: Order[] = [];
+        snapshot.forEach((doc) => {
+          const order = { id: doc.id, ...doc.data() } as Order;
+          if (order.marketName === selectedMarket.name) {
+            data.push(order);
+          }
+        });
+        setOrders(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'orders');
+      }
+    );
     return () => unsub();
   }, [selectedMarket]);
 
@@ -86,11 +101,15 @@ export default function MarketsView() {
     setEditingId(market.id);
   };
 
-  const handleDelete = async (id: string) => {
+  const confirmDeleteMarket = async () => {
+    if (!deletingMarket) return;
     try {
-      await deleteDoc(doc(db, 'markets', id));
+      await deleteDoc(doc(db, 'markets', deletingMarket.id));
+      if (editingId === deletingMarket.id) resetForm();
+      setDeletingMarket(null);
     } catch (error) {
       console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی مارکێت');
     }
   };
 
@@ -217,7 +236,7 @@ export default function MarketsView() {
                           دەستکاری
                         </button>
                         <button
-                          onClick={() => handleDelete(market.id)}
+                          onClick={() => setDeletingMarket(market)}
                           className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded transition"
                         >
                           سڕینەوە
@@ -238,6 +257,21 @@ export default function MarketsView() {
           </div>
         )}
       </section>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingMarket}
+        onClose={() => setDeletingMarket(null)}
+        onConfirm={confirmDeleteMarket}
+        title="سڕینەوەی کڕیار / مارکێت"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم کڕیارە لە سیستەمدا؟"
+        itemName={deletingMarket?.name}
+        details={deletingMarket ? [
+          { label: 'شوێن / ناونیشان', value: deletingMarket.location || '-' },
+          { label: 'ژمارەی مۆبایل', value: deletingMarket.phone || '-' },
+          { label: 'جۆر', value: deletingMarket.type === 'warehouse' ? 'کۆگا' : 'مارکێت' }
+        ] : []}
+      />
 
       {selectedMarket && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">

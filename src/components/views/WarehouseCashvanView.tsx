@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, CashvanTransfer } from '../../types';
 import { Plus, Search, Check, Send } from 'lucide-react';
 import { format } from 'date-fns';
@@ -16,36 +17,60 @@ export default function WarehouseCashvanView() {
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
-    const unsubItems = onSnapshot(query(collection(db, 'items')), (snapshot) => {
-      const data: Item[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as Item));
-      setItems(data);
-    });
+    const unsubItems = onSnapshot(
+      query(collection(db, 'items')),
+      (snapshot) => {
+        const data: Item[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as Item));
+        setItems(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'items');
+      }
+    );
 
-    const unsubCashvans = onSnapshot(query(collection(db, 'cashvans')), (snapshot) => {
-      const data: any[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-      setCashvans(prev => {
-        const reps = prev.filter(p => p.isRep);
-        return [...reps, ...data];
-      });
-    });
+    const unsubCashvans = onSnapshot(
+      query(collection(db, 'cashvans')),
+      (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+        setCashvans(prev => {
+          const reps = prev.filter(p => p.isRep);
+          return [...reps, ...data];
+        });
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvans');
+      }
+    );
 
-    const unsubReps = onSnapshot(query(collection(db, 'reps')), (snapshot) => {
-      const data: any[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data(), isRep: true }));
-      setCashvans(prev => {
-        const cvs = prev.filter(p => !p.isRep);
-        return [...cvs, ...data];
-      });
-    });
+    const unsubReps = onSnapshot(
+      query(collection(db, 'reps')),
+      (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data(), isRep: true }));
+        setCashvans(prev => {
+          const cvs = prev.filter(p => !p.isRep);
+          return [...cvs, ...data];
+        });
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'reps');
+      }
+    );
 
-    const unsubTransfers = onSnapshot(query(collection(db, 'cashvan_transfers')), (snapshot) => {
-      const data: CashvanTransfer[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanTransfer));
-      setTransfers(data.sort((a, b) => b.date - a.date));
-      setLoading(false);
-    });
+    const unsubTransfers = onSnapshot(
+      query(collection(db, 'cashvan_transfers')),
+      (snapshot) => {
+        const data: CashvanTransfer[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanTransfer));
+        setTransfers(data.sort((a, b) => b.date - a.date));
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvan_transfers');
+      }
+    );
 
     return () => {
       unsubItems();

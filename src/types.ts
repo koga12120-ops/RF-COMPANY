@@ -79,7 +79,7 @@ export interface Order {
   totalAmount: number;
   totalProfit?: number;
   items: OrderItem[];
-  status: 'pending' | 'printed' | 'completed';
+  status: 'pending' | 'printed' | 'completed' | 'deleted';
   paymentStatus?: 'cash' | 'debt';
   timestamp: number;
 }
@@ -102,6 +102,9 @@ export interface CashvanTransfer {
     quantity: number;
     unit?: 'piece' | 'packet' | 'carton';
     price: number;
+    ratio?: number;
+    packetRatio?: number;
+    barcode?: string;
   }[];
   totalValue: number;
   date: number;
@@ -118,9 +121,12 @@ export interface CashvanSale {
     quantity: number;
     unit?: 'piece' | 'packet' | 'carton';
     price: number;
+    ratio?: number;
+    packetRatio?: number;
+    barcode?: string;
   }[];
   totalAmount: number;
   totalProfit?: number;
-  status: 'pending_accounting' | 'accounted';
+  status: 'pending_accounting' | 'accounted' | 'deleted';
   date: number;
 }

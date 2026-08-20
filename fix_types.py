@@ -3,41 +3,20 @@ import re
 with open('src/types.ts', 'r') as f:
     content = f.read()
 
-content = content.replace(
-    "export type Role = 'admin' | 'warehouse' | 'sales_rep' | null;",
-    "export type Role = 'admin' | 'warehouse' | 'sales_rep' | 'cashvan' | null;"
-)
-
-content += """
-
-export interface CashvanTransfer {
-  id: string;
-  cashvanName: string;
-  items: {
+new_items = """  items: {
     itemId: string;
     name: string;
     quantity: number;
+    unit?: 'piece' | 'packet' | 'carton';
     price: number;
-  }[];
-  totalValue: number;
-  date: number;
-}
+    ratio?: number;
+    packetRatio?: number;
+    barcode?: string;
+  }[];"""
 
-export interface CashvanSale {
-  id: string;
-  cashvanName: string;
-  marketName: string;
-  items: {
-    itemId: string;
-    name: string;
-    quantity: number;
-    price: number;
-  }[];
-  totalAmount: number;
-  status: 'pending_accounting' | 'accounted';
-  date: number;
-}
-"""
+content = re.sub(r'  items: \{\n    itemId: string;\n    name: string;\n    quantity: number;\n    unit\?: \'piece\' \| \'packet\' \| \'carton\';\n    price: number;\n  \}\[\];', new_items, content)
 
 with open('src/types.ts', 'w') as f:
     f.write(content)
+
+print("done")

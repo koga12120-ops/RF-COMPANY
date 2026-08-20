@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, onSnapshot, doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Calendar, CheckCircle2, Clock, MapPin } from 'lucide-react';
 import { Market } from '../../types';
 
@@ -40,36 +41,54 @@ export default function RepScheduleView() {
     if (!repId) return;
 
     // 1. Listen to template schedule
-    const unsubSchedule = onSnapshot(doc(db, 'schedules', repId), (docSnap) => {
-      if (docSnap.exists()) {
-        setSchedule(docSnap.data().schedule || {});
-      } else {
-        setSchedule({});
+    const unsubSchedule = onSnapshot(
+      doc(db, 'schedules', repId),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setSchedule(docSnap.data().schedule || {});
+        } else {
+          setSchedule({});
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'schedules');
       }
-    });
+    );
 
     // 2. Listen to this week's visits
     const qVisits = query(collection(db, 'schedule_visits'), 
       where('repId', '==', repId),
       where('weekId', '==', weekId)
     );
-    const unsubVisits = onSnapshot(qVisits, (snap) => {
-      const visitedMap: Record<string, boolean> = {};
-      snap.forEach(d => {
-        visitedMap[d.data().marketId] = true;
-      });
-      setVisits(visitedMap);
-    });
+    const unsubVisits = onSnapshot(
+      qVisits,
+      (snap) => {
+        const visitedMap: Record<string, boolean> = {};
+        snap.forEach(d => {
+          visitedMap[d.data().marketId] = true;
+        });
+        setVisits(visitedMap);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'schedule_visits');
+      }
+    );
 
     // 3. Load Markets mapping
-    const unsubMarkets = onSnapshot(collection(db, 'markets'), (snap) => {
-      const mks: Record<string, Market> = {};
-      snap.forEach(d => {
-        mks[d.id] = { id: d.id, ...d.data() } as Market;
-      });
-      setMarkets(mks);
-      setLoading(false);
-    });
+    const unsubMarkets = onSnapshot(
+      collection(db, 'markets'),
+      (snap) => {
+        const mks: Record<string, Market> = {};
+        snap.forEach(d => {
+          mks[d.id] = { id: d.id, ...d.data() } as Market;
+        });
+        setMarkets(mks);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'markets');
+      }
+    );
 
     return () => {
       unsubSchedule();

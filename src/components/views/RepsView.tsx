@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { SalesRep } from '../../types';
 import { Users, Plus, Edit2, Trash2 } from 'lucide-react';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function RepsView() {
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [loading, setLoading] = useState(true);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingRep, setDeletingRep] = useState<SalesRep | null>(null);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -16,14 +18,20 @@ export default function RepsView() {
 
   useEffect(() => {
     const qReps = query(collection(db, 'reps'));
-    const unsubReps = onSnapshot(qReps, (snapshot) => {
-      const repsData: SalesRep[] = [];
-      snapshot.forEach((doc) => {
-        repsData.push({ id: doc.id, ...doc.data() } as SalesRep);
-      });
-      setReps(repsData);
-      setLoading(false);
-    });
+    const unsubReps = onSnapshot(
+      qReps,
+      (snapshot) => {
+        const repsData: SalesRep[] = [];
+        snapshot.forEach((doc) => {
+          repsData.push({ id: doc.id, ...doc.data() } as SalesRep);
+        });
+        setReps(repsData);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'reps');
+      }
+    );
 
     return () => {
       unsubReps();
@@ -66,12 +74,14 @@ export default function RepsView() {
     setEditId(rep.id);
   };
 
-  const handleDelete = async (id: string) => {
+  const confirmDeleteRep = async () => {
+    if (!deletingRep) return;
     try {
-      await deleteDoc(doc(db, 'reps', id));
-      setDeletingId(null);
+      await deleteDoc(doc(db, 'reps', deletingRep.id));
+      setDeletingRep(null);
     } catch (error) {
       console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی مەندووب');
     }
   };
 
@@ -159,7 +169,7 @@ export default function RepsView() {
                           دەستکاری
                         </button>
                         <button
-                          onClick={() => handleDelete(rep.id)}
+                          onClick={() => setDeletingRep(rep)}
                           className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded transition"
                         >
                           سڕینەوە
@@ -174,14 +184,26 @@ export default function RepsView() {
                       هیچ مەندووبێک نەدۆزرایەوە
                     </td>
                   </tr>
-          
                 )}
               </tbody>
             </table>
           </div>
-  
         )}
       </section>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingRep}
+        onClose={() => setDeletingRep(null)}
+        onConfirm={confirmDeleteRep}
+        title="سڕینەوەی مەندووب"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم مەندووبە لە سیستەمدا؟"
+        itemName={deletingRep?.name}
+        details={deletingRep ? [
+          { label: 'ژمارەی مۆبایل', value: deletingRep.phone || '-' },
+          { label: 'کۆی فرۆش', value: `${(deletingRep.totalSales || 0).toLocaleString()} د.ع` }
+        ] : []}
+      />
     </div>
   );
 }

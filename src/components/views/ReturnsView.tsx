@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, updateDoc, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, Market, Role } from '../../types';
 import { Undo2, Search } from 'lucide-react';
 
@@ -19,23 +20,35 @@ export default function ReturnsView({ role }: { role: Role }) {
 
   useEffect(() => {
     const qItems = query(collection(db, 'items'));
-    const unsubItems = onSnapshot(qItems, (snapshot) => {
-      const itemsData: Item[] = [];
-      snapshot.forEach((doc) => {
-        itemsData.push({ id: doc.id, ...doc.data() } as Item);
-      });
-      setItems(itemsData);
-    });
+    const unsubItems = onSnapshot(
+      qItems,
+      (snapshot) => {
+        const itemsData: Item[] = [];
+        snapshot.forEach((doc) => {
+          itemsData.push({ id: doc.id, ...doc.data() } as Item);
+        });
+        setItems(itemsData);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'items');
+      }
+    );
 
     const qMarkets = query(collection(db, 'markets'));
-    const unsubMarkets = onSnapshot(qMarkets, (snapshot) => {
-      const marketsData: Market[] = [];
-      snapshot.forEach((doc) => {
-        marketsData.push({ id: doc.id, ...doc.data() } as Market);
-      });
-      setMarkets(marketsData);
-      setLoading(false);
-    });
+    const unsubMarkets = onSnapshot(
+      qMarkets,
+      (snapshot) => {
+        const marketsData: Market[] = [];
+        snapshot.forEach((doc) => {
+          marketsData.push({ id: doc.id, ...doc.data() } as Market);
+        });
+        setMarkets(marketsData);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'markets');
+      }
+    );
 
     return () => {
       unsubItems();

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Market, SalesRep } from '../../types';
 import { Calendar, Save, Trash2 } from 'lucide-react';
 
@@ -24,18 +25,30 @@ export default function AdminScheduleView() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const unsubReps = onSnapshot(query(collection(db, 'reps')), (snapshot) => {
-      const data: SalesRep[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as SalesRep));
-      setReps(data);
-    });
+    const unsubReps = onSnapshot(
+      query(collection(db, 'reps')),
+      (snapshot) => {
+        const data: SalesRep[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as SalesRep));
+        setReps(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'reps');
+      }
+    );
 
-    const unsubMarkets = onSnapshot(query(collection(db, 'markets')), (snapshot) => {
-      const data: Market[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as Market));
-      setMarkets(data);
-      setLoading(false);
-    });
+    const unsubMarkets = onSnapshot(
+      query(collection(db, 'markets')),
+      (snapshot) => {
+        const data: Market[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as Market));
+        setMarkets(data);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'markets');
+      }
+    );
 
     return () => {
       unsubReps();
@@ -48,13 +61,19 @@ export default function AdminScheduleView() {
       setSchedule({ '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
       return;
     }
-    const unsubSchedule = onSnapshot(doc(db, 'schedules', selectedRep), (docSnap) => {
-      if (docSnap.exists()) {
-        setSchedule(docSnap.data().schedule || { '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
-      } else {
-        setSchedule({ '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
+    const unsubSchedule = onSnapshot(
+      doc(db, 'schedules', selectedRep),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setSchedule(docSnap.data().schedule || { '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
+        } else {
+          setSchedule({ '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'schedules');
       }
-    });
+    );
     return () => unsubSchedule();
   }, [selectedRep]);
 

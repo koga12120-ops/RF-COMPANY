@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
-import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText } from 'lucide-react';
+import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard } from 'lucide-react';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function LedgerView() {
   const [activeTab, setActiveTab] = useState<'current' | 'archive'>('current');
@@ -16,6 +18,7 @@ export default function LedgerView() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [cashvanSales, setCashvanSales] = useState<any[]>([]);
+  const [deletingDeal, setDeletingDeal] = useState<any | null>(null);
   
   const [loading, setLoading] = useState(true);
   
@@ -27,30 +30,48 @@ export default function LedgerView() {
 
   useEffect(() => {
     const qTrans = query(collection(db, 'transactions'), orderBy('date', 'desc'));
-    const unsubTrans = onSnapshot(qTrans, (snapshot) => {
-      const transData: Transaction[] = [];
-      snapshot.forEach((doc) => {
-        transData.push({ id: doc.id, ...doc.data() } as Transaction);
-      });
-      setTransactions(transData);
-      setLoading(false);
-    });
+    const unsubTrans = onSnapshot(
+      qTrans,
+      (snapshot) => {
+        const transData: Transaction[] = [];
+        snapshot.forEach((doc) => {
+          transData.push({ id: doc.id, ...doc.data() } as Transaction);
+        });
+        setTransactions(transData);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'transactions');
+      }
+    );
     
-    const unsubOrders = onSnapshot(collection(db, 'orders'), (snapshot) => {
-      const ords: any[] = [];
-      snapshot.forEach(doc => {
-        ords.push({ id: doc.id, ...doc.data() });
-      });
-      setOrders(ords);
-    });
+    const unsubOrders = onSnapshot(
+      collection(db, 'orders'),
+      (snapshot) => {
+        const ords: any[] = [];
+        snapshot.forEach(doc => {
+          ords.push({ id: doc.id, ...doc.data() });
+        });
+        setOrders(ords);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'orders');
+      }
+    );
     
-    const unsubCashvan = onSnapshot(collection(db, 'cashvan_sales'), (snapshot) => {
-      const cvs: any[] = [];
-      snapshot.forEach(doc => {
-        cvs.push({ id: doc.id, ...doc.data() });
-      });
-      setCashvanSales(cvs);
-    });
+    const unsubCashvan = onSnapshot(
+      collection(db, 'cashvan_sales'),
+      (snapshot) => {
+        const cvs: any[] = [];
+        snapshot.forEach(doc => {
+          cvs.push({ id: doc.id, ...doc.data() });
+        });
+        setCashvanSales(cvs);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvan_sales');
+      }
+    );
 
     return () => {
       unsubTrans();
@@ -71,14 +92,6 @@ export default function LedgerView() {
       });
       setAmount('');
       setDescription('');
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'transactions', id));
     } catch (error) {
       console.error(error);
     }
@@ -275,17 +288,20 @@ export default function LedgerView() {
     win?.document.close();
   };
 
-  const handleDeleteDeal = async (deal: any) => {
+  const confirmDeleteDeal = async () => {
+    if (!deletingDeal) return;
     try {
-      if (deal.invoiceNumber.startsWith('COMP-') || deal.invoiceNumber.startsWith('TRN-')) {
-        await deleteDoc(doc(db, 'transactions', deal.id));
-      } else if (deal.invoiceNumber.startsWith('ORD-')) {
-        await deleteDoc(doc(db, 'orders', deal.id));
-      } else if (deal.invoiceNumber.startsWith('CASH-')) {
-        await deleteDoc(doc(db, 'cashvan_sales', deal.id));
+      if (deletingDeal.invoiceNumber?.startsWith('COMP-') || deletingDeal.invoiceNumber?.startsWith('TRN-')) {
+        await deleteDoc(doc(db, 'transactions', deletingDeal.id));
+      } else if (deletingDeal.invoiceNumber?.startsWith('ORD-')) {
+        await deleteDoc(doc(db, 'orders', deletingDeal.id));
+      } else if (deletingDeal.invoiceNumber?.startsWith('CASH-')) {
+        await deleteDoc(doc(db, 'cashvan_sales', deletingDeal.id));
       }
+      setDeletingDeal(null);
     } catch (error) {
       console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی مامەڵە');
     }
   };
 
@@ -296,19 +312,42 @@ export default function LedgerView() {
   };
 
   const totalIncome = calculateTotal(fTrans, ['income', 'cash', 'paid_debt']);
-  const totalExpense = calculateTotal(fTrans, ['expense', 'company_cash', 'company_paid_debt', 'return_expense']);
   const manualExpenses = calculateTotal(fTrans, ['expense']);
   const returnProfitsLost = fTrans.filter(tr => tr.type === 'return_expense').reduce((acc, tr) => acc + (tr.profitReversal || 0), 0);
 
-    const ordersProfit = fOrders.filter(o => o.status === 'completed').reduce((acc, ord) => acc + (ord.totalProfit || 0), 0);
+  const ordersProfit = fOrders.filter(o => o.status === 'completed').reduce((acc, ord) => acc + (ord.totalProfit || 0), 0);
   const ordersTotal = fOrders.filter(o => o.status === 'completed').reduce((acc, ord) => acc + (ord.totalAmount || 0), 0);
+  const ordersCost = ordersTotal - ordersProfit;
 
   const cashvanProfit = fCashvan.filter(c => c.status === 'accounted').reduce((acc, cv) => acc + (cv.totalProfit || 0), 0);
   const cashvanTotal = fCashvan.filter(c => c.status === 'accounted').reduce((acc, cv) => acc + (cv.totalAmount || 0), 0);
+  const cashvanCost = cashvanTotal - cashvanProfit;
 
-  const netProfit = totalIncome - totalExpense;
-  const realProfit = ordersProfit + cashvanProfit - manualExpenses - returnProfitsLost;
+  // 1. کۆی تێچوو: تێچووی کاڵای فرۆشراو لەڕێگەی مەندووب یان کاشڤانەوە
+  const totalCost = ordersCost + cashvanCost;
+
+  // 2. کۆی کڕین: کاتێک شتێک دەکڕم یان داخڵ دەکەم لە کۆگا
+  const totalPurchases = calculateTotal(fTrans, ['company_cash', 'company_debt']);
+
+  // 3. کۆی فرۆش: (کۆی قازانج + کۆی تێچوو)
   const totalSalesVolume = ordersTotal + cashvanTotal;
+
+  // 4. کۆی خەرجی: تەنها بۆ خەرجییەکان بێت کە بەدەست دەینوسم لە زیاد کردنی تۆمار
+  const totalExpense = manualExpenses;
+
+  // 5. کۆی قەرزەکانم (ئەوانەی لە کۆمپانیاکان بەقەرز هێنراون)
+  const totalCompanyDebt = calculateTotal(fTrans, ['company_debt']);
+  const totalCompanyPaid = calculateTotal(fTrans, ['company_paid_debt']);
+  const remainingCompanyDebt = totalCompanyDebt - totalCompanyPaid;
+
+  // 6. کۆی بە قەرز براوەکانم (ئەو مارکێت و کۆگایانەی بە قەرز شتیان بردووە)
+  const totalMarketDebt = calculateTotal(fTrans, ['debt']);
+  const totalMarketPaid = calculateTotal(fTrans, ['paid_debt']);
+  const remainingMarketDebt = totalMarketDebt - totalMarketPaid;
+
+  // 7. قازانجی سافی
+  const netProfit = totalIncome - calculateTotal(fTrans, ['expense', 'company_cash', 'company_paid_debt', 'return_expense']);
+  const realProfit = (ordersProfit + cashvanProfit) - manualExpenses - returnProfitsLost;
 
   // Generate years from 2024 to 2035
   const years = Array.from({ length: 12 }, (_, i) => 2024 + i);
@@ -492,33 +531,88 @@ export default function LedgerView() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:shadow-md transition">
-          <div className="p-4 bg-indigo-100 text-indigo-600 rounded-full shrink-0">
-            <TrendingUp size={24} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+        {/* قازانجی سافی */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl shrink-0">
+            <TrendingUp size={20} />
           </div>
-          <div>
-            <div className="text-sm text-slate-500 mb-1 font-medium">قازانجی سافی</div>
-            <div className="text-2xl font-bold text-indigo-600" dir="ltr">{realProfit.toLocaleString()}</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">قازانجی سافی</div>
+            <div className="text-lg font-bold text-indigo-600 tracking-tight" dir="ltr">{realProfit.toLocaleString()}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">کۆی قازانج - خەرجی</div>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:shadow-md transition">
-          <div className="p-4 bg-red-100 text-red-600 rounded-full shrink-0">
-            <TrendingDown size={24} />
+        {/* کۆی فرۆش */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3 bg-green-100 text-green-600 rounded-xl shrink-0">
+            <ShoppingBag size={20} />
           </div>
-          <div>
-            <div className="text-sm text-slate-500 mb-1 font-medium">کۆی خەرجی</div>
-            <div className="text-2xl font-bold text-slate-800" dir="ltr">{totalExpense.toLocaleString()}</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">کۆی فرۆش</div>
+            <div className="text-lg font-bold text-green-700 tracking-tight" dir="ltr">{totalSalesVolume.toLocaleString()}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">قازانج + تێچوو</div>
           </div>
         </div>
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:shadow-md transition">
-          <div className="p-4 bg-green-100 text-green-600 rounded-full shrink-0">
-            <TrendingUp size={24} />
+
+        {/* کۆی تێچوو */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3 bg-amber-100 text-amber-600 rounded-xl shrink-0">
+            <PackageMinus size={20} />
           </div>
-          <div>
-            <div className="text-sm text-slate-500 mb-1 font-medium">کۆی فرۆش</div>
-            <div className="text-2xl font-bold text-slate-800" dir="ltr">{totalSalesVolume.toLocaleString()}</div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">کۆی تێچوو</div>
+            <div className="text-lg font-bold text-amber-700 tracking-tight" dir="ltr">{totalCost.toLocaleString()}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">تێچووی فرۆشراو</div>
+          </div>
+        </div>
+
+        {/* کۆی کڕین */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3 bg-sky-100 text-sky-600 rounded-xl shrink-0">
+            <PackagePlus size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">کۆی کڕین</div>
+            <div className="text-lg font-bold text-sky-700 tracking-tight" dir="ltr">{totalPurchases.toLocaleString()}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">داخڵکراو لە کۆگا</div>
+          </div>
+        </div>
+
+        {/* کۆی خەرجی */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+            <Receipt size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">کۆی خەرجی</div>
+            <div className="text-lg font-bold text-rose-600 tracking-tight" dir="ltr">{totalExpense.toLocaleString()}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">خەرجی دەستی</div>
+          </div>
+        </div>
+
+        {/* کۆی قەرزەکانم (کۆمپانیاکان) */}
+        <div className="bg-white p-4 rounded-2xl border border-orange-200/80 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3 bg-orange-100 text-orange-600 rounded-xl shrink-0">
+            <Building2 size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">قەرزەکانم (کۆمپانیا)</div>
+            <div className="text-lg font-bold text-orange-600 tracking-tight" dir="ltr">{totalCompanyDebt.toLocaleString()}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate" dir="ltr">ماوە: {remainingCompanyDebt.toLocaleString()}</div>
+          </div>
+        </div>
+
+        {/* کۆی بە قەرز براوەکانم (مارکێت و کۆگاکان) */}
+        <div className="bg-white p-4 rounded-2xl border border-purple-200/80 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3 bg-purple-100 text-purple-600 rounded-xl shrink-0">
+            <Store size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">بە قەرز براوە (مارکێت)</div>
+            <div className="text-lg font-bold text-purple-600 tracking-tight" dir="ltr">{totalMarketDebt.toLocaleString()}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate" dir="ltr">ماوە: {remainingMarketDebt.toLocaleString()}</div>
           </div>
         </div>
       </div>
@@ -662,7 +756,7 @@ export default function LedgerView() {
                               <FileText size={16} />
                             </button>
                             <button
-                              onClick={() => handleDeleteDeal(d)}
+                              onClick={() => setDeletingDeal(d)}
                               className="text-red-600 hover:bg-red-50 p-1.5 rounded transition"
                               title="سڕینەوە"
                             >
@@ -685,6 +779,21 @@ export default function LedgerView() {
           )}
         </section>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingDeal}
+        onClose={() => setDeletingDeal(null)}
+        onConfirm={confirmDeleteDeal}
+        title="سڕینەوەی مامەڵە لە حسابات"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم مامەڵەیە لە سیستەمدا؟"
+        details={deletingDeal ? [
+          { label: 'ژمارەی وەسڵ', value: deletingDeal.invoiceNumber || '-' },
+          { label: 'لایەن / ناو', value: deletingDeal.entityName || '-' },
+          { label: 'بڕی پارە', value: `${(deletingDeal.amount || 0).toLocaleString()} د.ع` },
+          { label: 'جۆر', value: deletingDeal.typeName || '-' }
+        ] : []}
+      />
     </div>
   );
 }

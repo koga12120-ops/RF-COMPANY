@@ -1,13 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, addDoc, onSnapshot, query, where, deleteDoc, doc, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
-import { format } from 'date-fns';
-import { Plus, Trash2, Printer, FileText } from 'lucide-react';
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
+import { Plus, Trash2, Printer, FileText, Calendar, Search, DollarSign, Clock, X, TrendingUp } from 'lucide-react';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function CashView({ type = 'cash', targetName = 'مارکێت' }: { type?: 'cash' | 'company_cash', targetName?: string }) {
   const [cashSales, setCashSales] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingSale, setDeletingSale] = useState<Transaction | null>(null);
+
+  // Filters
+  const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | 'this_week' | 'this_month' | 'custom_day' | 'range'>('all');
+  const [selectedDay, setSelectedDay] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [startDate, setStartDate] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [searchQuery, setSearchQuery] = useState('');
 
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
@@ -16,29 +26,37 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
 
   useEffect(() => {
     const q = query(collection(db, 'transactions'), where('type', '==', type));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const salesData: Transaction[] = [];
-      snapshot.forEach((doc) => {
-        salesData.push({ id: doc.id, ...doc.data() } as Transaction);
-      });
-      
-         setCashSales(salesData.sort((a, b) => b.date - a.date));
-      
-         
-      
-      setLoading(false);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const salesData: Transaction[] = [];
+        snapshot.forEach((doc) => {
+          salesData.push({ id: doc.id, ...doc.data() } as Transaction);
+        });
+        
+        setCashSales(salesData.sort((a, b) => b.date - a.date));
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'transactions');
+      }
+    );
 
     const collectionName = type.includes('company') ? 'companies' : 'markets';
     const qSuggestions = query(collection(db, collectionName));
-    const unsubSuggestions = onSnapshot(qSuggestions, (snapshot) => {
-      const data: any[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-      setSuggestions(data);
-    });
+    const unsubSuggestions = onSnapshot(
+      qSuggestions,
+      (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+        setSuggestions(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, collectionName);
+      }
+    );
 
-  
-  return () => {
+    return () => {
       unsubscribe();
       unsubSuggestions();
     };
@@ -72,15 +90,59 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const confirmDeleteSale = async () => {
+    if (!deletingSale) return;
     try {
-      await deleteDoc(doc(db, 'transactions', id));
+      await deleteDoc(doc(db, 'transactions', deletingSale.id));
+      setDeletingSale(null);
     } catch (error) {
       console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە');
     }
   };
 
-  const totalCash = cashSales.reduce((acc, curr) => acc + curr.amount, 0);
+  const isDateInFilter = (timestamp: number) => {
+    if (filterPeriod === 'all') return true;
+    const now = new Date();
+    const date = new Date(timestamp);
+    if (filterPeriod === 'today') {
+      return isWithinInterval(date, { start: startOfDay(now), end: endOfDay(now) });
+    }
+    if (filterPeriod === 'this_week') {
+      return isWithinInterval(date, { start: startOfWeek(now, { weekStartsOn: 6 }), end: endOfWeek(now, { weekStartsOn: 6 }) });
+    }
+    if (filterPeriod === 'this_month') {
+      return isWithinInterval(date, { start: startOfMonth(now), end: endOfMonth(now) });
+    }
+    if (filterPeriod === 'custom_day') {
+      if (!selectedDay) return true;
+      const target = new Date(selectedDay);
+      return isWithinInterval(date, { start: startOfDay(target), end: endOfDay(target) });
+    }
+    if (filterPeriod === 'range') {
+      if (!startDate && !endDate) return true;
+      const s = startDate ? startOfDay(new Date(startDate)) : new Date(0);
+      const e = endDate ? endOfDay(new Date(endDate)) : new Date(8640000000000000);
+      return isWithinInterval(date, { start: s, end: e });
+    }
+    return true;
+  };
+
+  const filteredSales = useMemo(() => {
+    return cashSales.filter(sale => {
+      const matchDate = isDateInFilter(sale.date);
+      const matchSearch = !searchQuery.trim() || 
+        (sale.relatedEntityId && sale.relatedEntityId.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (sale.description && sale.description.toLowerCase().includes(searchQuery.toLowerCase()));
+      return matchDate && matchSearch;
+    });
+  }, [cashSales, filterPeriod, selectedDay, startDate, endDate, searchQuery]);
+
+  const totalFilteredCash = useMemo(() => {
+    return filteredSales.reduce((acc, curr) => acc + (curr.amount || 0), 0);
+  }, [filteredSales]);
+
+  const avgCash = filteredSales.length > 0 ? Math.round(totalFilteredCash / filteredSales.length) : 0;
 
 
   const printTransaction = (transaction: Transaction) => {
@@ -236,6 +298,187 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
   };
   return (
     <div className="space-y-6">
+      {/* Top Filter and Search Bar */}
+      <section className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <Calendar className="text-emerald-600" size={20} />
+            <span className="font-bold text-slate-800 text-sm">فلتەری بەروار و گەڕان</span>
+          </div>
+          
+          <div className="w-full md:w-72 relative">
+            <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+            <input
+              type="text"
+              placeholder={`گەڕان بەپێی ناوی ${targetName} یان وردەکاری...`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-3 pr-9 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none"
+            />
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery('')}
+                className="absolute left-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Quick Period Buttons */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setFilterPeriod('all')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              filterPeriod === 'all'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            هەموو کات
+          </button>
+          <button
+            onClick={() => setFilterPeriod('today')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              filterPeriod === 'today'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            ئەمڕۆ
+          </button>
+          <button
+            onClick={() => setFilterPeriod('this_week')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              filterPeriod === 'this_week'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            ئەم هەفتەیە
+          </button>
+          <button
+            onClick={() => setFilterPeriod('this_month')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              filterPeriod === 'this_month'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            ئەم مانگە
+          </button>
+          <button
+            onClick={() => setFilterPeriod('custom_day')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              filterPeriod === 'custom_day'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            بەرواری دیاریکراو
+          </button>
+          <button
+            onClick={() => setFilterPeriod('range')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              filterPeriod === 'range'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            مەودای بەروار
+          </button>
+        </div>
+
+        {/* Date Pickers for Custom Day or Range */}
+        {filterPeriod === 'custom_day' && (
+          <div className="flex items-center gap-3 bg-emerald-50/70 p-3 rounded-xl border border-emerald-100 text-xs">
+            <span className="font-bold text-emerald-900">بەروار هەڵبژێرە:</span>
+            <input
+              type="date"
+              value={selectedDay}
+              onChange={(e) => setSelectedDay(e.target.value)}
+              className="px-3 py-1.5 bg-white border border-emerald-200 rounded-lg outline-none font-mono text-emerald-900"
+            />
+          </div>
+        )}
+
+        {filterPeriod === 'range' && (
+          <div className="flex flex-wrap items-center gap-3 bg-emerald-50/70 p-3 rounded-xl border border-emerald-100 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-emerald-900">لە بەرواری:</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-emerald-200 rounded-lg outline-none font-mono text-emerald-900"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-emerald-900">تا بەرواری:</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-emerald-200 rounded-lg outline-none font-mono text-emerald-900"
+              />
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Summary Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* 1. Total Cash */}
+        <div className="bg-white p-4 rounded-2xl border border-emerald-200/80 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3.5 bg-emerald-100 text-emerald-700 rounded-xl shrink-0">
+            <DollarSign size={22} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">
+              کۆی نەقد ({filterPeriod === 'all' ? 'هەموو کات' : 'بەپێی بەروار'})
+            </div>
+            <div className="text-xl font-bold text-emerald-600 tracking-tight" dir="ltr">
+              {totalFilteredCash.toLocaleString()}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">د.ع</div>
+          </div>
+        </div>
+
+        {/* 2. Count of Transactions */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3.5 bg-slate-100 text-slate-700 rounded-xl shrink-0">
+            <Clock size={22} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">
+              ژمارەی تۆمارەکان
+            </div>
+            <div className="text-xl font-bold text-slate-800 tracking-tight" dir="ltr">
+              {filteredSales.length}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">مامەڵەی نەقد</div>
+          </div>
+        </div>
+
+        {/* 3. Average Transaction */}
+        <div className="bg-white p-4 rounded-2xl border border-indigo-200/80 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
+          <div className="p-3.5 bg-indigo-100 text-indigo-700 rounded-xl shrink-0">
+            <TrendingUp size={22} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">
+              تێکڕای مامەڵە
+            </div>
+            <div className="text-xl font-bold text-indigo-600 tracking-tight" dir="ltr">
+              {avgCash.toLocaleString()}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">بۆ هەر مامەڵەیەک</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Add Cash Form */}
       <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
         <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">تۆمارکردنی نەقد</h3>
         <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
@@ -287,11 +530,14 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
         </form>
       </section>
 
+      {/* Cash Table */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
           <h4 className="font-bold text-slate-700 flex items-center gap-2">💵 لیستی نەقدەکان</h4>
-          <div className="bg-green-50 text-green-700 px-3 py-1.5 rounded-lg text-sm font-bold border border-green-100" dir="ltr">
-            کۆی گشتی: {totalCash.toLocaleString()}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
+              پیشاندانی {filteredSales.length} لە {cashSales.length} تۆمار
+            </span>
           </div>
         </div>
         
@@ -310,14 +556,14 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
                 </tr>
               </thead>
               <tbody className="text-sm divide-y divide-slate-50">
-                {cashSales.map(sale => (
+                {filteredSales.map(sale => (
                   <tr key={sale.id} className="hover:bg-slate-50/50 transition">
                     <td className="px-4 py-4 font-medium text-slate-900">{sale.relatedEntityId}</td>
                     <td className="px-4 py-4 text-slate-600">{sale.description}</td>
                     <td className="px-4 py-4 font-bold text-green-600" dir="ltr">{sale.amount.toLocaleString()}</td>
                     <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">{format(sale.date, 'yyyy-MM-dd HH:mm')}</td>
                     <td className="px-4 py-4">
-<div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
                         <button
                           onClick={() => printTransaction(sale)}
                           className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
@@ -333,20 +579,20 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
                           <FileText size={16} />
                         </button>
                         <button
-                          onClick={() => handleDelete(sale.id)}
+                          onClick={() => setDeletingSale(sale)}
                           className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
                           title="سڕینەوە"
                         >
                           <Trash2 size={16} />
                         </button>
                       </div>
-</td>
+                    </td>
                   </tr>
                 ))}
-                {cashSales.length === 0 && (
+                {filteredSales.length === 0 && (
                   <tr>
                     <td colSpan={5} className="text-center py-8 text-slate-500">
-                      هیچ تۆمارێکی نەقدی نییە
+                      هیچ تۆمارێکی نەقدی بەپێی ئەم فلتەرە نەدۆزرایەوە
                     </td>
                   </tr>
                 )}
@@ -355,6 +601,20 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
           </div>
         )}
       </section>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingSale}
+        onClose={() => setDeletingSale(null)}
+        onConfirm={confirmDeleteSale}
+        title="سڕینەوەی تۆماری نەقد"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم تۆمارەی نەقد؟"
+        details={deletingSale ? [
+          { label: targetName, value: deletingSale.relatedEntityId || '-' },
+          { label: 'بڕی پارە', value: `${(deletingSale.amount || 0).toLocaleString()} د.ع` },
+          { label: 'وردەکاری', value: deletingSale.description || '-' }
+        ] : []}
+      />
     </div>
   );
 }

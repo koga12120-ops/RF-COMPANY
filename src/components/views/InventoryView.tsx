@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, updateDoc, doc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, Role } from '../../types';
 import { Plus, Search, Edit2, Trash2, Calculator } from 'lucide-react';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function InventoryView({ role }: { role: Role }) {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [deletingItem, setDeletingItem] = useState<Item | null>(null);
 
   // Form state
   const [isEditing, setIsEditing] = useState(false);
@@ -44,23 +47,35 @@ export default function InventoryView({ role }: { role: Role }) {
 
   useEffect(() => {
     const q = query(collection(db, 'items'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const itemsData: Item[] = [];
-      snapshot.forEach((doc) => {
-        itemsData.push({ id: doc.id, ...doc.data() } as Item);
-      });
-      setItems(itemsData);
-      setLoading(false);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const itemsData: Item[] = [];
+        snapshot.forEach((doc) => {
+          itemsData.push({ id: doc.id, ...doc.data() } as Item);
+        });
+        setItems(itemsData);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'items');
+      }
+    );
 
     const qComp = query(collection(db, 'companies'));
-    const unsubComp = onSnapshot(qComp, (snapshot) => {
-      const compData: any[] = [];
-      snapshot.forEach((doc) => {
-        compData.push({ id: doc.id, ...doc.data() });
-      });
-      setCompanies(compData);
-    });
+    const unsubComp = onSnapshot(
+      qComp,
+      (snapshot) => {
+        const compData: any[] = [];
+        snapshot.forEach((doc) => {
+          compData.push({ id: doc.id, ...doc.data() });
+        });
+        setCompanies(compData);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'companies');
+      }
+    );
     const formatStock = (item: Item) => {
     let pieces = item.quantity || 0;
     const cRatio = item.ratio || 0;
@@ -248,12 +263,15 @@ export default function InventoryView({ role }: { role: Role }) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleDelete = async (id: string) => {
+  const confirmDeleteItem = async () => {
+    if (!deletingItem) return;
     try {
-      await deleteDoc(doc(db, 'items', id));
-      if (editId === id) resetForm();
+      await deleteDoc(doc(db, 'items', deletingItem.id));
+      if (editId === deletingItem.id) resetForm();
+      setDeletingItem(null);
     } catch (error) {
       console.error("Error deleting document: ", error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی کاڵا');
     }
   };
 
@@ -651,7 +669,7 @@ export default function InventoryView({ role }: { role: Role }) {
                           دەستکاری
                         </button>
                         <button
-                          onClick={() => handleDelete(item.id)}
+                          onClick={() => setDeletingItem(item)}
                           className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded transition"
                         >
                           سڕینەوە
@@ -672,6 +690,21 @@ export default function InventoryView({ role }: { role: Role }) {
           </div>
         )}
       </section>
+
+      {/* Delete Item Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingItem}
+        onClose={() => setDeletingItem(null)}
+        onConfirm={confirmDeleteItem}
+        title="سڕینەوەی کاڵا"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم کاڵایە لە کۆگادا؟"
+        itemName={deletingItem?.name}
+        details={deletingItem ? [
+          { label: 'بارکۆد', value: deletingItem.barcode || '-' },
+          { label: 'بڕی ماوە لە کۆگا', value: `${deletingItem.quantity || 0} دانە` },
+          { label: 'کۆمپانیا / سەرچاوە', value: deletingItem.supplier || '-' }
+        ] : []}
+      />
     </div>
   );
 }

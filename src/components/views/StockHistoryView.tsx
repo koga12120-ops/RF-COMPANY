@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, query, orderBy, where, deleteDoc, doc, updateDoc, getDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { StockHistory } from '../../types';
-import { Package, Search, Calendar, Trash2, Edit2, Printer, FileText } from 'lucide-react';
+import { Package, Search, Calendar, Trash2, Edit2, Printer, FileText, X, Check } from 'lucide-react';
 import { format, startOfDay, endOfDay } from 'date-fns';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function StockHistoryView() {
   const [history, setHistory] = useState<StockHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [deletingHistory, setDeletingHistory] = useState<StockHistory | null>(null);
+  const [editingHistory, setEditingHistory] = useState<StockHistory | null>(null);
+  const [newQtyInput, setNewQtyInput] = useState('');
+  const [isProcessingEdit, setIsProcessingEdit] = useState(false);
 
   useEffect(() => {
     // Only query by selectedDate to filter locally, or use Firestore where
@@ -25,42 +31,62 @@ export default function StockHistoryView() {
       orderBy('date', 'desc')
     );
 
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data: StockHistory[] = [];
-      snapshot.forEach((doc) => {
-        data.push({ id: doc.id, ...doc.data() } as StockHistory);
-      });
-      setHistory(data);
-      setLoading(false);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const data: StockHistory[] = [];
+        snapshot.forEach((doc) => {
+          data.push({ id: doc.id, ...doc.data() } as StockHistory);
+        });
+        setHistory(data);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'stock_history');
+      }
+    );
 
     return () => unsub();
   }, [selectedDate]);
 
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('دڵنیایت لە سڕینەوەی ئەم مێژووە؟')) {
-      await deleteDoc(doc(db, 'stock_history', id));
+  const confirmDeleteHistory = async () => {
+    if (!deletingHistory) return;
+    try {
+      await deleteDoc(doc(db, 'stock_history', deletingHistory.id));
+      setDeletingHistory(null);
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە');
     }
   };
 
+  const confirmEditHistory = async () => {
+    if (!editingHistory) return;
+    const newQty = Number(newQtyInput);
+    if (isNaN(newQty) || newQty < 0) {
+      alert('تکایە بڕێکی دروست بنووسە');
+      return;
+    }
 
-  const handleEdit = async (history: StockHistory) => {
-    const newQtyStr = window.prompt('بڕی هاتوو نوێ بنووسە:', history.quantityAdded.toString());
-    if (newQtyStr !== null && newQtyStr.trim() !== '') {
-      const newQty = Number(newQtyStr);
-      if (!isNaN(newQty)) {
-        const diff = newQty - history.quantityAdded;
-        await updateDoc(doc(db, 'stock_history', history.id), { quantityAdded: newQty });
+    setIsProcessingEdit(true);
+    try {
+      const diff = newQty - editingHistory.quantityAdded;
+      await updateDoc(doc(db, 'stock_history', editingHistory.id), { quantityAdded: newQty });
 
-        // Update item total
-        const itemRef = doc(db, 'items', history.itemId);
-        const itemSnap = await getDoc(itemRef);
-        if (itemSnap.exists()) {
-          const currentQty = itemSnap.data().quantity || 0;
-          await updateDoc(itemRef, { quantity: currentQty + diff });
-        }
+      // Update item total
+      const itemRef = doc(db, 'items', editingHistory.itemId);
+      const itemSnap = await getDoc(itemRef);
+      if (itemSnap.exists()) {
+        const currentQty = itemSnap.data().quantity || 0;
+        await updateDoc(itemRef, { quantity: currentQty + diff });
       }
+      setEditingHistory(null);
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی دەستکاریکردنی بڕ');
+    } finally {
+      setIsProcessingEdit(false);
     }
   };
 
@@ -247,8 +273,23 @@ export default function StockHistoryView() {
                       <div className="flex items-center gap-2">
                                                 <button onClick={() => printHistory(item)} title="چاپکردنی تەنها ئەمە" className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><Printer size={16}/></button>
                         <button onClick={() => printAllHistory(item.itemName)} title="هەموو هاتنەکانی ئەم کاڵایە" className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100"><FileText size={16}/></button>
-                        <button onClick={() => handleEdit(item)} className="p-1.5 bg-amber-50 text-amber-600 rounded-lg hover:bg-amber-100"><Edit2 size={16}/></button>
-                        <button onClick={() => handleDelete(item.id)} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"><Trash2 size={16}/></button>
+                        <button 
+                          onClick={() => {
+                            setEditingHistory(item);
+                            setNewQtyInput(item.quantityAdded.toString());
+                          }} 
+                          className="p-1.5 bg-amber-50 text-amber-600 rounded-lg hover:bg-amber-100 transition" 
+                          title="دەستکاری"
+                        >
+                          <Edit2 size={16}/>
+                        </button>
+                        <button 
+                          onClick={() => setDeletingHistory(item)} 
+                          className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition" 
+                          title="سڕینەوە"
+                        >
+                          <Trash2 size={16}/>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -258,6 +299,86 @@ export default function StockHistoryView() {
           </div>
         )}
       </section>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deletingHistory}
+        onClose={() => setDeletingHistory(null)}
+        onConfirm={confirmDeleteHistory}
+        title="سڕینەوەی تۆماری هاتنی کاڵا"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم مێژووەی هاتنی کاڵا؟"
+        itemName={deletingHistory?.itemName}
+        details={deletingHistory ? [
+          { label: 'بڕی هاتوو', value: `${(deletingHistory.quantityAdded || 0).toLocaleString()} دانە` },
+          { label: 'بەروار و کات', value: format(deletingHistory.date, 'yyyy/MM/dd HH:mm') }
+        ] : []}
+      />
+
+      {/* Edit Quantity Modal */}
+      {editingHistory && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-150" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-amber-50">
+              <h3 className="font-bold text-amber-800 text-base flex items-center gap-2">
+                <Edit2 className="text-amber-600" size={18} />
+                دەستکاریکردنی بڕی هاتوو
+              </h3>
+              <button 
+                onClick={() => setEditingHistory(null)} 
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
+                disabled={isProcessingEdit}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-sm space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">ناوی کاڵا:</span>
+                  <span className="font-bold text-slate-800">{editingHistory.itemName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">بڕی پێشوو:</span>
+                  <span className="font-bold text-slate-700 font-mono" dir="ltr">{editingHistory.quantityAdded.toLocaleString()} دانە</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">بڕی هاتووی نوێ:</label>
+                <input
+                  type="number"
+                  dir="ltr"
+                  value={newQtyInput}
+                  onChange={(e) => setNewQtyInput(e.target.value)}
+                  className="w-full p-3 border border-slate-300 rounded-xl font-bold font-mono text-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  placeholder="بڕی نوێ بنووسە"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={confirmEditHistory}
+                  disabled={isProcessingEdit}
+                  className="flex-1 py-2.5 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                >
+                  <Check size={18} />
+                  {isProcessingEdit ? 'پاشەکەوت دەکرێت...' : 'نوێکردنەوە'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingHistory(null)}
+                  disabled={isProcessingEdit}
+                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
