@@ -9,23 +9,29 @@ export interface Item {
   id: string;
   name: string;
   barcode: string;
-  quantity: number;
+  quantity: number; // بڕی بەردەست لە کۆگا (بە کارتۆن یان پاکەت)
+  unitType?: 'carton' | 'packet' | 'both'; // یەکەی سەرەکی
   supplier?: string;
+  invoiceNo?: string; // ژمارەی وەسڵ یان دەفتەر وەسڵی کۆمپانیا
   createdAt?: number;
   
-  costPrice: number;
-  sellingPrice: number;
-  wholesalePrice?: number;
+  costPrice: number; // تێچووی سەرەکی
+  sellingPrice: number; // نرخی فرۆشتنی سەرەکی
+  wholesalePrice?: number; // نرخی کۆگا
   
-  packetRatio?: number;
   packetCostPrice?: number;
   packetSellingPrice?: number;
   packetWholesalePrice?: number;
+  packetQuantity?: number;
 
-  ratio: number; // carton ratio
   cartonCostPrice?: number;
   cartonSellingPrice?: number;
   cartonWholesalePrice?: number;
+  cartonQuantity?: number;
+
+  // Backward compatibility fields
+  ratio?: number;
+  packetRatio?: number;
 }
 
 export interface Market {
@@ -42,7 +48,10 @@ export interface StockHistory {
   itemId: string;
   itemName: string;
   quantityAdded: number;
+  unit?: 'carton' | 'packet';
   date: number;
+  invoiceNo?: string; // ژمارەی سەر وەسڵ
+  supplier?: string;
 }
 
 export interface Transaction {
@@ -53,21 +62,27 @@ export interface Transaction {
   description: string;
   relatedEntityId?: string; // e.g. market name or person name
   profitReversal?: number;
+  invoiceNo?: string; // ژمارەی دەفتەر وەسڵ
 }
 
 export interface SalesRep {
   id: string;
   name: string;
   phone: string;
+  email?: string;
+  uid?: string;
+  accessCode?: string; // کۆدی ئەمنی تایبەت کە بەڕێوەبەر دایناوە
+  status?: 'active' | 'pending' | 'disabled';
   totalSales: number;
   totalProfit: number;
+  createdAt?: number;
 }
 
 export interface OrderItem {
   itemId: string;
   name: string;
   quantity: number;
-  unit?: 'piece' | 'packet' | 'carton';
+  unit?: 'carton' | 'packet';
   price: number;
 }
 
@@ -92,22 +107,46 @@ export interface Company {
   createdAt: number;
 }
 
+export interface CashvanRequisitionItem {
+  itemId: string;
+  name: string;
+  quantity: number;
+  unit: 'carton' | 'packet';
+  price?: number;
+}
+
+export interface CashvanRequisition {
+  id: string;
+  requisitionNo?: string;
+  cashvanName: string;
+  cashvanId?: string;
+  items: CashvanRequisitionItem[];
+  notes?: string;
+  status: 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
+  createdAt: number;
+  completedAt?: number;
+  preparedBy?: string;
+}
+
+export interface CashvanTransferItem {
+  itemId: string;
+  name: string;
+  quantity: number;
+  unit?: 'carton' | 'packet';
+  price: number;
+  barcode?: string;
+}
 
 export interface CashvanTransfer {
   id: string;
+  transferNo?: string;
   cashvanName: string;
-  items: {
-    itemId: string;
-    name: string;
-    quantity: number;
-    unit?: 'piece' | 'packet' | 'carton';
-    price: number;
-    ratio?: number;
-    packetRatio?: number;
-    barcode?: string;
-  }[];
+  cashvanId?: string;
+  items: CashvanTransferItem[];
   totalValue: number;
   date: number;
+  notes?: string;
+  requisitionId?: string;
 }
 
 export interface CashvanSale {
@@ -119,10 +158,8 @@ export interface CashvanSale {
     itemId: string;
     name: string;
     quantity: number;
-    unit?: 'piece' | 'packet' | 'carton';
+    unit?: 'carton' | 'packet';
     price: number;
-    ratio?: number;
-    packetRatio?: number;
     barcode?: string;
   }[];
   totalAmount: number;

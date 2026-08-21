@@ -6,6 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Trash2, Printer, FileText, Calendar, Search, CheckCircle2, Clock, X, TrendingUp } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
+import { printStatementPopup } from '../../lib/statementPrinter';
 
 export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_debt' | 'company_paid_debt' }) {
   const [paidDebts, setPaidDebts] = useState<Transaction[]>([]);
@@ -82,7 +83,8 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
       const matchDate = isDateInFilter(debt.date);
       const matchSearch = !searchQuery.trim() || 
         (debt.relatedEntityId && debt.relatedEntityId.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (debt.description && debt.description.toLowerCase().includes(searchQuery.toLowerCase()));
+        (debt.description && debt.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (debt.invoiceNo && debt.invoiceNo.toLowerCase().includes(searchQuery.toLowerCase()));
       return matchDate && matchSearch;
     });
   }, [paidDebts, filterPeriod, selectedDay, startDate, endDate, searchQuery]);
@@ -141,6 +143,11 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
               <span class="label">ناوی ${roleTitle}:</span>
               <span>${transaction.relatedEntityId}</span>
             </div>
+            ${transaction.invoiceNo ? `
+            <div class="row">
+              <span class="label">ژمارەی سەر وەسڵ:</span>
+              <span dir="ltr">#${transaction.invoiceNo}</span>
+            </div>` : ''}
             <div class="row">
               <span class="label">بەروار:</span>
               <span dir="ltr">${format(transaction.date, 'yyyy-MM-dd HH:mm')}</span>
@@ -180,70 +187,12 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
   };
 
   const printStatement = async (entityName: string) => {
+    if (!entityName) return;
     const q = query(collection(db, 'transactions'), where('relatedEntityId', '==', entityName));
     const snap = await getDocs(q);
     const allTrans: Transaction[] = [];
     snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
-    
-    allTrans.sort((a,b) => a.date - b.date);
-    
-    let totalDebt = 0;
-    let totalPaid = 0;
-    let totalCash = 0;
-
-    const rowsHtml = allTrans.map(t => {
-      let typeLabel = '';
-      if (t.type.includes('debt') && !t.type.includes('paid')) { typeLabel = 'قەرز'; totalDebt += t.amount || 0; }
-      else if (t.type.includes('paid')) { typeLabel = 'واسڵکراو'; totalPaid += t.amount || 0; }
-      else { typeLabel = 'نەقد'; totalCash += t.amount || 0; }
-      
-      return `<tr>
-        <td dir="ltr">${format(t.date, 'yyyy-MM-dd HH:mm')}</td>
-        <td>${typeLabel}</td>
-        <td>${t.description}</td>
-        <td dir="ltr">${(t.amount || 0).toLocaleString()}</td>
-      </tr>`;
-    }).join('');
-    
-    let finalBalance = totalDebt - totalPaid;
-    
-    const html = `
-    <html dir="rtl">
-      <head>
-        <title>کەشف حیساب - ${entityName}</title>
-        <style>
-          body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
-          th { background-color: #f8f9fa; }
-          .header { text-align: center; margin-bottom: 20px; }
-          .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-          @media print { body { padding: 0; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>کەشف حیساب - ${entityName}</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
-        <table style="width: 100%">
-          <thead><tr><th>بەروار و کات</th><th>جۆر</th><th>وردەکاری</th><th>بڕی پارە</th></tr></thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-        <div class="summary">
-          <p>کۆی قەرزەکان: <span dir="ltr">${totalDebt.toLocaleString()}</span></p>
-          <p>کۆی واسڵکراو: <span dir="ltr">${totalPaid.toLocaleString()}</span></p>
-          <p>کۆی نەقد: <span dir="ltr">${totalCash.toLocaleString()}</span></p>
-          <hr style="margin: 10px 0;" />
-          <h3 style="margin: 0; font-size: 20px;">ماوەی قەرز (باڵانس): <span dir="ltr">${finalBalance.toLocaleString()}</span> د.ع</h3>
-        </div>
-        <script>window.onload = () => window.print();</script>
-      </body>
-    </html>`;
-    const win = window.open('', '_blank');
-    win?.document.write(html);
-    win?.document.close();
+    printStatementPopup(entityName, allTrans);
   };
   return (
     <div className="space-y-6">
@@ -452,7 +401,14 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
                 {filteredDebts.map(debt => (
                   <tr key={debt.id} className="hover:bg-slate-50/50 transition">
                     <td className="px-4 py-4 font-medium text-slate-900">{debt.relatedEntityId}</td>
-                    <td className="px-4 py-4 text-slate-600">{debt.description}</td>
+                    <td className="px-4 py-4 text-slate-600">
+                      <div>{debt.description}</div>
+                      {debt.invoiceNo && (
+                        <span className="inline-block mt-0.5 text-[11px] font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-200" dir="ltr">
+                          وەسڵ: #{debt.invoiceNo}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-4 font-bold text-green-600" dir="ltr">{debt.amount.toLocaleString()}</td>
                     <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">{format(debt.date, 'yyyy-MM-dd HH:mm')}</td>
                     <td className="px-4 py-4">

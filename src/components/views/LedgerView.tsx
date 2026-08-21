@@ -6,6 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
+import { printStatementPopup } from '../../lib/statementPrinter';
 
 export default function LedgerView() {
   const [activeTab, setActiveTab] = useState<'current' | 'archive'>('current');
@@ -149,7 +150,8 @@ export default function LedgerView() {
         personName: ['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'کۆمپانیا' : 'بەڕێوەبەر',
         amount: t.amount,
         date: t.date,
-        invoiceNumber: (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'COMP-' : 'TRN-') + t.id.slice(-4).toUpperCase(),
+        invoiceNumber: t.invoiceNo ? `#${t.invoiceNo}` : ((['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'COMP-' : 'TRN-') + t.id.slice(-4).toUpperCase()),
+        invoiceNo: t.invoiceNo,
         isDeleted: false,
         deletedBy: ''
       });
@@ -185,8 +187,6 @@ export default function LedgerView() {
     
     // Filtering
     if (dealFilterType !== 'all') {
-       // Filter logic based on entity type might be complex since we don't have perfect entityType tags.
-       // Let's assume deals handles it loosely.
        list = list.filter(d => d.entityType === dealFilterType || d.type.includes(dealFilterType === 'company' ? 'کۆمپانیا' : ''));
     }
     
@@ -226,66 +226,7 @@ export default function LedgerView() {
     const snap = await getDocs(q);
     const allTrans: Transaction[] = [];
     snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
-    
-    allTrans.sort((a,b) => a.date - b.date);
-    
-    let totalDebt = 0;
-    let totalPaid = 0;
-    let totalCash = 0;
-
-    const rowsHtml = allTrans.map(t => {
-      let typeLabel = '';
-      if (t.type.includes('debt') && !t.type.includes('paid')) { typeLabel = 'قەرز'; totalDebt += t.amount || 0; }
-      else if (t.type.includes('paid')) { typeLabel = 'واسڵکراو'; totalPaid += t.amount || 0; }
-      else { typeLabel = 'نەقد/تر'; totalCash += t.amount || 0; }
-      
-      return `<tr>
-        <td dir="ltr">${format(t.date, 'yyyy-MM-dd HH:mm')}</td>
-        <td>${typeLabel}</td>
-        <td>${t.description}</td>
-        <td dir="ltr">${(t.amount || 0).toLocaleString()}</td>
-      </tr>`;
-    }).join('');
-    
-    let finalBalance = totalDebt - totalPaid;
-    
-    const html = `
-    <html dir="rtl">
-      <head>
-        <title>کەشف حیساب - ${entityName}</title>
-        <style>
-          body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
-          th { background-color: #f8f9fa; }
-          .header { text-align: center; margin-bottom: 20px; }
-          .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-          @media print { body { padding: 0; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>کەشف حیساب - ${entityName}</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
-        <table style="width: 100%">
-          <thead><tr><th>بەروار و کات</th><th>جۆر</th><th>وردەکاری</th><th>بڕی پارە</th></tr></thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-        <div class="summary">
-          <p>کۆی قەرزەکان: <span dir="ltr">${totalDebt.toLocaleString()}</span></p>
-          <p>کۆی واسڵکراو: <span dir="ltr">${totalPaid.toLocaleString()}</span></p>
-          <p>کۆی نەقد: <span dir="ltr">${totalCash.toLocaleString()}</span></p>
-          <hr style="margin: 10px 0;" />
-          <h3 style="margin: 0; font-size: 20px;">ماوەی قەرز (باڵانس): <span dir="ltr">${finalBalance.toLocaleString()}</span> د.ع</h3>
-        </div>
-        <script>window.onload = () => window.print();</script>
-      </body>
-    </html>`;
-    const win = window.open('', '_blank');
-    win?.document.write(html);
-    win?.document.close();
+    printStatementPopup(entityName, allTrans);
   };
 
   const confirmDeleteDeal = async () => {

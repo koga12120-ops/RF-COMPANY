@@ -1,83 +1,99 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { collection, getDocs, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { CashvanSale, Transaction } from '../../types';
-import { Search, Plus, Printer, Trash2, CheckCircle2, FileText, Edit2, AlertTriangle, X } from 'lucide-react';
+import { CashvanSale, CashvanRequisition, Item } from '../../types';
+import { Search, Plus, Printer, Trash2, CheckCircle2, FileText, Edit2, AlertTriangle, X, ClipboardList, Truck, Send, Clock, UserCheck } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function CashvanSalesView() {
   const [inventory, setInventory] = useState<any[]>([]);
+  const [warehouseItems, setWarehouseItems] = useState<Item[]>([]);
   const [markets, setMarkets] = useState<any[]>([]);
-  const [cart, setCart] = useState<(any & {unit?: 'piece'|'carton'})[]>([]);
-  const [paymentType, setPaymentType] = useState<'cash'|'debt'>('cash');
+  const [cashvanList, setCashvanList] = useState<any[]>([]);
+  const [cart, setCart] = useState<any[]>([]);
+  const [paymentType, setPaymentType] = useState<'cash' | 'debt'>('cash');
   
   const [selectedMarket, setSelectedMarket] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
-  const [repSchedule, setRepSchedule] = useState<Record<string, string[]>>({});
-  const [repVisits, setRepVisits] = useState<Record<string, boolean>>({});
   const [sales, setSales] = useState<CashvanSale[]>([]);
+  const [myRequisitions, setMyRequisitions] = useState<CashvanRequisition[]>([]);
   const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو';
-  
+  // Active view tab: sales vs pre-order
+  const [activeTab, setActiveTab] = useState<'sales' | 'preorder' | 'history'>('sales');
+
+  // Pre-order state
+  const [preOrderCart, setPreOrderCart] = useState<{ item: Item; quantity: number; unit: 'carton' | 'packet' }[]>([]);
+  const [preOrderNotes, setPreOrderNotes] = useState('');
+  const [preOrderSearch, setPreOrderSearch] = useState('');
+
+  // Identify driver / cashvan
+  const defaultUserName = auth.currentUser?.displayName || auth.currentUser?.email?.split('@')[0] || 'کاشڤان';
+  const [activeCashvanName, setActiveCashvanName] = useState<string>(defaultUserName);
+
+  // Sync active cashvan name live with user doc in case admin renames
   useEffect(() => {
-    if (!userName) return;
-    
-    let unsubSched = () => {};
-    let unsubVisits = () => {};
-
-    const fetchUser = async () => {
-      if (auth.currentUser) {
-        // Listen to schedule
-        unsubSched = onSnapshot(
-          doc(db, 'schedules', auth.currentUser.uid),
-          (docSnap) => {
-            if (docSnap.exists()) {
-              setRepSchedule(docSnap.data().schedule || {});
-            }
-          },
-          (error) => {
-            handleFirestoreError(error, OperationType.GET, 'schedules');
-          }
-        );
-        
-        // Listen to visits for the week
-        const d = new Date();
-        d.setHours(0, 0, 0, 0);
-        const day = d.getDay();
-        const diff = day === 6 ? 0 : day + 1;
-        d.setDate(d.getDate() - diff);
-        const weekId = `week_${d.toISOString().split('T')[0]}`;
-        
-        const qVisits = query(collection(db, 'schedule_visits'), 
-          where('repId', '==', auth.currentUser.uid),
-          where('weekId', '==', weekId)
-        );
-        unsubVisits = onSnapshot(
-          qVisits,
-          (snap) => {
-            const visitedMap: Record<string, boolean> = {};
-            snap.forEach(d => { visitedMap[d.data().marketId] = true; });
-            setRepVisits(visitedMap);
-          },
-          (error) => {
-            handleFirestoreError(error, OperationType.GET, 'schedule_visits');
-          }
-        );
+    if (!auth.currentUser) return;
+    const unsubUser = onSnapshot(doc(db, 'users', auth.currentUser.uid), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().name) {
+        setActiveCashvanName(docSnap.data().name);
       }
-    };
-    fetchUser();
+    });
+    return () => unsubUser();
+  }, []);
 
-    // Get Cashvan's inventory
-    const qInv = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', userName));
+  useEffect(() => {
+    // Load list of cashvans / reps
+    const unsubCV = onSnapshot(query(collection(db, 'cashvans')), (snap) => {
+      const list: any[] = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      setCashvanList(prev => {
+        const reps = prev.filter(p => p.isRep);
+        return [...reps, ...list];
+      });
+    });
+
+    const unsubReps = onSnapshot(query(collection(db, 'reps')), (snap) => {
+      const list: any[] = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data(), isRep: true }));
+      setCashvanList(prev => {
+        const cvs = prev.filter(p => !p.isRep);
+        return [...cvs, ...list];
+      });
+    });
+
+    // Load warehouse items for pre-orders
+    const unsubWH = onSnapshot(query(collection(db, 'items')), (snap) => {
+      const itemsData: Item[] = [];
+      snap.forEach(d => itemsData.push({ id: d.id, ...d.data() } as Item));
+      setWarehouseItems(itemsData);
+    });
+
+    return () => {
+      unsubCV();
+      unsubReps();
+      unsubWH();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeCashvanName) return;
+
+    // Get strictly this Cashvan's inventory to prevent mixing
+    const qInv = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', activeCashvanName));
     const unsubInv = onSnapshot(
       qInv,
       (snapshot) => {
         const data: any[] = [];
-        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+        snapshot.forEach(doc => {
+          const invData = doc.data();
+          if ((invData.quantity || 0) > 0) {
+            data.push({ id: doc.id, ...invData });
+          }
+        });
         setInventory(data);
       },
       (error) => {
@@ -98,11 +114,11 @@ export default function CashvanSalesView() {
     );
     
     const unsubSales = onSnapshot(
-      query(collection(db, 'cashvan_sales'), where('cashvanName', '==', userName)),
+      query(collection(db, 'cashvan_sales'), where('cashvanName', '==', activeCashvanName)),
       (snapshot) => {
         const data: CashvanSale[] = [];
         snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanSale));
-        setSales(data.filter(s => s.status !== 'deleted').sort((a,b) => b.date - a.date));
+        setSales(data.filter(s => s.status !== 'deleted').sort((a, b) => b.date - a.date));
         setLoading(false);
       },
       (error) => {
@@ -110,53 +126,61 @@ export default function CashvanSalesView() {
       }
     );
 
+    const unsubReqs = onSnapshot(
+      query(collection(db, 'cashvan_requisitions'), where('cashvanName', '==', activeCashvanName)),
+      (snapshot) => {
+        const data: CashvanRequisition[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanRequisition));
+        setMyRequisitions(data.sort((a, b) => b.createdAt - a.createdAt));
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvan_requisitions');
+      }
+    );
+
     return () => {
       unsubInv();
       unsubMarkets();
       unsubSales();
-      if (unsubSched) unsubSched();
-      if (unsubVisits) unsubVisits();
+      unsubReqs();
     };
-  }, [userName]);
-
+  }, [activeCashvanName]);
 
   const calcPrice = (item: any, unit: string, marketName: string) => {
     const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
     if (isWholesale) {
-      if (unit === 'carton') return item.cartonWholesalePrice || item.cartonSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.ratio || 1));
-      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || ((item.wholesalePrice || item.sellingPrice) * (item.packetRatio || 1));
-      return item.wholesalePrice || item.sellingPrice || 0;
+      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
+      return item.cartonWholesalePrice || item.cartonSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
     } else {
-            if (unit === 'carton') return item.cartonSellingPrice || item.cartonWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.ratio || 1));
-      if (unit === 'packet') return item.packetSellingPrice || item.packetWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.packetRatio || 1));
-      return item.sellingPrice || item.wholesalePrice || 0;
+      if (unit === 'packet') return item.packetSellingPrice || item.sellingPrice || 0;
+      return item.cartonSellingPrice || item.sellingPrice || 0;
     }
   };
 
   useEffect(() => {
-    setCart(prev => prev.map(p => ({ ...p, finalPrice: calcPrice(p, p.unit || 'piece', selectedMarket) })));
+    setCart(prev => prev.map(p => ({ ...p, finalPrice: calcPrice(p, p.unit || 'carton', selectedMarket) })));
   }, [selectedMarket, markets]);
+
   const addToCart = (item: any) => {
     setCart(prev => {
       const existing = prev.find(p => p.id === item.id);
       if (existing) {
-        const newQty = existing.cartQty + 1;
-        const totalPieces = existing.unit === 'carton' ? newQty * (item.ratio || 1) : (existing.unit === 'packet' ? newQty * (item.packetRatio || 1) : newQty);
-        if (totalPieces > item.quantity) {
-          alert('بڕی داواکراو بەردەست نییە');
+        if (existing.cartQty >= item.quantity) {
+          alert('بڕی زیاتر لەناو ڤاندا بەردەست نییە');
           return prev;
         }
-        return prev.map(p => p.id === item.id ? { ...p, cartQty: newQty } : p);
+        return prev.map(p => p.id === item.id ? { ...p, cartQty: p.cartQty + 1 } : p);
       }
       if (item.quantity < 1) {
-        alert('بڕی داواکراو بەردەست نییە');
+        alert('بڕی بەردەست لەناو ڤان نەماوە');
         return prev;
       }
-      return [...prev, { ...item, cartQty: 1, finalPrice: calcPrice(item, 'piece', selectedMarket), unit: 'piece' }];
+      const unit = item.unit || (item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton');
+      return [...prev, { ...item, cartQty: 1, finalPrice: calcPrice(item, unit, selectedMarket), unit }];
     });
   };
 
-  const updateCartQty = (id: string, qty: number, unit?: 'piece'|'packet'|'carton') => {
+  const updateCartQty = (id: string, qty: number, unit?: 'carton' | 'packet') => {
     const item = inventory.find(i => i.id === id);
     if (!item) return;
     
@@ -164,69 +188,57 @@ export default function CashvanSalesView() {
       const cartItem = prev.find(p => p.id === id);
       if (!cartItem) return prev;
       
-      const newUnit = unit || cartItem.unit || 'piece';
-      const totalPieces = newUnit === 'carton' ? qty * (item.ratio || 1) : (newUnit === 'packet' ? qty * (item.packetRatio || 1) : qty);
-      
-      if (totalPieces > item.quantity) {
-        alert('بڕی داواکراو بەردەست نییە');
+      const newUnit = unit || cartItem.unit || 'carton';
+      if (qty > item.quantity) {
+        alert(`تەنها ${item.quantity} لەناو ڤاندا بەردەستە`);
         return prev;
       }
-      
       if (qty < 1) {
         return prev.filter(p => p.id !== id);
       }
       
       const price = calcPrice(item, newUnit, selectedMarket);
-      
       return prev.map(p => p.id === id ? { ...p, cartQty: qty, unit: newUnit, finalPrice: price } : p);
     });
   };
-  
+
   const updateCartPrice = (id: string, price: number) => {
     setCart(prev => prev.map(p => p.id === id ? { ...p, finalPrice: price } : p));
   };
 
-  // Filter markets for reps based on schedule
-  const currentDayStr = new Date().getDay().toString();
-  const WEEK_DAYS = ['6', '0', '1', '2', '3', '4'];
-  const todayIndex = WEEK_DAYS.indexOf(currentDayStr);
-  
-  const activeDays = todayIndex === -1 ? WEEK_DAYS : WEEK_DAYS.slice(0, todayIndex + 1);
-  const validMarketIds = new Set<string>();
-  
-  activeDays.forEach(day => {
-    const dayMarkets = repSchedule[day] || [];
-    dayMarkets.forEach(mId => {
-      if (day === currentDayStr || !repVisits[mId]) {
-        validMarketIds.add(mId);
-      }
-    });
-  });
-  
-  const displayMarkets = markets.filter(m => validMarketIds.has(m.id));
-
   const handleSale = async () => {
-    if (!selectedMarket || cart.length === 0) return;
+    if (!selectedMarket || cart.length === 0) {
+      alert('تکایە مارکێت و لانیکەم یەک کاڵا دیاری بکە');
+      return;
+    }
 
     try {
       if (selectedMarket && !markets.find(m => m.name === selectedMarket)) {
-        await addDoc(collection(db, 'markets'), { name: selectedMarket, location: '', phone: '', type: 'market', createdAt: Date.now() });
+        await addDoc(collection(db, 'markets'), { 
+          name: selectedMarket, 
+          location: '', 
+          phone: '', 
+          type: 'market', 
+          createdAt: Date.now() 
+        });
       }
       
       const totalAmount = cart.reduce((acc, curr) => acc + (curr.finalPrice * curr.cartQty), 0);
-      const totalCost = cart.reduce((acc, curr) => { const cost = curr.unit === "carton" ? (curr.cartonCostPrice || (curr.costPrice * (curr.ratio || 1))) : (curr.unit === "packet" ? (curr.packetCostPrice || (curr.costPrice * (curr.packetRatio || 1))) : curr.costPrice); return acc + (cost * curr.cartQty); }, 0);
+      const totalCost = cart.reduce((acc, curr) => { 
+        const cost = curr.unit === "packet" ? (curr.packetCostPrice || curr.costPrice || 0) : (curr.cartonCostPrice || curr.costPrice || 0); 
+        return acc + (cost * curr.cartQty); 
+      }, 0);
       const totalProfit = totalAmount - totalCost;
       
       const saleData: Omit<CashvanSale, 'id'> = {
-        cashvanName: userName,
+        cashvanName: activeCashvanName,
         marketName: selectedMarket,
         items: cart.map(c => ({
-          itemId: c.itemId,
+          itemId: c.itemId || c.id,
           name: c.name,
           quantity: c.cartQty,
           price: c.finalPrice,
-          unit: c.unit,
-          ratio: c.ratio || 1,
+          unit: c.unit || 'carton',
           barcode: c.barcode || '-'
         })),
         totalAmount,
@@ -238,98 +250,184 @@ export default function CashvanSalesView() {
 
       const docRef = await addDoc(collection(db, 'cashvan_sales'), saleData);
 
-      // Deduct from cashvan_inventory
+      // Deduct from isolated cashvan_inventory
       for (const cartItem of cart) {
         const itemRef = doc(db, 'cashvan_inventory', cartItem.id);
         const itemSnap = await getDoc(itemRef);
         if (itemSnap.exists()) {
           const currentQty = itemSnap.data().quantity || 0;
-          const totalPieces = cartItem.unit === 'carton' ? cartItem.cartQty * (cartItem.ratio || 1) : (cartItem.unit === 'packet' ? cartItem.cartQty * (cartItem.packetRatio || 1) : cartItem.cartQty);
-          const newQty = currentQty - totalPieces;
+          const newQty = Math.max(0, currentQty - cartItem.cartQty);
           await updateDoc(itemRef, { quantity: newQty });
         }
       }
 
-      printReceipt(saleData, docRef.id);
       setCart([]);
-      setSelectedMarket('');
-    } catch (error) {
-      console.error(error);
-      alert('هەڵەیەک ڕوویدا');
+      printReceipt({ ...saleData, id: docRef.id }, docRef.id.slice(-6));
+      alert('فرۆشتن بە سەرکەوتوویی تۆمارکرا');
+    } catch (e: any) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا: ' + e.message);
     }
   };
 
+  // Pre-Order Handlers
+  const addPreOrderItem = (item: Item) => {
+    setPreOrderCart(prev => {
+      const existing = prev.find(p => p.item.id === item.id);
+      if (existing) {
+        return prev.map(p => p.item.id === item.id ? { ...p, quantity: p.quantity + 1 } : p);
+      }
+      const unit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
+      return [...prev, { item, quantity: 1, unit }];
+    });
+  };
 
+  const updatePreOrderQty = (itemId: string, qty: number, unit?: 'carton' | 'packet') => {
+    setPreOrderCart(prev => {
+      if (qty < 1) return prev.filter(p => p.item.id !== itemId);
+      return prev.map(p => p.item.id === itemId ? { ...p, quantity: qty, unit: unit || p.unit } : p);
+    });
+  };
 
-  const printStatement = async (entityName: string) => {
-    if (!entityName || entityName === 'نەزانراو' || entityName === '') {
-      alert('ناوی مارکێت دیاری نەکراوە بۆ چاپکردنی کەشف حیساب');
+  const handleSendPreOrder = async () => {
+    if (preOrderCart.length === 0) {
+      alert('تکایە لانیکەم یەک کاڵا بۆ تەڵەبیە دیاری بکە');
       return;
     }
-    const q = query(collection(db, 'transactions'), where('relatedEntityId', '==', entityName));
-    const snap = await getDocs(q);
-    const allTrans: Transaction[] = [];
-    snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
-    
-    allTrans.sort((a,b) => a.date - b.date);
-    
-    let totalDebt = 0;
-    let totalPaid = 0;
-    let totalCash = 0;
+    setIsProcessing(true);
+    try {
+      const reqNo = `REQ-${Date.now().toString().slice(-6)}`;
+      const reqData: Omit<CashvanRequisition, 'id'> = {
+        requisitionNo: reqNo,
+        cashvanName: activeCashvanName,
+        items: preOrderCart.map(c => ({
+          itemId: c.item.id,
+          name: c.item.name,
+          quantity: c.quantity,
+          unit: c.unit,
+          price: c.unit === 'packet' ? (c.item.packetCostPrice || c.item.costPrice || 0) : (c.item.cartonCostPrice || c.item.costPrice || 0)
+        })),
+        notes: preOrderNotes.trim(),
+        status: 'pending',
+        createdAt: Date.now()
+      };
 
-    const rowsHtml = allTrans.map(t => {
-      let typeLabel = '';
-      if (t.type.includes('debt') && !t.type.includes('paid')) { typeLabel = 'قەرز'; totalDebt += t.amount || 0; }
-      else if (t.type.includes('paid')) { typeLabel = 'واسڵکراو'; totalPaid += t.amount || 0; }
-      else { typeLabel = 'نەقد/تر'; totalCash += t.amount || 0; }
-      
-      return `<tr>
-        <td dir="ltr">${format(t.date, 'yyyy-MM-dd HH:mm')}</td>
-        <td>${typeLabel}</td>
-        <td>${t.description}</td>
-        <td dir="ltr">${(t.amount || 0).toLocaleString()}</td>
-      </tr>`;
+      await addDoc(collection(db, 'cashvan_requisitions'), reqData);
+      setPreOrderCart([]);
+      setPreOrderNotes('');
+      alert('تەڵەبیەی پێشوەختە بەسەرکەوتوویی نێردرا بۆ کۆگا. کارمەندانی کۆگا خەریکی ئامادەکردنی دەبن.');
+      setActiveTab('history');
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە ناردنی تەڵەبیە');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const printReceipt = async (sale: any, invoiceId: string) => {
+    const printWindow = window.open('', '', 'width=380,height=600');
+    if (!printWindow) return;
+
+    let oldDebt = 0;
+    try {
+      const q = query(collection(db, 'transactions'), where('type', '==', 'debt'), where('relatedEntityId', '==', sale.marketName));
+      const snapshot = await getDocs(q);
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        if (!data.date || data.date < sale.date) {
+          oldDebt += data.amount || 0;
+        }
+      });
+    } catch (e) {
+      console.error(e);
+    }
+
+    const itemsHtml = sale.items.map((item: any, idx: number) => {
+      const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const itemTotal = (item.price || 0) * (item.quantity || 0);
+      return `
+        <tr>
+          <td style="text-align: right; font-weight: bold;">${item.name}</td>
+          <td style="text-align: center;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center;" dir="ltr">${(item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold;" dir="ltr">${itemTotal.toLocaleString()}</td>
+        </tr>
+      `;
     }).join('');
-    
-    let finalBalance = totalDebt - totalPaid;
-    
+
     const html = `
-    <html dir="rtl">
-      <head>
-        <title>کەشف حیساب - ${entityName}</title>
-        <style>
-          body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
-          th { background-color: #f8f9fa; }
-          .header { text-align: center; margin-bottom: 20px; }
-          .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-          @media print { body { padding: 0; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>کەشف حیساب - ${entityName}</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
-        <table style="width: 100%">
-          <thead><tr><th>بەروار و کات</th><th>جۆر</th><th>وردەکاری</th><th>بڕی پارە</th></tr></thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-        <div class="summary">
-          <p>کۆی قەرزەکان: <span dir="ltr">${totalDebt.toLocaleString()}</span></p>
-          <p>کۆی واسڵکراو: <span dir="ltr">${totalPaid.toLocaleString()}</span></p>
-          <p>کۆی نەقد: <span dir="ltr">${totalCash.toLocaleString()}</span></p>
-          <hr style="margin: 10px 0;" />
-          <h3 style="margin: 0; font-size: 20px;">ماوەی قەرز (باڵانس): <span dir="ltr">${finalBalance.toLocaleString()}</span> د.ع</h3>
-        </div>
-        <script>window.onload = () => window.print();</script>
-      </body>
-    </html>`;
-    const win = window.open('', '_blank');
-    win?.document.write(html);
-    win?.document.close();
+      <!DOCTYPE html>
+      <html dir="rtl">
+        <head>
+          <meta charset="utf-8">
+          <title>پسوڵەی فرۆشتن #${invoiceId}</title>
+          <style>
+            @media print { @page { margin: 4mm; } body { margin: 0; font-family: monospace; font-size: 12px; } }
+            body { font-family: monospace; font-size: 12px; direction: rtl; text-align: right; padding: 10px; color: #000; }
+            .center { text-align: center; }
+            .bold { font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+            th, td { padding: 4px 2px; border-bottom: 1px dashed #999; }
+            .summary { margin-top: 10px; border-top: 2px solid #000; padding-top: 6px; }
+          </style>
+        </head>
+        <body>
+          <div class="center">
+            <h2 style="margin: 0; font-size: 16px;">کۆمپانیای RF</h2>
+            <div style="font-size: 11px; margin-top: 2px;">پسوڵەی فرۆشتنی کاشڤان</div>
+          </div>
+          <hr style="border: none; border-top: 1px dashed #000; margin: 8px 0;" />
+          <div><strong>مارکێت:</strong> ${sale.marketName}</div>
+          <div><strong>کاشڤان:</strong> ${sale.cashvanName}</div>
+          <div><strong>ژمارەی پسوڵە:</strong> #${invoiceId}</div>
+          <div><strong>بەروار:</strong> <span dir="ltr">${format(sale.date, 'yyyy/MM/dd HH:mm')}</span></div>
+          <div><strong>جۆری پارەدان:</strong> ${sale.paymentType === 'debt' ? 'قەرز' : 'نەقد'}</div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align: right;">کاڵا</th>
+                <th style="text-align: center;">بڕ</th>
+                <th style="text-align: center;">نرخ</th>
+                <th style="text-align: left;">کۆ</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+
+          <div class="summary">
+            <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: bold;">
+              <span>کۆی پسوڵە:</span>
+              <span dir="ltr">${sale.totalAmount.toLocaleString()} د.ع</span>
+            </div>
+            ${sale.paymentType === 'debt' ? `
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px;">
+                <span>قەرزی پێشوو:</span>
+                <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin-top: 4px; border-top: 1px solid #000; padding-top: 4px;">
+                <span>کۆی گشتی قەرز:</span>
+                <span dir="ltr">${(oldDebt + sale.totalAmount).toLocaleString()} د.ع</span>
+              </div>
+            ` : ''}
+          </div>
+
+          <div class="center" style="margin-top: 20px; font-size: 10px;">
+            سوپاس بۆ مامەڵەکەتان
+          </div>
+
+          <script>
+            window.onload = () => { window.print(); };
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
   };
 
   const confirmDeleteSale = async () => {
@@ -347,446 +445,485 @@ export default function CashvanSalesView() {
           const snap = await getDocs(q);
           if (!snap.empty) {
             const itemDoc = snap.docs[0];
-            const totalPieces = item.unit === 'carton' 
-              ? item.quantity * (item.ratio || 1) 
-              : (item.unit === 'packet' ? item.quantity * (item.packetRatio || 1) : item.quantity);
             await updateDoc(doc(db, 'cashvan_inventory', itemDoc.id), {
-              quantity: (itemDoc.data().quantity || 0) + totalPieces
+              quantity: (itemDoc.data().quantity || 0) + item.quantity
             });
           }
         } catch (itemErr) {
-          console.warn('Inventory restore error:', itemErr);
+          console.warn(itemErr);
         }
       }
       setDeletingSale(null);
     } catch (e: any) {
       console.error(e);
-      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە: ' + (e.message || e));
+      alert('هەڵەیەک ڕوویدا لە سڕینەوە');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const handleEditSale = async (sale: any) => {
-    try {
-      await deleteDoc(doc(db, 'cashvan_sales', sale.id));
-      for (const item of (sale.items || [])) {
-        const q = query(collection(db, 'cashvan_inventory'), where('itemId', '==', item.itemId), where('cashvanName', '==', sale.cashvanName));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const itemDoc = snap.docs[0];
-          const totalPieces = item.unit === 'carton' ? item.quantity * (item.ratio || 1) : (item.unit === 'packet' ? item.quantity * (item.packetRatio || 1) : item.quantity);
-          await updateDoc(doc(db, 'cashvan_inventory', itemDoc.id), {
-            quantity: (itemDoc.data().quantity || 0) + totalPieces
-          });
-        }
-      }
-      setSelectedMarket(sale.marketName);
-      const newCart = sale.items.map((i: any) => {
-        const invItem = inventory.find(inv => inv.itemId === i.itemId) || { id: i.itemId, itemId: i.itemId, name: i.name, quantity: 999, costPrice: 0 } as any;
-        return {
-          ...invItem,
-          cartQty: i.quantity,
-          unit: i.unit,
-          finalPrice: i.price,
-          barcode: i.barcode,
-          ratio: i.ratio,
-          packetRatio: i.packetRatio
-        };
-      });
-      setCart(newCart);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (e: any) {
-      console.error(e);
-      alert('هەڵە لە دەستکاریکردن: ' + e.message);
-    }
-  };
-  
-  const printReceipt = async (sale: any, invoiceId: string, providedWindow?: Window | null) => {
-    const printWindow = providedWindow || window.open('', '', 'width=300,height=600');
-    if (!printWindow) return;
-    
-    let oldDebt = 0;
-    try {
-      const q = query(collection(db, 'transactions'), where('type', '==', 'debt'), where('relatedEntityId', '==', sale.marketName));
-      const snapshot = await getDocs(q);
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        if (!data.date || data.date < sale.date) {
-          oldDebt += data.amount || 0;
-        }
-      });
-    } catch (e) {
-      console.error('Error fetching old debt', e);
-    }
-    
-    // Minimal style for 58/80mm thermal printers
-    const html = `
-      <html>
-        <head>
-          <title>فاتیرە</title>
-          <style>
-            @media print {
-              @page { margin: 0; }
-              body { margin: 10px; font-family: monospace; font-size: 12px; }
-            }
-            body { font-family: monospace; font-size: 12px; direction: rtl; text-align: right; }
-            .center { text-align: center; }
-            .bold { font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-            th, td { padding: 4px 0; border-bottom: 1px dashed #ccc; }
-          </style>
-        </head>
-        <body>
-          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
-            <div style="text-align: right; width: 100px;">
-              <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="width: 50px; height: 50px; object-fit: contain; margin-bottom: 5px;" onerror="this.style.display='none'" />
-              <div class="bold" style="font-size:12px;">کۆمپانیای RF</div>
-              <div style="font-size:10px;">07506144894</div>
-            </div>
-            <div style="text-align: center; flex: 1; padding-top: 10px;">
-              <h1 style="margin: 0; color: #1e293b; font-size: 28px; font-weight: 900; white-space: nowrap;">TAM TAM</h1>
-            </div>
-          </div>
-          <hr style="border:0; border-top:1px dashed #ccc; margin:5px 0;" />
-          <div class="center">کاشڤان: ${sale.cashvanName}</div>
-          <div style="margin-top:5px;">فاتیرەی ژمارە: ${invoiceId.slice(-6).toUpperCase()}</div>
-          <div>کڕیار: ${sale.marketName}</div>
-          <div>بەروار: ${format(sale.date, 'yyyy/MM/dd HH:mm')}</div>
-          
-          <table>
-            <thead>
-              <tr>
-                <th style="text-align:right">کاڵا</th>
-                <th>دانە</th>
-                <th>نرخ</th>
-                <th style="text-align:left">کۆی نرخ</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${sale.items.map((item: any) => {
-                const unitLabel = item.unit === 'carton' ? 'کار' : (item.unit === 'packet' ? 'پاک' : 'دان');
-                return `
-                <tr>
-                  <td>${item.name}</td>
-                  <td class="center">${item.quantity}/${unitLabel}</td>
-                  <td class="center">${item.price}</td>
-                  <td style="text-align:left">${item.quantity * item.price}</td>
-                </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-          
-          <div class="bold" style="margin-top:10px; text-align:left; font-size:14px;">
-            کۆی گشتی: ${sale.totalAmount.toLocaleString()} د.ع
-          </div>
-          
-          <div class="center" style="margin-top:20px; font-size:10px;">
-            سوپاس بۆ مامەڵەکردن لەگەڵمان
-          </div>
-          
-          <script>
-            window.onload = () => { window.print(); window.close(); }
-          </script>
-        </body>
-      </html>
-    `;
-    
-    printWindow.document.write(html);
-    printWindow.document.close();
-  };
+  const filteredInventory = inventory.filter(item => 
+    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (item.barcode && item.barcode.includes(searchTerm))
+  );
 
-  const filteredInv = inventory.filter(i => {
-    if (i.quantity <= 0) return false;
-    const nameMatch = i.name ? i.name.toLowerCase().includes(searchTerm.toLowerCase()) : false;
-    const barcodeMatch = i.barcode ? i.barcode.includes(searchTerm) : false;
-    return nameMatch || barcodeMatch;
-  });
+  const filteredWarehouseItems = warehouseItems.filter(item =>
+    item.name.toLowerCase().includes(preOrderSearch.toLowerCase()) ||
+    (item.barcode && item.barcode.includes(preOrderSearch))
+  );
 
   return (
-    <div className="space-y-6" onKeyDown={(e) => { if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') handleSale(); }}>
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Inventory Selection */}
-        <section className="lg:col-span-5 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-          <h2 className="text-xl font-bold text-slate-800 mb-4">کاڵاکانی ناو ئۆتۆمبێل</h2>
-          
-          <div className="mb-4 relative">
-            <Search className="absolute right-3 top-2.5 text-slate-400" size={18} />
-            <input
-              type="text"
-              placeholder="گەڕان بۆ کاڵا..."
-              className="w-full pl-3 pr-10 py-2 border border-slate-200 rounded-lg outline-none"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+    <div className="space-y-6">
+      {/* Top Banner & Van Profile Selector */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+        <div className="flex items-center gap-3">
+          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+            <Truck size={24} />
           </div>
-
-          <div className="h-[400px] overflow-y-auto space-y-2 pr-2">
-            {filteredInv.map(item => (
-              <div key={item.id} className="flex justify-between items-center p-3 hover:bg-slate-50 rounded-xl border border-slate-100 shadow-sm transition">
-                <div>
-                  <div className="font-bold text-slate-800">{item.name}</div>
-                  <div className="text-xs text-slate-500 mt-1">
-                    نرخ: {calcPrice(item, 'piece', selectedMarket).toLocaleString()} | بەردەست: <span className="font-bold text-indigo-600">{item.quantity}</span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => addToCart(item)}
-                  disabled={item.quantity <= 0}
-                  className="w-10 h-10 flex justify-center items-center bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition"
-                >
-                  <Plus size={20} />
-                </button>
-              </div>
-            ))}
-            {filteredInv.length === 0 && (
-              <div className="text-center py-10 text-slate-400">کاڵا نەدۆزرایەوە</div>
-            )}
-          </div>
-        </section>
-
-        {/* Cart & Sale */}
-        <section className="lg:col-span-7 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col h-[520px]">
-          <h2 className="text-xl font-bold text-slate-800 mb-4">فرۆشتنی نەقدی (فاتیرە)</h2>
-          
-          <div className="mb-4">
-            <label className="block text-sm text-slate-600 mb-1">کڕیار / مارکێت هەڵبژێرە</label>
-            <select
-              required
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 transition"
-              value={selectedMarket}
-              onChange={(e) => setSelectedMarket(e.target.value)}
-            >
-              <option value="" disabled>-- هەڵبژێرە --</option>
-              {displayMarkets.map(m => (
-                <option key={m.id} value={m.name}>{m.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex-1 overflow-y-auto overflow-x-auto mb-4 pr-2 border border-slate-200 rounded-lg">
-            {cart.length === 0 ? (
-              <div className="h-full flex flex-col justify-center items-center text-slate-400 space-y-2 py-10">
-                <Search size={40} className="text-slate-200" />
-                <p>هیچ کاڵایەک لە فاتیرەدا نییە</p>
-              </div>
-            ) : (
-              <table className="w-full text-right text-sm">
-                <thead className="bg-slate-100 text-slate-600 sticky top-0">
-                  <tr>
-                    <th className="p-2 border-b">ژ</th>
-                    <th className="p-2 border-b">کۆدی کاڵا</th>
-                    <th className="p-2 border-b">ناوی کاڵا</th>
-                    <th className="p-2 border-b text-center">عددی مەواد</th>
-                    <th className="p-2 border-b text-center">کۆی کارتۆن</th>
-                    <th className="p-2 border-b text-center">نرخی تاک</th>
-                    <th className="p-2 border-b text-center">نرخی کارتۆن</th>
-                    <th className="p-2 border-b text-center">کۆی گشتی</th>
-                    <th className="p-2 border-b text-center">سڕینەوە</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {cart.map((c, index) => {
-                    const barcode = c.barcode || '-';
-                    const ratio = c.ratio || 1;
-                    const totalPieces = c.unit === 'carton' ? c.cartQty * ratio : (c.unit === 'packet' ? c.cartQty * (c.packetRatio || 1) : c.cartQty);
-                    const cartonQty = (totalPieces / ratio).toFixed(2);
-                    const piecePrice = c.unit === 'carton' ? c.finalPrice / ratio : (c.unit === 'packet' ? c.finalPrice / (c.packetRatio || 1) : c.finalPrice);
-                    const cartonPrice = (piecePrice * ratio).toLocaleString();
-                    const total = (c.finalPrice * c.cartQty).toLocaleString();
-                    return (
-                      <tr key={c.id} className="hover:bg-slate-50">
-                        <td className="p-2">{index + 1}</td>
-                        <td className="p-2 font-mono text-xs" dir="ltr">{barcode}</td>
-                        <td className="p-2 font-medium text-slate-800">{c.name}</td>
-                        <td className="p-2 text-center">
-                          <div className="flex flex-col items-center gap-1">
-                            <select
-                              className="px-2 py-1 border border-slate-200 rounded outline-none text-xs bg-slate-50 w-full"
-                              value={c.unit || 'piece'}
-                              onChange={(e) => updateCartQty(c.id, c.cartQty, e.target.value as any)}
-                            >
-                              { (c.sellingPrice > 0 || c.wholesalePrice > 0 || (!c.ratio && !c.packetRatio)) && <option value="piece">دانە</option> }
-                              {c.packetRatio > 0 && <option value="packet">پاکەت</option>}
-                              {c.ratio > 0 && <option value="carton">کارتۆن</option>}
-                            </select>
-                            <div className="flex items-center gap-1 border border-slate-200 rounded px-1 bg-white">
-                              <button type="button" onClick={() => updateCartQty(c.id, c.cartQty - 1, c.unit)} className="px-1 text-lg font-bold text-slate-500 hover:text-indigo-600 focus:outline-none">-</button>
-                              <input 
-                                type="number" 
-                                min="1"
-                                className="w-12 outline-none text-center p-1"
-                                value={c.cartQty}
-                                onChange={(e) => updateCartQty(c.id, parseInt(e.target.value) || 0, c.unit)}
-                                dir="ltr"
-                              />
-                              <button type="button" onClick={() => updateCartQty(c.id, c.cartQty + 1, c.unit)} className="px-1 text-lg font-bold text-slate-500 hover:text-indigo-600 focus:outline-none">+</button>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="p-2 text-center">{cartonQty}</td>
-                        <td className="p-2 text-center">
-                          <input 
-                            type="number" 
-                            min="0"
-                            className="w-20 outline-none text-center border border-slate-200 rounded p-1 font-mono"
-                            value={c.finalPrice}
-                            onChange={(e) => updateCartPrice(c.id, parseInt(e.target.value) || 0)}
-                            dir="ltr"
-                          />
-                        </td>
-                        <td className="p-2 text-center font-mono" dir="ltr">{cartonPrice}</td>
-                        <td className="p-2 text-center font-bold text-indigo-600 font-mono" dir="ltr">{total}</td>
-                        <td className="p-2 text-center">
-                          <button
-                            type="button"
-                            onClick={() => updateCartQty(c.id, 0)}
-                            className="p-1.5 text-red-500 hover:bg-red-50 rounded transition"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-          
-          <div className="pt-4 border-t border-slate-100 mt-auto">
-            <div className="flex justify-between items-center mb-4">
-              <span className="font-medium text-slate-600">کۆی گشتی فاتیرە:</span>
-              <span className="text-xl font-bold text-indigo-600" dir="ltr">
-                {cart.reduce((a, c) => a + (c.finalPrice * c.cartQty), 0).toLocaleString()} د.ع
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-slate-800">بەشی فرۆشتن و داواکاری کاشڤان</h2>
+              <span className="bg-indigo-100 text-indigo-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
+                🚚 {activeCashvanName}
               </span>
             </div>
-            
-          <div className="flex gap-4 mb-4">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="payment" checked={paymentType === 'cash'} onChange={() => setPaymentType('cash')} />
-              <span>نەقد</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="payment" checked={paymentType === 'debt'} onChange={() => setPaymentType('debt')} />
-              <span>قەرز</span>
-            </label>
+            <p className="text-xs text-slate-500 mt-0.5">
+              مەخزەنی ناو ڤان: {inventory.reduce((a, b) => a + (b.quantity || 0), 0)} دانە لە {inventory.length} جۆر کاڵا
+            </p>
           </div>
-<button
-              onClick={handleSale}
-              disabled={cart.length === 0 || !selectedMarket}
-              className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold flex justify-center items-center gap-2 hover:bg-indigo-700 disabled:opacity-50 transition shadow-sm"
+        </div>
+
+        {/* Change / Verify Profile */}
+        <div className="flex items-center gap-2 w-full md:w-auto flex-wrap">
+          {cashvanList.length > 0 && (
+            <select
+              className="px-3 py-1.5 border border-indigo-200 bg-indigo-50/40 rounded-xl text-xs font-bold text-slate-800 outline-none"
+              value={activeCashvanName}
+              onChange={(e) => setActiveCashvanName(e.target.value)}
             >
-              <Printer size={20} />
-              چاپکردنی فاتیرە و پاشەکەوتکردن
+              {cashvanList.map(c => (
+                <option key={c.id || c.name} value={c.name}>
+                  🚚 {c.name} {c.isRep ? '(مەندووب)' : '(کاشڤان)'}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Navigation Buttons */}
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+            <button
+              onClick={() => setActiveTab('sales')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${activeTab === 'sales' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Truck size={14} />
+              فرۆشتن بە مارکێت
+            </button>
+            <button
+              onClick={() => setActiveTab('preorder')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${activeTab === 'preorder' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Send size={14} />
+              تەڵەبیە بۆ کۆگا
+            </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${activeTab === 'history' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <FileText size={14} />
+              مێژووی فرۆشتن
             </button>
           </div>
-        </section>
-      </div>
-      
-      {/* Sales History for the Cashvan */}
-      <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
-          <CheckCircle2 className="text-green-500" /> مێژووی فرۆشتنەکانی ئەمڕۆ
-        </h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-right">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-              <tr>
-                <th className="p-3">ژمارەی فاتیرە</th>
-                <th className="p-3">مارکێت</th>
-                <th className="p-3">بەروار</th>
-                <th className="p-3">بڕی پارە</th>
-                <th className="p-3">دۆخی حیسابات</th>
-                <th className="p-3">کردارەکان</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {sales.map((sale, index) => (
-                <tr key={sale.id} className="hover:bg-slate-50/50 transition">
-                  <td className="p-3 font-mono text-xs">{String(sales.length - index).padStart(6, '0')}</td>
-                  <td className="p-3 font-medium text-slate-800">{sale.marketName}</td>
-                  <td className="p-3 text-slate-500">{format(sale.date, 'HH:mm - yyyy/MM/dd')}</td>
-                  <td className="p-3 font-bold text-indigo-600" dir="ltr">{sale.totalAmount.toLocaleString()}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-1 rounded-md text-xs font-bold ${
-                      sale.status === 'accounted' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-                    }`}>
-                      {sale.status === 'accounted' ? 'چووەتە حیسابات' : 'چاوەڕێی حیسابات'}
-                    </span>
-                  </td>
-                                    <td className="p-3">
-                    <div className="flex items-center gap-2">
-                                            <button onClick={() => printReceipt(sale, String(sales.length - index).padStart(6, '0'))} className="p-1.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100" title="چاپکردنی تەنها ئەمە"><Printer size={16} /></button>
-                      <button onClick={() => printStatement(sale.marketName)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="کەشف حیساب"><FileText size={16} /></button>
-                      {sale.status !== 'accounted' && (
-                        <>
-                          <button onClick={() => handleEditSale(sale)} className="p-1.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="دەستکاری"><Edit2 size={16} /></button>
-                          <button onClick={() => setDeletingSale(sale)} className="p-1.5 bg-red-50 text-red-600 rounded hover:bg-red-100" title="سڕینەوە"><Trash2 size={16} /></button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {sales.length === 0 && (
-                <tr><td colSpan={6} className="text-center py-6 text-slate-400">هیچ فرۆشتنێک نییە</td></tr>
-              )}
-            </tbody>
-          </table>
         </div>
-      </section>
+      </div>
 
-      {/* Delete Sale Modal */}
+      {/* TAB 1: Direct Sales to Markets */}
+      {activeTab === 'sales' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Van Inventory Grid */}
+          <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2 text-sm">
+                <Truck className="text-indigo-600" size={18} />
+                کاڵاکانی بەردەست لەناو ڤانی ({activeCashvanName})
+              </h3>
+              <div className="relative w-60">
+                <input
+                  type="text"
+                  placeholder="گەڕان لەناو ڤاندا..."
+                  className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-xl outline-none text-xs"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                <Search className="absolute right-2.5 top-2 text-slate-400" size={14} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto p-1">
+              {filteredInventory.map(item => {
+                const currentUnit = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => addToCart(item)}
+                    className="p-3 border border-slate-200/80 hover:border-indigo-500 rounded-xl cursor-pointer transition bg-slate-50/50 hover:bg-indigo-50/20 flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="font-bold text-xs text-slate-800 line-clamp-1">{item.name}</div>
+                      {item.barcode && <div className="text-[10px] text-slate-400 font-mono" dir="ltr">{item.barcode}</div>}
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-slate-100 flex justify-between items-center">
+                      <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+                        {item.quantity} {currentUnit}
+                      </span>
+                      <span className="text-xs font-bold text-slate-800 font-mono" dir="ltr">
+                        {(item.sellingPrice || 0).toLocaleString()} د.ع
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {filteredInventory.length === 0 && (
+                <div className="col-span-full text-center py-16 text-slate-400 text-xs">
+                  هیچ کاڵایەک لەناو ڤاندا نەدۆزرایەوە
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Cart & Checkout */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between">
+            <div className="space-y-4">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-2">
+                <Printer className="text-indigo-600" size={18} />
+                وەسڵی فرۆشتن بۆ مارکێت
+              </h3>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">مارکێت هەڵبژێرە *</label>
+                <input
+                  type="text"
+                  list="cashvan-markets"
+                  placeholder="ناوی مارکێت بنووسە یان هەڵبژێرە..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={selectedMarket}
+                  onChange={(e) => setSelectedMarket(e.target.value)}
+                />
+                <datalist id="cashvan-markets">
+                  {markets.map(m => <option key={m.id} value={m.name} />)}
+                </datalist>
+              </div>
+
+              <div className="flex gap-4 items-center bg-slate-50 p-2 rounded-xl">
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 cursor-pointer">
+                  <input type="radio" checked={paymentType === 'cash'} onChange={() => setPaymentType('cash')} />
+                  <span>نەقد</span>
+                </label>
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 cursor-pointer">
+                  <input type="radio" checked={paymentType === 'debt'} onChange={() => setPaymentType('debt')} />
+                  <span>قەرز</span>
+                </label>
+              </div>
+
+              {/* Cart items */}
+              <div className="max-h-[220px] overflow-y-auto space-y-2">
+                {cart.map(c => (
+                  <div key={c.id} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs flex justify-between items-center">
+                    <div className="flex-1 min-w-0 pr-2">
+                      <div className="font-bold text-slate-800 truncate">{c.name}</div>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        {c.finalPrice?.toLocaleString()} د.ع × {c.cartQty} {c.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => updateCartQty(c.id, c.cartQty - 1)} className="w-6 h-6 bg-white border border-slate-300 rounded flex items-center justify-center font-bold text-slate-600">-</button>
+                      <span className="w-6 text-center font-bold font-mono">{c.cartQty}</span>
+                      <button onClick={() => updateCartQty(c.id, c.cartQty + 1)} className="w-6 h-6 bg-white border border-slate-300 rounded flex items-center justify-center font-bold text-slate-600">+</button>
+                    </div>
+                  </div>
+                ))}
+
+                {cart.length === 0 && (
+                  <div className="text-center py-8 text-slate-400 text-xs">سەبەتە بەتاڵە</div>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 space-y-3">
+              <div className="flex justify-between items-center text-sm font-bold bg-slate-50 p-2.5 rounded-xl">
+                <span>کۆی گشتی:</span>
+                <span className="text-indigo-600 font-mono" dir="ltr">
+                  {cart.reduce((sum, curr) => sum + ((curr.finalPrice || 0) * curr.cartQty), 0).toLocaleString()} د.ع
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSale}
+                disabled={cart.length === 0 || !selectedMarket}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 disabled:opacity-50 transition"
+              >
+                <Printer size={16} />
+                تەواوکردنی فرۆشتن و چاپکردن
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: Pre-Order Requisitions to Warehouse */}
+      {activeTab === 'preorder' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Warehouse Items List */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <Send className="text-indigo-600" size={18} />
+                کاڵاکانی کۆگای سەرەکی (داواکردنی پێشوەختە)
+              </h3>
+              <div className="relative w-52">
+                <input
+                  type="text"
+                  placeholder="گەڕان بۆ کاڵا..."
+                  className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-xl outline-none text-xs"
+                  value={preOrderSearch}
+                  onChange={(e) => setPreOrderSearch(e.target.value)}
+                />
+                <Search className="absolute right-2.5 top-2 text-slate-400" size={14} />
+              </div>
+            </div>
+
+            <div className="max-h-[380px] overflow-y-auto space-y-2 flex-1">
+              {filteredWarehouseItems.map(item => (
+                <div key={item.id} className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200/70 flex justify-between items-center transition">
+                  <div>
+                    <div className="font-bold text-xs text-slate-800">{item.name}</div>
+                    <div className="text-[11px] text-slate-500">
+                      لە کۆگا هەیە: <strong className="text-emerald-700">{item.quantity || 0} {item.packetSellingPrice && !item.cartonSellingPrice ? 'پاکەت' : 'کارتۆن'}</strong>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addPreOrderItem(item)}
+                    className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 rounded-lg text-xs font-bold transition flex items-center gap-1"
+                  >
+                    <Plus size={14} />
+                    داواکردن
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Pre-Order Cart */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between">
+            <div className="space-y-4">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-2">
+                <ClipboardList className="text-indigo-600" size={18} />
+                لیستی تەڵەبیەی پێشوەختە بۆ کۆگا
+              </h3>
+
+              <div className="max-h-[260px] overflow-y-auto space-y-2">
+                {preOrderCart.map(c => (
+                  <div key={c.item.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
+                    <div className="font-bold text-slate-800 flex-1 truncate pr-2">{c.item.name}</div>
+                    <div className="flex items-center gap-2">
+                      <select
+                        className="px-2 py-1 border border-slate-300 rounded-lg text-xs bg-white font-bold text-slate-700 outline-none"
+                        value={c.unit}
+                        onChange={(e) => updatePreOrderQty(c.item.id, c.quantity, e.target.value as 'carton' | 'packet')}
+                      >
+                        <option value="carton">کارتۆن</option>
+                        <option value="packet">پاکەت</option>
+                      </select>
+                      <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden">
+                        <button onClick={() => updatePreOrderQty(c.item.id, c.quantity - 1)} className="px-2 py-0.5 text-xs font-bold">-</button>
+                        <span className="w-8 text-center font-bold font-mono text-xs">{c.quantity}</span>
+                        <button onClick={() => updatePreOrderQty(c.item.id, c.quantity + 1)} className="px-2 py-0.5 text-xs font-bold">+</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {preOrderCart.length === 0 && (
+                  <div className="text-center py-12 text-slate-400 text-xs">
+                    هیچ کاڵایەک بۆ تەڵەبیەی پێشوەختە دیاری نەکراوە
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">تێبینی بۆ کۆگا (ئارەزوومەندانە)</label>
+                <textarea
+                  rows={2}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="بۆ نموونە: کاتژمێر ٢ دەگەمە کۆگا..."
+                  value={preOrderNotes}
+                  onChange={(e) => setPreOrderNotes(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleSendPreOrder}
+                disabled={preOrderCart.length === 0 || isProcessing}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition disabled:opacity-50"
+              >
+                <Send size={16} />
+                <span>{isProcessing ? 'خەریکی ناردنە...' : 'ناردنی تەڵەبیە بۆ ئامادەکردن لە کۆگا'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: Sales History & Requisitions Status */}
+      {activeTab === 'history' && (
+        <div className="space-y-6">
+          {/* Active Pre-orders sent by this Cashvan */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <h3 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+              <ClipboardList className="text-indigo-600" size={18} />
+              دۆخی تەڵەبیە پێشوەختەکانت بۆ کۆگا
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                  <tr>
+                    <th className="p-3">ژمارەی تەڵەبیە</th>
+                    <th className="p-3">بەروار و کات</th>
+                    <th className="p-3">کۆی کاڵاکان</th>
+                    <th className="p-3">دۆخی ئامادەکردن</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {myRequisitions.map(req => (
+                    <tr key={req.id}>
+                      <td className="p-3 font-mono font-bold text-indigo-700" dir="ltr">{req.requisitionNo || req.id.slice(-6)}</td>
+                      <td className="p-3 text-slate-600" dir="ltr">{format(req.createdAt, 'yyyy/MM/dd HH:mm')}</td>
+                      <td className="p-3 font-bold text-slate-700">
+                        {req.items.reduce((s, i) => s + i.quantity, 0)} {req.items[0]?.unit === 'packet' ? 'پاکەت' : 'کارتۆن'} ({req.items.length} جۆر)
+                      </td>
+                      <td className="p-3">
+                        {req.status === 'pending' && (
+                          <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full font-bold inline-flex items-center gap-1">
+                            <Clock size={12} />
+                            چاوەڕوانی ئامادەکردن لە کۆگا
+                          </span>
+                        )}
+                        {req.status === 'completed' && (
+                          <span className="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full font-bold inline-flex items-center gap-1">
+                            <CheckCircle2 size={12} />
+                            ئامادەکراوە و بارکراوە بۆ ڤانەکەت
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {myRequisitions.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="text-center py-6 text-slate-400">هیچ تەڵەبیەیەکی پێشوەختەت نەبووە</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Sales List */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <h3 className="font-bold text-slate-800 text-sm mb-3 flex items-center gap-2">
+              <FileText className="text-indigo-600" size={18} />
+              مێژووی وەسڵەکانی فرۆشتن بە مارکێتەکان
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                  <tr>
+                    <th className="p-3">ژمارەی وەسڵ</th>
+                    <th className="p-3">مارکێت</th>
+                    <th className="p-3">بەروار</th>
+                    <th className="p-3">بڕی پارە</th>
+                    <th className="p-3">جۆری پارەدان</th>
+                    <th className="p-3 text-center">کردارەکان</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {sales.map((sale, idx) => (
+                    <tr key={sale.id} className="hover:bg-slate-50 transition">
+                      <td className="p-3 font-mono font-bold" dir="ltr">#{sale.id.slice(-6)}</td>
+                      <td className="p-3 font-bold text-slate-800">{sale.marketName}</td>
+                      <td className="p-3 text-slate-600" dir="ltr">{format(sale.date, 'yyyy/MM/dd HH:mm')}</td>
+                      <td className="p-3 font-bold text-indigo-700 font-mono" dir="ltr">{sale.totalAmount.toLocaleString()} د.ع</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${sale.paymentType === 'debt' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                          {sale.paymentType === 'debt' ? 'قەرز' : 'نەقد'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => printReceipt(sale, sale.id.slice(-6))}
+                            className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg transition"
+                            title="چاپکردنی پسوڵە"
+                          >
+                            <Printer size={14} />
+                          </button>
+                          <button
+                            onClick={() => setDeletingSale(sale)}
+                            className="p-1.5 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition"
+                            title="سڕینەوە"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {sales.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-8 text-slate-400">هیچ وەسڵێکی فرۆشتن تۆمار نەکراوە</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
       {deletingSale && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-red-50">
-              <h3 className="font-bold text-red-800 text-base flex items-center gap-2">
-                <AlertTriangle className="text-red-600" size={20} />
+              <h3 className="font-bold text-red-800 text-sm flex items-center gap-2">
+                <AlertTriangle className="text-red-600" size={18} />
                 سڕینەوەی وەسڵی فرۆشتن
               </h3>
-              <button 
-                onClick={() => setDeletingSale(null)} 
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
-                disabled={isProcessing}
-              >
-                <X size={20} />
+              <button onClick={() => setDeletingSale(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
               </button>
             </div>
-            <div className="p-6 space-y-4">
-              <p className="text-slate-700 text-sm leading-relaxed">
-                ئایا دڵنیایت لە سڕینەوەی وەسڵی مارکێتی (<strong className="text-slate-900">{deletingSale.marketName}</strong>)؟ بڕی کاڵاکان دەگەڕێنەوە ناو سەیارەکەت.
+            <div className="p-5 space-y-4 text-xs">
+              <p className="text-slate-700">
+                ئایا دڵنیایت لە سڕینەوەی وەسڵی مارکێتی (<strong className="text-slate-900">{deletingSale.marketName}</strong>)؟ بڕی کاڵاکان دەگەڕێنەوە ناو ڤانەکەت.
               </p>
-
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-sm space-y-1.5">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">مارکێت:</span>
-                  <span className="font-bold text-slate-800">{deletingSale.marketName}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">بڕی پارە:</span>
-                  <span className="font-bold text-indigo-600 font-mono" dir="ltr">{deletingSale.totalAmount.toLocaleString()} د.ع</span>
-                </div>
-              </div>
-
               <div className="flex items-center gap-3 pt-2">
                 <button
                   type="button"
                   onClick={confirmDeleteSale}
                   disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                  className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition disabled:opacity-50"
                 >
-                  <Trash2 size={18} />
                   {isProcessing ? 'دەسڕێتەوە...' : 'بەڵێ، بسڕەوە'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setDeletingSale(null)}
-                  disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                  className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
                 >
                   پاشگەزبوونەوە
                 </button>

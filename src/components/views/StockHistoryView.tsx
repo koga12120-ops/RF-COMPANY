@@ -6,6 +6,7 @@ import { StockHistory } from '../../types';
 import { Package, Search, Calendar, Trash2, Edit2, Printer, FileText, X, Check } from 'lucide-react';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
+import { syncHistoryInvoice } from '../../lib/invoiceSync';
 
 export default function StockHistoryView() {
   const [history, setHistory] = useState<StockHistory[]>([]);
@@ -15,6 +16,7 @@ export default function StockHistoryView() {
   const [deletingHistory, setDeletingHistory] = useState<StockHistory | null>(null);
   const [editingHistory, setEditingHistory] = useState<StockHistory | null>(null);
   const [newQtyInput, setNewQtyInput] = useState('');
+  const [newInvoiceInput, setNewInvoiceInput] = useState('');
   const [isProcessingEdit, setIsProcessingEdit] = useState(false);
 
   useEffect(() => {
@@ -72,19 +74,42 @@ export default function StockHistoryView() {
     setIsProcessingEdit(true);
     try {
       const diff = newQty - editingHistory.quantityAdded;
-      await updateDoc(doc(db, 'stock_history', editingHistory.id), { quantityAdded: newQty });
+      const cleanNewInvoice = newInvoiceInput.trim();
 
-      // Update item total
-      const itemRef = doc(db, 'items', editingHistory.itemId);
-      const itemSnap = await getDoc(itemRef);
-      if (itemSnap.exists()) {
-        const currentQty = itemSnap.data().quantity || 0;
-        await updateDoc(itemRef, { quantity: currentQty + diff });
+      await updateDoc(doc(db, 'stock_history', editingHistory.id), { 
+        quantityAdded: newQty,
+        invoiceNo: cleanNewInvoice
+      });
+
+      // Update item total and invoice
+      if (editingHistory.itemId) {
+        const itemRef = doc(db, 'items', editingHistory.itemId);
+        const itemSnap = await getDoc(itemRef);
+        if (itemSnap.exists()) {
+          const currentQty = itemSnap.data().quantity || 0;
+          await updateDoc(itemRef, { 
+            quantity: currentQty + diff,
+            invoiceNo: cleanNewInvoice
+          });
+        }
       }
+
+      // Sync invoice across all history and transactions if changed
+      if (cleanNewInvoice !== (editingHistory.invoiceNo || '')) {
+        await syncHistoryInvoice({
+          historyId: editingHistory.id,
+          itemId: editingHistory.itemId,
+          oldInvoiceNo: editingHistory.invoiceNo || '',
+          newInvoiceNo: cleanNewInvoice,
+          itemName: editingHistory.itemName,
+          supplier: editingHistory.supplier
+        });
+      }
+
       setEditingHistory(null);
     } catch (error) {
       console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی دەستکاریکردنی بڕ');
+      alert('هەڵەیەک ڕوویدا لە کاتی دەستکاریکردنی بڕ و وەسڵ');
     } finally {
       setIsProcessingEdit(false);
     }
@@ -178,6 +203,11 @@ export default function StockHistoryView() {
               <span class="label">ناوی کاڵا:</span>
               <span>${history.itemName}</span>
             </div>
+            ${history.invoiceNo ? `
+            <div class="row">
+              <span class="label">ژمارەی سەر وەسڵ:</span>
+              <span dir="ltr">#${history.invoiceNo}</span>
+            </div>` : ''}
             <div class="row">
               <span class="label">بەروار:</span>
               <span dir="ltr">${format(history.date, 'yyyy-MM-dd HH:mm')}</span>
@@ -209,7 +239,7 @@ export default function StockHistoryView() {
   };
 
   const filteredHistory = history.filter(h => 
-    h.itemName.includes(searchTerm)
+    h.itemName.includes(searchTerm) || (h.invoiceNo && h.invoiceNo.includes(searchTerm))
   );
 
   return (
@@ -262,7 +292,14 @@ export default function StockHistoryView() {
               <tbody className="text-sm divide-y divide-slate-50">
                 {filteredHistory.map(item => (
                   <tr key={item.id} className="hover:bg-slate-50/50 transition">
-                    <td className="px-4 py-4 font-medium text-slate-900">{item.itemName}</td>
+                    <td className="px-4 py-4 font-medium text-slate-900">
+                      <div>{item.itemName}</div>
+                      {item.invoiceNo && (
+                        <span className="inline-block mt-0.5 text-[11px] font-mono bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100" dir="ltr">
+                          وەسڵ: #{item.invoiceNo}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-4 text-green-600 font-bold" dir="ltr">
                       +{item.quantityAdded.toLocaleString()}
                     </td>
@@ -277,6 +314,7 @@ export default function StockHistoryView() {
                           onClick={() => {
                             setEditingHistory(item);
                             setNewQtyInput(item.quantityAdded.toString());
+                            setNewInvoiceInput(item.invoiceNo || '');
                           }} 
                           className="p-1.5 bg-amber-50 text-amber-600 rounded-lg hover:bg-amber-100 transition" 
                           title="دەستکاری"
@@ -354,6 +392,21 @@ export default function StockHistoryView() {
                   placeholder="بڕی نوێ بنووسە"
                   autoFocus
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">ژمارەی سەر وەسڵ (Invoice No):</label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={newInvoiceInput}
+                  onChange={(e) => setNewInvoiceInput(e.target.value)}
+                  className="w-full p-3 border border-slate-300 rounded-xl font-bold font-mono text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  placeholder="وەک: 8899"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  💡 بە گۆڕینی ژمارەی وەسڵ لەم شوێنە، لە هەموو بەشە پەیوەندیدارەکان و کەشف حیساب نوێ دەبێتەوە.
+                </p>
               </div>
 
               <div className="flex items-center gap-3 pt-2">

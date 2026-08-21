@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, updateDoc, doc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
+import { collection, addDoc, doc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, Role } from '../../types';
-import { Plus, Search, Edit2, Trash2, Calculator } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Package } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
+import { updateItemAndSyncEverywhere } from '../../lib/invoiceSync';
 
 export default function InventoryView({ role }: { role: Role }) {
   const [items, setItems] = useState<Item[]>([]);
@@ -18,32 +19,29 @@ export default function InventoryView({ role }: { role: Role }) {
   const [name, setName] = useState('');
   const [barcode, setBarcode] = useState('');
   const [supplier, setSupplier] = useState('');
+  const [invoiceNo, setInvoiceNo] = useState('');
+  const [keepInvoiceInfo, setKeepInvoiceInfo] = useState(false);
 
-  const [pieceCost, setPieceCost] = useState('');
-  const [piecePrice, setPiecePrice] = useState('');
-  const [pieceWholesale, setPieceWholesale] = useState('');
-  const [pieceQuantity, setPieceQuantity] = useState('');
+  // Units selection: carton, packet, or both
+  const [hasCarton, setHasCarton] = useState(true);
+  const [hasPacket, setHasPacket] = useState(false);
 
-  const [packetRatio, setPacketRatio] = useState('');
-  const [packetCost, setPacketCost] = useState('');
-  const [packetPrice, setPacketPrice] = useState('');
-  const [packetWholesale, setPacketWholesale] = useState('');
-  const [packetQuantity, setPacketQuantity] = useState('');
-
-  const [cartonRatio, setCartonRatio] = useState('');
+  // Carton fields
+  const [cartonQuantity, setCartonQuantity] = useState('');
   const [cartonCost, setCartonCost] = useState('');
   const [cartonPrice, setCartonPrice] = useState('');
   const [cartonWholesale, setCartonWholesale] = useState('');
-  const [cartonQuantity, setCartonQuantity] = useState('');
+
+  // Packet fields
+  const [packetQuantity, setPacketQuantity] = useState('');
+  const [packetCost, setPacketCost] = useState('');
+  const [packetPrice, setPacketPrice] = useState('');
+  const [packetWholesale, setPacketWholesale] = useState('');
 
   const [companies, setCompanies] = useState<any[]>([]);
   const [filterSupplier, setFilterSupplier] = useState('');
   const [sortDate, setSortDate] = useState<'desc' | 'asc'>('desc');
   const [paymentType, setPaymentType] = useState<'cash' | 'debt'>('cash');
-  const [showPacket, setShowPacket] = useState(false);
-  const [showCarton, setShowCarton] = useState(false);
-  const [showPiece, setShowPiece] = useState(true);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     const q = query(collection(db, 'items'));
@@ -76,139 +74,156 @@ export default function InventoryView({ role }: { role: Role }) {
         handleFirestoreError(error, OperationType.GET, 'companies');
       }
     );
-    const formatStock = (item: Item) => {
-    let pieces = item.quantity || 0;
-    const cRatio = item.ratio || 0;
-    const pRatio = item.packetRatio || 0;
 
-    let cartons = 0;
-    let packets = 0;
-
-    if (cRatio > 0) {
-      cartons = Math.floor(pieces / cRatio);
-      pieces = pieces % cRatio;
-    }
-
-    if (pRatio > 0) {
-      packets = Math.floor(pieces / pRatio);
-      pieces = pieces % pRatio;
-    }
-
-    const parts = [];
-    if (cartons > 0) parts.push(`${cartons} کار`);
-    if (packets > 0) parts.push(`${packets} پاک`);
-    if (pieces > 0 || parts.length === 0) parts.push(`${pieces} دانە`);
-
-    return parts.join(' و ');
-  };
-
-  return () => { unsubscribe(); unsubComp(); };
+    return () => {
+      unsubscribe();
+      unsubComp();
+    };
   }, []);
+
+  const formatStock = (item: Item) => {
+    const parts = [];
+    const cQty = item.cartonQuantity ?? (item.ratio ? Math.floor((item.quantity || 0) / item.ratio) : (item.cartonSellingPrice || item.cartonCostPrice ? item.quantity : 0));
+    const pQty = item.packetQuantity ?? (item.packetRatio ? Math.floor((item.quantity || 0) / item.packetRatio) : (item.packetSellingPrice || item.packetCostPrice ? item.quantity : 0));
+
+    if (item.cartonQuantity !== undefined || item.packetQuantity !== undefined) {
+      if (item.cartonQuantity !== undefined && item.cartonQuantity > 0) parts.push(`${item.cartonQuantity} کارتۆن`);
+      if (item.packetQuantity !== undefined && item.packetQuantity > 0) parts.push(`${item.packetQuantity} پاکەت`);
+      if (parts.length === 0) {
+        return `${item.quantity || 0} ${item.packetSellingPrice && !item.cartonSellingPrice ? 'پاکەت' : 'کارتۆن'}`;
+      }
+    } else {
+      if (item.quantity > 0) {
+        if (item.packetSellingPrice && !item.cartonSellingPrice) {
+          parts.push(`${item.quantity} پاکەت`);
+        } else {
+          parts.push(`${item.quantity} کارتۆن`);
+        }
+      } else {
+        parts.push('0 کارتۆن');
+      }
+    }
+
+    return parts.join(' و ') || '0';
+  };
 
   const handleSubmit = async (e?: React.FormEvent | React.KeyboardEvent) => {
     if (e) e.preventDefault();
-    
-    const pRatio = Number(packetRatio) || 0;
-    const cRatio = Number(cartonRatio) || 0;
-    
-    let totalPieces = (Number(pieceQuantity) || 0) +
-                           ((Number(packetQuantity) || 0) * (pRatio || 1)) +
-                           ((Number(cartonQuantity) || 0) * (cRatio || 1));
+    if (!name.trim()) {
+      alert('تکایە ناوی کاڵا بنووسە');
+      return;
+    }
+    if (!hasCarton && !hasPacket) {
+      alert('تکایە لانیکەم یەکەیەکی کاڵاکە (کارتۆن یان پاکەت) دیاری بکە');
+      return;
+    }
+
+    const cleanInvoice = invoiceNo.trim();
+    const cQty = Number(cartonQuantity) || 0;
+    const pQty = Number(packetQuantity) || 0;
+    const totalQty = hasCarton && hasPacket ? cQty + pQty : hasCarton ? cQty : pQty;
+
+    const cCost = Number(cartonCost) || 0;
+    const cPrice = Number(cartonPrice) || 0;
+    const cWholesale = Number(cartonWholesale) || 0;
+
+    const pCost = Number(packetCost) || 0;
+    const pPrice = Number(packetPrice) || 0;
+    const pWholesale = Number(packetWholesale) || 0;
+
+    // Primary cost & selling prices
+    const primaryCost = hasCarton ? cCost : pCost;
+    const primaryPrice = hasCarton ? cPrice : pPrice;
+    const primaryWholesale = hasCarton ? cWholesale : pWholesale;
 
     const itemData: any = {
-      name,
-      barcode,
-      supplier,
+      name: name.trim(),
+      barcode: barcode.trim(),
+      supplier: supplier.trim(),
+      invoiceNo: cleanInvoice || '',
+      quantity: totalQty,
+      hasCarton,
+      hasPacket,
       
-      costPrice: Number(pieceCost) || 0,
-      sellingPrice: Number(piecePrice) || 0,
-      wholesalePrice: Number(pieceWholesale) || 0,
-      packetRatio: pRatio,
-      packetCostPrice: Number(packetCost) || 0,
-      packetSellingPrice: Number(packetPrice) || 0,
-      packetWholesalePrice: Number(packetWholesale) || 0,
-      ratio: cRatio,
-      cartonCostPrice: Number(cartonCost) || 0,
-      cartonSellingPrice: Number(cartonPrice) || 0,
-      cartonWholesalePrice: Number(cartonWholesale) || 0,
+      costPrice: primaryCost,
+      sellingPrice: primaryPrice,
+      wholesalePrice: primaryWholesale,
+
+      cartonCostPrice: hasCarton ? cCost : 0,
+      cartonSellingPrice: hasCarton ? cPrice : 0,
+      cartonWholesalePrice: hasCarton ? cWholesale : 0,
+      cartonQuantity: hasCarton ? cQty : 0,
+
+      packetCostPrice: hasPacket ? pCost : 0,
+      packetSellingPrice: hasPacket ? pPrice : 0,
+      packetWholesalePrice: hasPacket ? pWholesale : 0,
+      packetQuantity: hasPacket ? pQty : 0,
     };
 
-    let costPricePerPiece = itemData.costPrice || (pRatio ? itemData.packetCostPrice / pRatio : 0) || (cRatio ? itemData.cartonCostPrice / cRatio : 0);
-
     try {
-      if (supplier && !companies.find(c => c.name === supplier)) {
-        await addDoc(collection(db, 'companies'), { name: supplier, location: '', phone: '', type: 'warehouse', createdAt: Date.now() });
+      if (supplier && !companies.find(c => c.name === supplier.trim())) {
+        await addDoc(collection(db, 'companies'), {
+          name: supplier.trim(),
+          location: '',
+          phone: '',
+          type: 'warehouse',
+          createdAt: Date.now()
+        });
       }
-      
-      if (isEditing) {
-        const oldItem = items.find(i => i.id === editId);
-        const oldQuantity = oldItem ? (oldItem.quantity || 0) : 0;
-        const quantityAdded = totalPieces - oldQuantity;
-        
-        // سیستمە پێشکەوتووەکەی حساباتی تێچوو (Weighted Average Cost)
-        if (quantityAdded > 0 && oldQuantity > 0 && oldItem) {
-          const oldCost = oldItem.costPrice || 0;
-          const newCost = costPricePerPiece;
-          
-          if (oldCost > 0 && newCost > 0) {
-            const totalOldValue = oldQuantity * oldCost;
-            const totalNewValue = quantityAdded * newCost;
-            const avgCost = (totalOldValue + totalNewValue) / (oldQuantity + quantityAdded);
-            
-            itemData.costPrice = Number(avgCost.toFixed(2));
-            if (pRatio > 0) itemData.packetCostPrice = Number((avgCost * pRatio).toFixed(2));
-            if (cRatio > 0) itemData.cartonCostPrice = Number((avgCost * cRatio).toFixed(2));
-            
-            // Update cost for transactions
-            costPricePerPiece = itemData.costPrice; 
-          }
-        }
 
-        itemData.quantity = totalPieces; // Set absolute new stock
-        
-        await updateDoc(doc(db, 'items', editId), itemData);
-        
-        if (quantityAdded > 0) {
-          await addDoc(collection(db, 'stock_history'), {
-            itemId: editId,
-            itemName: name,
-            quantityAdded,
-            date: Date.now()
-          });
-          
-          await addDoc(collection(db, 'transactions'), {
-            type: paymentType === 'cash' ? 'company_cash' : 'company_debt',
-            amount: costPricePerPiece * quantityAdded,
-            date: Date.now(),
-            description: paymentType === 'cash' ? `نەقدی زیادکردنی کاڵای ${name}` : `قەرزی زیادکردنی کاڵای ${name}`,
-            relatedEntityId: supplier || 'نەزانراو'
-          });
-        }
+      if (isEditing) {
+        const oldItem = items.find(i => i.id === editId) || ({} as Item);
+        const oldQuantity = oldItem ? (oldItem.quantity || 0) : 0;
+        const quantityAdded = totalQty - oldQuantity;
+
+        await updateItemAndSyncEverywhere({
+          itemId: editId,
+          oldItem,
+          itemData,
+          quantityAdded,
+          paymentType,
+          costPricePerPiece: primaryCost,
+        });
       } else {
-        itemData.quantity = totalPieces;
-        const docRef = await addDoc(collection(db, 'items'), { ...itemData, createdAt: Date.now() });
-        
-        if (totalPieces > 0) {
+        await addDoc(collection(db, 'items'), {
+          ...itemData,
+          createdAt: Date.now()
+        });
+
+        if (totalQty > 0) {
           await addDoc(collection(db, 'stock_history'), {
-            itemId: docRef.id,
-            itemName: name,
-            quantityAdded: totalPieces,
-            date: Date.now()
+            itemName: name.trim(),
+            quantityAdded: totalQty,
+            unit: hasCarton ? 'carton' : 'packet',
+            date: Date.now(),
+            invoiceNo: cleanInvoice || '',
+            supplier: supplier.trim() || ''
           });
-          
+
+          const totalCostVal = hasCarton && hasPacket
+            ? (cCost * cQty) + (pCost * pQty)
+            : hasCarton
+            ? (cCost * cQty)
+            : (pCost * pQty);
+
+          const unitLabel = hasCarton && hasPacket ? 'کارتۆن و پاکەت' : hasCarton ? 'کارتۆن' : 'پاکەت';
+          const transactionDesc = paymentType === 'cash'
+            ? (cleanInvoice ? `نەقدی کڕین (وەسڵی #${cleanInvoice}) - ${name.trim()} (${totalQty} ${unitLabel})` : `نەقدی کڕینی کاڵای ${name.trim()}`)
+            : (cleanInvoice ? `قەرزی کڕین (وەسڵی #${cleanInvoice}) - ${name.trim()} (${totalQty} ${unitLabel})` : `قەرزی کڕینی کاڵای ${name.trim()}`);
+
           await addDoc(collection(db, 'transactions'), {
             type: paymentType === 'cash' ? 'company_cash' : 'company_debt',
-            amount: costPricePerPiece * totalPieces,
+            amount: totalCostVal,
             date: Date.now(),
-            description: paymentType === 'cash' ? `نەقدی کڕینی کاڵای ${name}` : `قەرزی کڕینی کاڵای ${name}`,
-            relatedEntityId: supplier || 'نەزانراو'
+            description: transactionDesc,
+            relatedEntityId: supplier.trim() || 'نەزانراو',
+            invoiceNo: cleanInvoice || ''
           });
         }
       }
-      resetForm();
       resetForm();
     } catch (error) {
-      console.error("Error saving document: ", error);
+      console.error("Error saving item: ", error);
       alert('هەڵەیەک ڕوویدا لە کاتی پاشەکەوتکردندا');
     }
   };
@@ -216,50 +231,28 @@ export default function InventoryView({ role }: { role: Role }) {
   const handleEdit = (item: Item) => {
     setIsEditing(true);
     setEditId(item.id);
-    setName(item.name);
-    setBarcode(item.barcode);
+    setName(item.name || '');
+    setBarcode(item.barcode || '');
     setSupplier(item.supplier || '');
-    
-    setPieceCost(item.costPrice?.toString() || '');
-    setPiecePrice(item.sellingPrice?.toString() || '');
-    setPieceWholesale(item.wholesalePrice?.toString() || '');
-    
-    setPacketRatio(item.packetRatio?.toString() || '');
-    setPacketCost(item.packetCostPrice?.toString() || '');
-    setPacketPrice(item.packetSellingPrice?.toString() || '');
-    setPacketWholesale(item.packetWholesalePrice?.toString() || '');
-    
-    setCartonRatio(item.ratio?.toString() || '');
-    setCartonCost(item.cartonCostPrice?.toString() || '');
-    setCartonPrice(item.cartonSellingPrice?.toString() || '');
-    setCartonWholesale(item.cartonWholesalePrice?.toString() || '');
+    setInvoiceNo(item.invoiceNo || '');
 
-    // Calculate existing quantity breakdown
-    let pieces = item.quantity || 0;
-    const cRatio = item.ratio || 0;
-    const pRatio = item.packetRatio || 0;
-    let cartons = 0;
-    let packets = 0;
-    
-    if (cRatio > 0) {
-      cartons = Math.floor(pieces / cRatio);
-      pieces = pieces % cRatio;
-    }
-    if (pRatio > 0) {
-      packets = Math.floor(pieces / pRatio);
-      pieces = pieces % pRatio;
-    }
-    
-    setPieceQuantity(pieces ? pieces.toString() : '0');
-    setPacketQuantity(packets ? packets.toString() : '0');
-    setCartonQuantity(cartons ? cartons.toString() : '0');
-    
+    const isCarton = !!item.cartonCostPrice || !!item.cartonSellingPrice || (item.cartonQuantity !== undefined && item.cartonQuantity > 0) || (!item.packetCostPrice && !item.packetSellingPrice);
+    const isPacket = !!item.packetCostPrice || !!item.packetSellingPrice || (item.packetQuantity !== undefined && item.packetQuantity > 0);
+
+    setHasCarton(isCarton);
+    setHasPacket(isPacket);
+
+    setCartonCost(item.cartonCostPrice ? item.cartonCostPrice.toString() : (item.costPrice ? item.costPrice.toString() : ''));
+    setCartonPrice(item.cartonSellingPrice ? item.cartonSellingPrice.toString() : (item.sellingPrice ? item.sellingPrice.toString() : ''));
+    setCartonWholesale(item.cartonWholesalePrice ? item.cartonWholesalePrice.toString() : (item.wholesalePrice ? item.wholesalePrice.toString() : ''));
+    setCartonQuantity(item.cartonQuantity !== undefined ? item.cartonQuantity.toString() : (item.quantity ? item.quantity.toString() : '0'));
+
+    setPacketCost(item.packetCostPrice ? item.packetCostPrice.toString() : '');
+    setPacketPrice(item.packetSellingPrice ? item.packetSellingPrice.toString() : '');
+    setPacketWholesale(item.packetWholesalePrice ? item.packetWholesalePrice.toString() : '');
+    setPacketQuantity(item.packetQuantity !== undefined ? item.packetQuantity.toString() : '0');
+
     setPaymentType('cash');
-
-    setShowPacket(!!item.packetRatio || !!item.packetCostPrice || !!item.packetSellingPrice);
-    setShowCarton(!!item.ratio || !!item.cartonCostPrice || !!item.cartonSellingPrice);
-    setShowPiece(!!item.costPrice || !!item.sellingPrice);
-
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -270,7 +263,7 @@ export default function InventoryView({ role }: { role: Role }) {
       if (editId === deletingItem.id) resetForm();
       setDeletingItem(null);
     } catch (error) {
-      console.error("Error deleting document: ", error);
+      console.error("Error deleting item: ", error);
       alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی کاڵا');
     }
   };
@@ -280,30 +273,28 @@ export default function InventoryView({ role }: { role: Role }) {
     setEditId('');
     setName('');
     setBarcode('');
-    setSupplier('');
-    setPieceCost('');
-    setPiecePrice('');
-    setPieceWholesale('');
-    setPieceQuantity('');
-    setPacketRatio('');
-    setPacketCost('');
-    setPacketPrice('');
-    setPacketWholesale('');
-    setPacketQuantity('');
-    setCartonRatio('');
+    if (!keepInvoiceInfo) {
+      setSupplier('');
+      setInvoiceNo('');
+    }
+    setHasCarton(true);
+    setHasPacket(false);
+    setCartonQuantity('');
     setCartonCost('');
     setCartonPrice('');
     setCartonWholesale('');
-    setCartonQuantity('');
+    setPacketQuantity('');
+    setPacketCost('');
+    setPacketPrice('');
+    setPacketWholesale('');
     setPaymentType('cash');
-    setShowPacket(false);
-    setShowCarton(false);
   };
 
   let filteredItems = items.filter(item => {
-    const nameMatch = item.name ? item.name.includes(searchTerm) : false;
+    const nameMatch = item.name ? item.name.toLowerCase().includes(searchTerm.toLowerCase()) : false;
     const barcodeMatch = item.barcode ? item.barcode.includes(searchTerm) : false;
-    return (nameMatch || barcodeMatch) && (filterSupplier ? item.supplier === filterSupplier : true);
+    const invoiceMatch = item.invoiceNo ? item.invoiceNo.includes(searchTerm) : false;
+    return (nameMatch || barcodeMatch || invoiceMatch) && (filterSupplier ? item.supplier === filterSupplier : true);
   });
 
   filteredItems.sort((a, b) => {
@@ -314,274 +305,275 @@ export default function InventoryView({ role }: { role: Role }) {
 
   const uniqueSuppliers = Array.from(new Set(items.map(i => i.supplier).filter(Boolean)));
 
-  const formatStock = (item: Item) => {
-    let pieces = item.quantity || 0;
-    const cRatio = item.ratio || 0;
-    const pRatio = item.packetRatio || 0;
-
-    let cartons = 0;
-    let packets = 0;
-
-    if (cRatio > 0) {
-      cartons = Math.floor(pieces / cRatio);
-      pieces = pieces % cRatio;
-    }
-
-    if (pRatio > 0) {
-      packets = Math.floor(pieces / pRatio);
-      pieces = pieces % pRatio;
-    }
-
-    const parts = [];
-    if (cartons > 0) parts.push(`${cartons} کار`);
-    if (packets > 0) parts.push(`${packets} پاک`);
-    if (pieces > 0 || parts.length === 0) parts.push(`${pieces} دانە`);
-
-    return parts.join(' و ');
-  };
-
-  const autoCalculate = () => {
-    let pCost = Number(pieceCost) || 0;
-    let pPrice = Number(piecePrice) || 0;
-    let pWholesale = Number(pieceWholesale) || 0;
-    const cRatio = Number(cartonRatio) || 0;
-    const pktRatio = Number(packetRatio) || 0;
-
-    // 1. Try to deduce piece cost/price from carton if piece is empty
-    if (pCost === 0 && showCarton && Number(cartonCost) > 0 && cRatio > 0) {
-      pCost = Number(cartonCost) / cRatio;
-      setPieceCost(pCost.toString());
-    }
-    if (pPrice === 0 && showCarton && Number(cartonPrice) > 0 && cRatio > 0) {
-      pPrice = Number(cartonPrice) / cRatio;
-      setPiecePrice(pPrice.toString());
-    }
-    if (pWholesale === 0 && showCarton && Number(cartonWholesale) > 0 && cRatio > 0) {
-      pWholesale = Number(cartonWholesale) / cRatio;
-      setPieceWholesale(pWholesale.toString());
-    }
-
-    // 2. Try to deduce piece cost/price from packet if piece is empty
-    if (pCost === 0 && showPacket && Number(packetCost) > 0 && pktRatio > 0) {
-      pCost = Number(packetCost) / pktRatio;
-      setPieceCost(pCost.toString());
-    }
-    if (pPrice === 0 && showPacket && Number(packetPrice) > 0 && pktRatio > 0) {
-      pPrice = Number(packetPrice) / pktRatio;
-      setPiecePrice(pPrice.toString());
-    }
-    if (pWholesale === 0 && showPacket && Number(packetWholesale) > 0 && pktRatio > 0) {
-      pWholesale = Number(packetWholesale) / pktRatio;
-      setPieceWholesale(pWholesale.toString());
-    }
-
-    // 3. Fill carton cost/price if empty
-    if (showCarton && cRatio > 0) {
-      if (!cartonCost && pCost > 0) setCartonCost((pCost * cRatio).toString());
-      if (!cartonPrice && pPrice > 0) setCartonPrice((pPrice * cRatio).toString());
-      if (!cartonWholesale && pWholesale > 0) setCartonWholesale((pWholesale * cRatio).toString());
-    }
-
-    // 4. Fill packet cost/price if empty
-    if (showPacket && pktRatio > 0) {
-      if (!packetCost && pCost > 0) setPacketCost((pCost * pktRatio).toString());
-      if (!packetPrice && pPrice > 0) setPacketPrice((pPrice * pktRatio).toString());
-      if (!packetWholesale && pWholesale > 0) setPacketWholesale((pWholesale * pktRatio).toString());
-    }
-  };
-
   return (
     <div className="space-y-6" onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(e); }}>
       {/* Form Section */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
         <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">
-          {isEditing ? 'دەستکاریکردنی کاڵا یان زیادکردنی بڕ' : 'داخڵکردنی کاڵای نوێ'}
+          <Package className="text-indigo-600" size={20} />
+          {isEditing ? 'دەستکاریکردنی کاڵا یان نوێکردنەوەی بڕ' : 'داخڵکردنی کاڵای نوێ بە کارتۆن و پاکەت'}
         </h3>
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
-              <label className="block text-sm text-gray-600 mb-1">ناوی کاڵا</label>
+              <label className="block text-xs font-bold text-slate-600 mb-1">ناوی کاڵا *</label>
               <input
                 type="text"
                 required
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                placeholder="ناوی کاڵاکە..."
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-600 mb-1">بارکۆد</label>
+              <label className="block text-xs font-bold text-slate-600 mb-1">بارکۆد</label>
               <input
                 type="text"
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm"
                 value={barcode}
                 onChange={(e) => setBarcode(e.target.value)}
+                placeholder="بارکۆد..."
                 dir="ltr"
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-600 mb-1">کۆمپانیا / شوێن</label>
+              <label className="block text-xs font-bold text-slate-600 mb-1">کۆمپانیا / سەرچاوە</label>
               <input
                 type="text"
                 list="companies-list"
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                 value={supplier}
                 onChange={(e) => setSupplier(e.target.value)}
+                placeholder="ناوی کۆمپانیا..."
               />
               <datalist id="companies-list">
                 {companies.map(c => <option key={c.id} value={c.name} />)}
               </datalist>
             </div>
-          </div>
-
-          <div className="flex gap-6 border-b border-slate-100 pb-4 flex-col sm:flex-row justify-between sm:items-center">
-            <div className="flex gap-6 items-center">
-              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
-                <input type="checkbox" checked={showPiece} onChange={e => setShowPiece(e.target.checked)} className="rounded text-indigo-600 w-4 h-4" />
-                <span>ئەم کاڵایە بە دانە هەیە</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
-                <input type="checkbox" checked={showPacket} onChange={e => setShowPacket(e.target.checked)} className="rounded text-indigo-600 w-4 h-4" />
-                <span>ئەم کاڵایە پاکەتی هەیە</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
-                <input type="checkbox" checked={showCarton} onChange={e => setShowCarton(e.target.checked)} className="rounded text-indigo-600 w-4 h-4" />
-                <span>ئەم کاڵایە کارتۆنی هەیە</span>
-              </label>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">ژمارەی سەر وەسڵ (دەفتەر وەسڵ)</label>
+              <input
+                type="text"
+                className="w-full px-3 py-2 border border-indigo-200 bg-indigo-50/30 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm"
+                value={invoiceNo}
+                onChange={(e) => setInvoiceNo(e.target.value)}
+                placeholder="ژمارەی وەسڵی کۆمپانیا..."
+                dir="ltr"
+              />
             </div>
-            {(showPacket || showCarton) && (
-              <button
-                type="button"
-                onClick={autoCalculate}
-                className="px-4 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-sm font-medium transition flex items-center gap-2"
-              >
-                <Calculator size={16} />
-                حیسابکردنی ئۆتۆماتیکی نرخ
-              </button>
-            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Piece Group */}
-            {showPiece && (
-              <div className="p-4 border border-indigo-100 rounded-xl bg-indigo-50/30 space-y-3 relative">
-                <button type="button" onClick={() => { setShowPiece(false); setPieceCost(''); setPiecePrice('');
-    setPieceWholesale(''); setPieceQuantity(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
-                  <Trash2 size={16} />
-                </button>
-                <h4 className="font-bold text-indigo-800">بە دانە</h4>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">بڕ (دانە)</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={pieceQuantity} onChange={(e) => setPieceQuantity(e.target.value)} dir="ltr" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">تێچوو بۆ هەر دانەیەک</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={pieceCost} onChange={(e) => setPieceCost(e.target.value)} dir="ltr" />
-                </div>
-                
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">نرخی فرۆشتن بۆ دانە</label>
-                  <input type="number" min="0" step="any" required={showPiece} className="w-full px-2 py-1.5 border rounded-md text-sm" value={piecePrice} onChange={(e) => setPiecePrice(e.target.value)} dir="ltr" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">نرخی کۆگا (کۆمەڵ)</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={pieceWholesale} onChange={(e) => setPieceWholesale(e.target.value)} dir="ltr" />
-                </div>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-xs text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-indigo-100 transition select-none">
+              <input 
+                type="checkbox" 
+                checked={keepInvoiceInfo} 
+                onChange={(e) => setKeepInvoiceInfo(e.target.checked)} 
+                className="rounded text-indigo-600 w-3.5 h-3.5" 
+              />
+              <span>هێشتنەوەی ناوی کۆمپانیا و ژمارەی وەسڵ بۆ داخڵکردنی کاڵاکانی تری ئەم وەسڵە</span>
+            </label>
+          </div>
 
+          {/* Unit selection toggles */}
+          <div className="flex items-center gap-6 border-y border-slate-100 py-3">
+            <span className="text-xs font-bold text-slate-700">جۆری یەکەکانی کاڵا:</span>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={hasCarton} 
+                onChange={e => setHasCarton(e.target.checked)} 
+                className="rounded text-indigo-600 w-4 h-4" 
+              />
+              <span>کارتۆن (Carton)</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={hasPacket} 
+                onChange={e => setHasPacket(e.target.checked)} 
+                className="rounded text-indigo-600 w-4 h-4" 
+              />
+              <span>پاکەت (Packet)</span>
+            </label>
+          </div>
+
+          {/* Unit fields grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Carton Group */}
+            {hasCarton && (
+              <div className="p-5 border border-indigo-200 rounded-2xl bg-indigo-50/20 space-y-3 relative">
+                <div className="flex justify-between items-center pb-2 border-b border-indigo-100">
+                  <h4 className="font-bold text-indigo-900 text-sm flex items-center gap-2">
+                    📦 یەکەی کارتۆن
+                  </h4>
+                  <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">کارتۆن</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">بڕ (کارتۆن)</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      required={hasCarton}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                      value={cartonQuantity} 
+                      onChange={(e) => setCartonQuantity(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">تێچوو بۆ کارتۆن</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                      value={cartonCost} 
+                      onChange={(e) => setCartonCost(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">نرخی فرۆشتن (کارتۆن)</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      required={hasCarton} 
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                      value={cartonPrice} 
+                      onChange={(e) => setCartonPrice(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">نرخی کۆگا / کۆمەڵ (کارتۆن)</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                      value={cartonWholesale} 
+                      onChange={(e) => setCartonWholesale(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
+                </div>
               </div>
             )}
 
             {/* Packet Group */}
-            {showPacket && (
-              <div className="p-4 border border-slate-100 rounded-xl bg-slate-50 space-y-3 relative">
-                <button type="button" onClick={() => { setShowPacket(false); setPacketRatio(''); setPacketQuantity(''); setPacketCost(''); setPacketPrice('');
-    setPacketWholesale(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
-                  <Trash2 size={16} />
-                </button>
-                <h4 className="font-bold text-slate-700">بە پاکەت</h4>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">ژمارەی دانە لە پاکەتێکدا</label>
-                  <input type="number" min="0" step="any" required={showPacket} className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetRatio} onChange={(e) => setPacketRatio(e.target.value)} dir="ltr" />
+            {hasPacket && (
+              <div className="p-5 border border-emerald-200 rounded-2xl bg-emerald-50/20 space-y-3 relative">
+                <div className="flex justify-between items-center pb-2 border-b border-emerald-100">
+                  <h4 className="font-bold text-emerald-900 text-sm flex items-center gap-2">
+                    🛍️ یەکەی پاکەت
+                  </h4>
+                  <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">پاکەت</span>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">بڕ (پاکەت)</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetQuantity} onChange={(e) => setPacketQuantity(e.target.value)} dir="ltr" />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">بڕ (پاکەت)</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      required={hasPacket}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none" 
+                      value={packetQuantity} 
+                      onChange={(e) => setPacketQuantity(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">تێچوو بۆ پاکەت</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none" 
+                      value={packetCost} 
+                      onChange={(e) => setPacketCost(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">نرخی فرۆشتن (پاکەت)</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      required={hasPacket} 
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none" 
+                      value={packetPrice} 
+                      onChange={(e) => setPacketPrice(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">نرخی کۆگا / کۆمەڵ (پاکەت)</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none" 
+                      value={packetWholesale} 
+                      onChange={(e) => setPacketWholesale(e.target.value)} 
+                      placeholder="0"
+                      dir="ltr" 
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">تێچوو بۆ پاکەت</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetCost} onChange={(e) => setPacketCost(e.target.value)} dir="ltr" />
-                </div>
-                
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">نرخی فرۆشتنی پاکەت</label>
-                  <input type="number" min="0" step="any" required={showPacket} className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetPrice} onChange={(e) => setPacketPrice(e.target.value)} dir="ltr" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">نرخی کۆگا (پاکەت)</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={packetWholesale} onChange={(e) => setPacketWholesale(e.target.value)} dir="ltr" />
-                </div>
-
-              </div>
-            )}
-
-            {/* Carton Group */}
-            {showCarton && (
-              <div className="p-4 border border-slate-100 rounded-xl bg-slate-50 space-y-3 relative">
-                <button type="button" onClick={() => { setShowCarton(false); setCartonRatio(''); setCartonQuantity(''); setCartonCost(''); setCartonPrice('');
-    setCartonWholesale(''); }} className="absolute top-4 left-4 text-slate-400 hover:text-red-500 transition">
-                  <Trash2 size={16} />
-                </button>
-                <h4 className="font-bold text-slate-700">بە کارتۆن</h4>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">ژمارەی دانە لە کارتۆنێکدا</label>
-                  <input type="number" min="0" step="any" required={showCarton} className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonRatio} onChange={(e) => setCartonRatio(e.target.value)} dir="ltr" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">بڕ (کارتۆن)</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonQuantity} onChange={(e) => setCartonQuantity(e.target.value)} dir="ltr" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">تێچوو بۆ کارتۆن</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonCost} onChange={(e) => setCartonCost(e.target.value)} dir="ltr" />
-                </div>
-                
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">نرخی فرۆشتنی کارتۆن</label>
-                  <input type="number" min="0" step="any" required={showCarton} className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonPrice} onChange={(e) => setCartonPrice(e.target.value)} dir="ltr" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">نرخی کۆگا (کارتۆن)</label>
-                  <input type="number" min="0" step="any" className="w-full px-2 py-1.5 border rounded-md text-sm" value={cartonWholesale} onChange={(e) => setCartonWholesale(e.target.value)} dir="ltr" />
-                </div>
-
               </div>
             )}
           </div>
 
-          <div className="flex flex-col gap-3 pt-2">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pt-3 border-t border-slate-100">
             <div className="flex gap-4 items-center">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" checked={paymentType === 'cash'} onChange={() => setPaymentType('cash')} className="text-indigo-600" />
-                <span className="text-sm font-medium text-slate-700">نەقدی کۆمپانیا</span>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input 
+                  type="radio" 
+                  checked={paymentType === 'cash'} 
+                  onChange={() => setPaymentType('cash')} 
+                  className="text-indigo-600 w-4 h-4" 
+                />
+                <span className="text-sm font-bold text-slate-700">نەقدی کۆمپانیا</span>
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" checked={paymentType === 'debt'} onChange={() => setPaymentType('debt')} className="text-indigo-600" />
-                <span className="text-sm font-medium text-slate-700">قەرزی کۆمپانیا</span>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input 
+                  type="radio" 
+                  checked={paymentType === 'debt'} 
+                  onChange={() => setPaymentType('debt')} 
+                  className="text-indigo-600 w-4 h-4" 
+                />
+                <span className="text-sm font-bold text-slate-700">قەرزی کۆمپانیا</span>
               </label>
             </div>
-            <div className="flex items-end gap-3">
+            
+            <div className="flex items-center gap-3 w-full sm:w-auto">
               <button
                 type="submit"
-                className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition flex items-center gap-2"
+                className="flex-1 sm:flex-none px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition flex items-center justify-center gap-2 shadow-sm text-sm"
               >
-                {isEditing ? <Edit2 size={18} /> : <Plus size={18} />}
-                <span>{isEditing ? 'پاشەکەوتکردنی گۆڕانکاری' : 'زیادکردنی کاڵا'}</span>
+                {isEditing ? <Edit2 size={16} /> : <Plus size={16} />}
+                <span>{isEditing ? 'پاشەکەوتکردنی گۆڕانکاری' : 'زیادکردنی کاڵا بۆ کۆگا'}</span>
               </button>
               {isEditing && (
                 <button
                   type="button"
                   onClick={resetForm}
-                  className="px-6 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition font-medium"
+                  className="px-5 py-2.5 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 transition font-bold text-sm"
                 >
                   پاشگەزبوونەوە
                 </button>
@@ -594,11 +586,14 @@ export default function InventoryView({ role }: { role: Role }) {
       {/* List Section */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
-          <h4 className="font-bold text-slate-700 flex items-center gap-2">📊 لیستی کاڵاکان لە کۆگا</h4>
+          <h4 className="font-bold text-slate-800 flex items-center gap-2 text-sm">
+            <Package className="text-indigo-600" size={18} />
+            لیستی کاڵاکان لە کۆگا ({filteredItems.length} کاڵا)
+          </h4>
 
-          <div className="flex items-center gap-3 w-full md:w-auto">
+          <div className="flex items-center gap-3 w-full md:w-auto flex-wrap">
             <select
-              className="px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              className="px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-semibold"
               value={filterSupplier}
               onChange={(e) => setFilterSupplier(e.target.value)}
             >
@@ -608,69 +603,85 @@ export default function InventoryView({ role }: { role: Role }) {
               ))}
             </select>
             <select
-              className="px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              className="px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-semibold"
               value={sortDate}
               onChange={(e) => setSortDate(e.target.value as 'desc' | 'asc')}
             >
               <option value="desc">نوێترین</option>
               <option value="asc">کۆنترین</option>
             </select>
-            <div className="relative w-full md:w-64">
+            <div className="relative w-full md:w-60">
               <input
                 type="text"
                 placeholder="گەڕان بەپێی ناو یان بارکۆد..."
-                className="w-full pr-10 pl-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                className="w-full pr-10 pl-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
-              <Search className="absolute right-3 top-2.5 text-slate-400" size={18} />
+              <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
             </div>
           </div>
-
         </div>
 
         {loading ? (
-          <div className="text-center py-10 text-slate-500">خەریکی هێنانە...</div>
+          <div className="text-center py-12 text-slate-400 text-sm">خەریکی هێنانە...</div>
         ) : (
           <div className="flex-1 overflow-x-auto">
             <table className="w-full text-right">
-              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+              <thead className="bg-slate-50 text-slate-500 text-xs font-bold border-b border-slate-100">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">ناوی کاڵا</th>
-                  <th className="px-4 py-3 font-semibold">کۆمپانیا</th>
-                  <th className="px-4 py-3 font-semibold">نرخی فرۆشتن (دانە/پاکەت/کارتۆن)</th>
-                  <th className="px-4 py-3 font-semibold">ماوە (کۆگا)</th>
-                  <th className="px-4 py-3 font-semibold">کردارەکان</th>
+                  <th className="px-4 py-3">ناوی کاڵا</th>
+                  <th className="px-4 py-3">کۆمپانیا و وەسڵ</th>
+                  <th className="px-4 py-3">نرخی فرۆشتن (کارتۆن / پاکەت)</th>
+                  <th className="px-4 py-3">ماوە لە کۆگا</th>
+                  <th className="px-4 py-3 text-center">کردارەکان</th>
                 </tr>
               </thead>
-              <tbody className="text-sm divide-y divide-slate-50">
+              <tbody className="text-sm divide-y divide-slate-100">
                 {filteredItems.map(item => (
-                  <tr key={item.id} className="hover:bg-slate-50/50 transition">
-                    <td className="px-4 py-4 font-medium text-slate-900">{item.name}</td>
-                    <td className="px-4 py-4 font-medium text-slate-600">{item.supplier || '-'}</td>
-                    <td className="px-4 py-4 text-slate-900 font-medium text-xs" dir="ltr">
+                  <tr key={item.id} className="hover:bg-slate-50/60 transition">
+                    <td className="px-4 py-3 font-bold text-slate-800">
+                      <div>{item.name}</div>
+                      {item.barcode && <div className="text-[11px] font-mono text-slate-400" dir="ltr">{item.barcode}</div>}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-600 text-xs">
+                      <div>{item.supplier || '-'}</div>
+                      {item.invoiceNo && (
+                        <span className="inline-block mt-0.5 text-[11px] font-mono bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100" dir="ltr">
+                          وەسڵ: #{item.invoiceNo}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-slate-800 font-bold text-xs" dir="ltr">
                       <div className="flex flex-col gap-1">
-                        <span>د: {item.sellingPrice?.toLocaleString() || 0}</span>
-                        {item.packetRatio > 0 && <span>پ: {item.packetSellingPrice?.toLocaleString() || 0}</span>}
-                        {item.ratio > 0 && <span>ک: {item.cartonSellingPrice?.toLocaleString() || 0}</span>}
+                        {(item.cartonSellingPrice || item.cartonCostPrice || (!item.packetSellingPrice && item.sellingPrice)) ? (
+                          <span className="text-indigo-700 font-mono">
+                            کارتۆن: {(item.cartonSellingPrice || item.sellingPrice || 0).toLocaleString()} د.ع
+                          </span>
+                        ) : null}
+                        {item.packetSellingPrice ? (
+                          <span className="text-emerald-700 font-mono">
+                            پاکەت: {(item.packetSellingPrice || 0).toLocaleString()} د.ع
+                          </span>
+                        ) : null}
                       </div>
                     </td>
-                    <td className="px-4 py-4 text-slate-900 font-medium" dir="ltr">
-                      <span className={`${item.quantity <= 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'} px-2 py-1 rounded text-xs font-bold`}>
+                    <td className="px-4 py-3 text-slate-900 font-bold" dir="ltr">
+                      <span className={`${(item.quantity || 0) <= 0 ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'} px-2.5 py-1 rounded-lg text-xs font-bold inline-block`}>
                         {formatStock(item)}
                       </span>
                     </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-2">
                         <button
                           onClick={() => handleEdit(item)}
-                          className="text-indigo-600 font-bold px-2 py-1 hover:bg-indigo-50 rounded transition"
+                          className="text-indigo-600 font-bold text-xs px-2.5 py-1 hover:bg-indigo-50 rounded-lg transition"
                         >
                           دەستکاری
                         </button>
                         <button
                           onClick={() => setDeletingItem(item)}
-                          className="text-red-600 font-bold px-2 py-1 hover:bg-red-50 rounded transition"
+                          className="text-red-600 font-bold text-xs px-2.5 py-1 hover:bg-red-50 rounded-lg transition"
                         >
                           سڕینەوە
                         </button>
@@ -680,7 +691,7 @@ export default function InventoryView({ role }: { role: Role }) {
                 ))}
                 {filteredItems.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="text-center py-8 text-slate-500">
+                    <td colSpan={5} className="text-center py-10 text-slate-400 text-sm">
                       هیچ کاڵایەک نەدۆزرایەوە
                     </td>
                   </tr>
@@ -701,7 +712,7 @@ export default function InventoryView({ role }: { role: Role }) {
         itemName={deletingItem?.name}
         details={deletingItem ? [
           { label: 'بارکۆد', value: deletingItem.barcode || '-' },
-          { label: 'بڕی ماوە لە کۆگا', value: `${deletingItem.quantity || 0} دانە` },
+          { label: 'بڕی ماوە لە کۆگا', value: formatStock(deletingItem) },
           { label: 'کۆمپانیا / سەرچاوە', value: deletingItem.supplier || '-' }
         ] : []}
       />

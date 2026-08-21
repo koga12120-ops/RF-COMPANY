@@ -3,9 +3,10 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, order
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Company, Item } from '../../types';
-import { Building2, Plus, Edit2, Trash2, History, X } from 'lucide-react';
+import { Building2, Plus, Edit2, Trash2, History, X, Check } from 'lucide-react';
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
+import { updateItemAndSyncEverywhere } from '../../lib/invoiceSync';
 
 export default function CompaniesView() {
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -21,6 +22,9 @@ export default function CompaniesView() {
 
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
   const [companyItems, setCompanyItems] = useState<Item[]>([]);
+  const [editingItemInvoice, setEditingItemInvoice] = useState<Item | null>(null);
+  const [newInvoiceVal, setNewInvoiceVal] = useState('');
+  const [isSavingInvoice, setIsSavingInvoice] = useState(false);
 
   useEffect(() => {
     if (!selectedCompany) return;
@@ -271,7 +275,22 @@ export default function CompaniesView() {
                   {companyItems.map(item => (
                     <div key={item.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between sm:items-center gap-2">
                       <div>
-                        <div className="font-bold text-slate-800">{item.name}</div>
+                        <div className="font-bold text-slate-800 flex items-center gap-2 flex-wrap">
+                          <span>{item.name}</span>
+                          <span className="inline-flex items-center gap-1 text-[11px] font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200" dir="ltr">
+                            وەسڵ: #{item.invoiceNo || 'بێ وەسڵ'}
+                            <button
+                              onClick={() => {
+                                setEditingItemInvoice(item);
+                                setNewInvoiceVal(item.invoiceNo || '');
+                              }}
+                              className="ml-1 text-indigo-600 hover:text-indigo-900 p-0.5"
+                              title="دەستکاریکردنی ژمارەی وەسڵ"
+                            >
+                              <Edit2 size={12} />
+                            </button>
+                          </span>
+                        </div>
                         <div className="text-xs text-slate-500 mt-1">
                           بەروار: {item.createdAt ? format(item.createdAt, 'yyyy/MM/dd') : 'نەزانراو'}
                         </div>
@@ -286,6 +305,83 @@ export default function CompaniesView() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Edit Invoice Modal */}
+      {editingItemInvoice && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
+              <h3 className="font-bold text-indigo-900 text-sm flex items-center gap-2">
+                <Edit2 className="text-indigo-600" size={16} />
+                دەستکاریکردنی ژمارەی وەسڵ بۆ {editingItemInvoice.name}
+              </h3>
+              <button 
+                onClick={() => setEditingItemInvoice(null)} 
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                disabled={isSavingInvoice}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1.5">ژمارەی سەر وەسڵی نوێ:</label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={newInvoiceVal}
+                  onChange={(e) => setNewInvoiceVal(e.target.value)}
+                  className="w-full p-3 border border-slate-300 rounded-xl font-bold font-mono text-base focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  placeholder="وەک: 8899"
+                  autoFocus
+                />
+                <p className="text-[11px] text-slate-500 mt-1.5">
+                  گۆڕینی ئەم وەسڵە دەبێتە هۆی نوێبوونەوەی سەرجەم مێژوو و مامەڵەکانی ئەم کاڵایە لە سیستەمدا.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!editingItemInvoice) return;
+                    setIsSavingInvoice(true);
+                    try {
+                      await updateItemAndSyncEverywhere({
+                        itemId: editingItemInvoice.id,
+                        oldItem: editingItemInvoice,
+                        itemData: { invoiceNo: newInvoiceVal.trim() },
+                        quantityAdded: 0,
+                        paymentType: 'cash',
+                        costPricePerPiece: editingItemInvoice.costPrice || 0,
+                      });
+                      setEditingItemInvoice(null);
+                    } catch (err) {
+                      console.error(err);
+                      alert('هەڵەیەک ڕوویدا');
+                    } finally {
+                      setIsSavingInvoice(false);
+                    }
+                  }}
+                  disabled={isSavingInvoice}
+                  className="flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 text-sm"
+                >
+                  <Check size={16} />
+                  {isSavingInvoice ? 'خەریکی پاشەکەوتکردن...' : 'پاشەکەوتکردن'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingItemInvoice(null)}
+                  disabled={isSavingInvoice}
+                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-sm"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
             </div>
           </div>
         </div>

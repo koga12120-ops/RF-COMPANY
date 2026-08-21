@@ -6,6 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Plus, Trash2, Printer, FileText, Calendar, Search, DollarSign, Clock, X, TrendingUp } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
+import { printStatementPopup } from '../../lib/statementPrinter';
 
 export default function CashView({ type = 'cash', targetName = 'مارکێت' }: { type?: 'cash' | 'company_cash', targetName?: string }) {
   const [cashSales, setCashSales] = useState<Transaction[]>([]);
@@ -21,6 +22,7 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
 
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
+  const [invoiceNo, setInvoiceNo] = useState('');
   const [relatedEntityId, setRelatedEntityId] = useState('');
   const [suggestions, setSuggestions] = useState<any[]>([]);
 
@@ -80,10 +82,12 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
         amount: Number(amount),
         description,
         relatedEntityId, // Name of the shop/person
+        invoiceNo: invoiceNo.trim() || undefined,
         date: Date.now()
       });
       setAmount('');
       setDescription('');
+      setInvoiceNo('');
       setRelatedEntityId('');
     } catch (error) {
       console.error(error);
@@ -133,7 +137,8 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
       const matchDate = isDateInFilter(sale.date);
       const matchSearch = !searchQuery.trim() || 
         (sale.relatedEntityId && sale.relatedEntityId.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (sale.description && sale.description.toLowerCase().includes(searchQuery.toLowerCase()));
+        (sale.description && sale.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (sale.invoiceNo && sale.invoiceNo.toLowerCase().includes(searchQuery.toLowerCase()));
       return matchDate && matchSearch;
     });
   }, [cashSales, filterPeriod, selectedDay, startDate, endDate, searchQuery]);
@@ -192,6 +197,11 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
               <span class="label">ناوی ${roleTitle}:</span>
               <span>${transaction.relatedEntityId}</span>
             </div>
+            ${transaction.invoiceNo ? `
+            <div class="row">
+              <span class="label">ژمارەی سەر وەسڵ:</span>
+              <span dir="ltr">#${transaction.invoiceNo}</span>
+            </div>` : ''}
             <div class="row">
               <span class="label">بەروار:</span>
               <span dir="ltr">${format(transaction.date, 'yyyy-MM-dd HH:mm')}</span>
@@ -231,70 +241,12 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
   };
 
   const printStatement = async (entityName: string) => {
+    if (!entityName) return;
     const q = query(collection(db, 'transactions'), where('relatedEntityId', '==', entityName));
     const snap = await getDocs(q);
     const allTrans: Transaction[] = [];
     snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
-    
-    allTrans.sort((a,b) => a.date - b.date);
-    
-    let totalDebt = 0;
-    let totalPaid = 0;
-    let totalCash = 0;
-
-    const rowsHtml = allTrans.map(t => {
-      let typeLabel = '';
-      if (t.type.includes('debt') && !t.type.includes('paid')) { typeLabel = 'قەرز'; totalDebt += t.amount || 0; }
-      else if (t.type.includes('paid')) { typeLabel = 'واسڵکراو'; totalPaid += t.amount || 0; }
-      else { typeLabel = 'نەقد'; totalCash += t.amount || 0; }
-      
-      return `<tr>
-        <td dir="ltr">${format(t.date, 'yyyy-MM-dd HH:mm')}</td>
-        <td>${typeLabel}</td>
-        <td>${t.description}</td>
-        <td dir="ltr">${(t.amount || 0).toLocaleString()}</td>
-      </tr>`;
-    }).join('');
-    
-    let finalBalance = totalDebt - totalPaid;
-    
-    const html = `
-    <html dir="rtl">
-      <head>
-        <title>کەشف حیساب - ${entityName}</title>
-        <style>
-          body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
-          th { background-color: #f8f9fa; }
-          .header { text-align: center; margin-bottom: 20px; }
-          .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-          @media print { body { padding: 0; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>کەشف حیساب - ${entityName}</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
-        <table style="width: 100%">
-          <thead><tr><th>بەروار و کات</th><th>جۆر</th><th>وردەکاری</th><th>بڕی پارە</th></tr></thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-        <div class="summary">
-          <p>کۆی قەرزەکان: <span dir="ltr">${totalDebt.toLocaleString()}</span></p>
-          <p>کۆی واسڵکراو: <span dir="ltr">${totalPaid.toLocaleString()}</span></p>
-          <p>کۆی نەقد: <span dir="ltr">${totalCash.toLocaleString()}</span></p>
-          <hr style="margin: 10px 0;" />
-          <h3 style="margin: 0; font-size: 20px;">ماوەی قەرز (باڵانس): <span dir="ltr">${finalBalance.toLocaleString()}</span> د.ع</h3>
-        </div>
-        <script>window.onload = () => window.print();</script>
-      </body>
-    </html>`;
-    const win = window.open('', '_blank');
-    win?.document.write(html);
-    win?.document.close();
+    printStatementPopup(entityName, allTrans);
   };
   return (
     <div className="space-y-6">
@@ -481,7 +433,7 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
       {/* Add Cash Form */}
       <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
         <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">تۆمارکردنی نەقد</h3>
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
           <div>
             <label className="block text-sm text-slate-600 mb-1">{`ناوی ${targetName}`}</label>
             <input
@@ -495,6 +447,17 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
             <datalist id={`suggestions-cash-${type}`}>
               {suggestions.map(s => <option key={s.id} value={s.name} />)}
             </datalist>
+          </div>
+          <div>
+            <label className="block text-sm text-slate-600 mb-1">ژمارەی وەسڵ / دەفتەر</label>
+            <input
+              type="text"
+              placeholder="دەفتەر وەسڵ..."
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono"
+              value={invoiceNo}
+              onChange={(e) => setInvoiceNo(e.target.value)}
+              dir="ltr"
+            />
           </div>
           <div className="md:col-span-2">
             <label className="block text-sm text-slate-600 mb-1">وردەکاری (بۆ نموونە: بڕی کاڵاکان)</label>
@@ -518,7 +481,7 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
               dir="ltr"
             />
           </div>
-          <div className="md:col-span-4 flex justify-end">
+          <div className="md:col-span-5 flex justify-end">
             <button
               type="submit"
               className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center gap-2 font-medium text-sm h-10"
@@ -559,7 +522,14 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
                 {filteredSales.map(sale => (
                   <tr key={sale.id} className="hover:bg-slate-50/50 transition">
                     <td className="px-4 py-4 font-medium text-slate-900">{sale.relatedEntityId}</td>
-                    <td className="px-4 py-4 text-slate-600">{sale.description}</td>
+                    <td className="px-4 py-4 text-slate-600">
+                      <div>{sale.description}</div>
+                      {sale.invoiceNo && (
+                        <span className="inline-block mt-0.5 text-[11px] font-mono bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200" dir="ltr">
+                          وەسڵ: #{sale.invoiceNo}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-4 font-bold text-green-600" dir="ltr">{sale.amount.toLocaleString()}</td>
                     <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">{format(sale.date, 'yyyy-MM-dd HH:mm')}</td>
                     <td className="px-4 py-4">

@@ -3,7 +3,7 @@ import { collection, getDocs, where, addDoc, updateDoc, doc, onSnapshot, query, 
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Order, Item, Role, Market } from '../../types';
-import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2 } from 'lucide-react';
+import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, UserCheck } from 'lucide-react';
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 
@@ -14,64 +14,6 @@ export default function OrdersView({ role }: { role: Role }) {
   const [reps, setReps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
-  
-  // Schedule states for Reps
-  const [repSchedule, setRepSchedule] = useState<Record<string, string[]>>({});
-  const [repVisits, setRepVisits] = useState<Record<string, boolean>>({});
-
-  // Auto-fill rep name
-  useEffect(() => {
-    let unsubSched = () => {};
-    let unsubVisits = () => {};
-    
-
-    const fetchUser = async () => {
-      if (auth.currentUser && role === 'sales_rep') {
-        const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-        if (userDoc.exists()) {
-          setRepName(userDoc.data().name);
-        }
-        
-        // Listen to schedule
-        unsubSched = onSnapshot(
-          doc(db, 'schedules', auth.currentUser.uid),
-          (docSnap) => {
-            if (docSnap.exists()) {
-              setRepSchedule(docSnap.data().schedule || {});
-            }
-          },
-          (error) => {
-            handleFirestoreError(error, OperationType.GET, 'schedules');
-          }
-        );
-        
-        // Listen to visits for the week
-        const d = new Date();
-        d.setHours(0, 0, 0, 0);
-        const day = d.getDay();
-        const diff = day === 6 ? 0 : day + 1;
-        d.setDate(d.getDate() - diff);
-        const weekId = `week_${d.toISOString().split('T')[0]}`;
-        
-        const qVisits = query(collection(db, 'schedule_visits'), 
-          where('repId', '==', auth.currentUser.uid),
-          where('weekId', '==', weekId)
-        );
-        unsubVisits = onSnapshot(
-          qVisits,
-          (snap) => {
-            const visitedMap: Record<string, boolean> = {};
-            snap.forEach(d => { visitedMap[d.data().marketId] = true; });
-            setRepVisits(visitedMap);
-          },
-          (error) => {
-            handleFirestoreError(error, OperationType.GET, 'schedule_visits');
-          }
-        );
-      }
-    };
-    fetchUser();
-  }, [role]);
 
   // New Order State
   const [showNewOrder, setShowNewOrder] = useState(false);
@@ -79,17 +21,26 @@ export default function OrdersView({ role }: { role: Role }) {
   const [repName, setRepName] = useState('');
   const [marketName, setMarketName] = useState('');
   const [location, setLocation] = useState('');
-  const [selectedItems, setSelectedItems] = useState<{item: Item, quantity: number, unit: 'piece'|'carton'}[]>([]);
+  const [selectedItems, setSelectedItems] = useState<{ item: Item; quantity: number; unit: 'carton' | 'packet' }[]>([]);
   
-  // Selection
+  // Search & Filters
   const [searchTerm, setSearchTerm] = useState('');
-
-  // Settlement
   const [settlingOrder, setSettlingOrder] = useState<Order | null>(null);
 
+  // Auto-fill rep name for sales_rep and sync live with database
   useEffect(() => {
-    let unsubSched = () => {};
-    let unsubVisits = () => {};
+    if (!auth.currentUser || role !== 'sales_rep') return;
+    const unsubUser = onSnapshot(doc(db, 'users', auth.currentUser.uid), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().name) {
+        setRepName(docSnap.data().name);
+      } else if (auth.currentUser?.displayName) {
+        setRepName(auth.currentUser.displayName);
+      }
+    });
+    return () => unsubUser();
+  }, [role]);
+
+  useEffect(() => {
     const qOrders = query(collection(db, 'orders'), orderBy('timestamp', 'desc'));
     const unsubOrders = onSnapshot(
       qOrders,
@@ -142,10 +93,29 @@ export default function OrdersView({ role }: { role: Role }) {
       (snapshot) => {
         const repsData: any[] = [];
         snapshot.forEach(doc => repsData.push({ id: doc.id, ...doc.data() }));
-        setReps(repsData);
+        setReps(prev => {
+          const cvs = prev.filter(p => p.isCashvan);
+          return [...cvs, ...repsData];
+        });
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, 'reps');
+      }
+    );
+
+    const qCVs = query(collection(db, 'cashvans'));
+    const unsubCVs = onSnapshot(
+      qCVs,
+      (snapshot) => {
+        const cvData: any[] = [];
+        snapshot.forEach(doc => cvData.push({ id: doc.id, ...doc.data(), isCashvan: true }));
+        setReps(prev => {
+          const directReps = prev.filter(p => !p.isCashvan);
+          return [...directReps, ...cvData];
+        });
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvans');
       }
     );
 
@@ -154,76 +124,27 @@ export default function OrdersView({ role }: { role: Role }) {
       unsubItems();
       unsubMarkets();
       unsubReps();
-      if (unsubSched) unsubSched();
-      if (unsubVisits) unsubVisits();
+      unsubCVs();
     };
   }, []);
 
-  const handleMarketChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setMarketName(val);
-    const existingMarket = markets.find(m => m.name === val);
-    if (existingMarket) {
-      setLocation(existingMarket.location);
-    }
-  };
-
-  const calcPrice = (item: Item, unit: string) => {
+  const calcPrice = (item: Item, unit: 'carton' | 'packet') => {
     if (!item) return 0;
     const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
     if (isWholesale) {
-      if (unit === 'carton') return item.cartonWholesalePrice || item.cartonSellingPrice || (((item.wholesalePrice || item.sellingPrice || 0)) * (item.ratio || 1));
-      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || (((item.wholesalePrice || item.sellingPrice || 0)) * (item.packetRatio || 1));
-      return item.wholesalePrice || item.sellingPrice || 0;
+      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
+      return item.cartonWholesalePrice || item.cartonSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
     } else {
-            if (unit === 'carton') return item.cartonSellingPrice || item.cartonWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.ratio || 1));
-      if (unit === 'packet') return item.packetSellingPrice || item.packetWholesalePrice || ((item.sellingPrice || item.wholesalePrice || 0) * (item.packetRatio || 1));
-      return item.sellingPrice || item.wholesalePrice || 0;
+      if (unit === 'packet') return item.packetSellingPrice || item.sellingPrice || 0;
+      return item.cartonSellingPrice || item.sellingPrice || 0;
     }
-  };
-
-
-  // Filter markets for reps based on schedule
-  const currentDayStr = new Date().getDay().toString();
-  const WEEK_DAYS = ['6', '0', '1', '2', '3', '4'];
-  const todayIndex = WEEK_DAYS.indexOf(currentDayStr);
-  
-  let displayMarkets = markets;
-  if (role === 'sales_rep') {
-    const activeDays = todayIndex === -1 ? WEEK_DAYS : WEEK_DAYS.slice(0, todayIndex + 1);
-    const validMarketIds = new Set<string>();
-
-    activeDays.forEach(day => {
-      const dayMarkets = repSchedule[day] || [];
-      dayMarkets.forEach(mId => {
-        if (day === currentDayStr || !repVisits[mId]) {
-          validMarketIds.add(mId);
-        }
-      });
-    });
-
-    displayMarkets = markets.filter(m => validMarketIds.has(m.id));
-  }
-
-  const getPiecesByUnit = (item: Item, unit: string, qty: number) => {
-    if (unit === 'carton') return qty * (item.ratio || 1);
-    if (unit === 'packet') return qty * (item.packetRatio || 1);
-    return qty;
-  };
-
-  const getDefaultUnit = (item: Item) => {
-    if (item.sellingPrice > 0 || item.wholesalePrice > 0 || (!item.ratio && !item.packetRatio)) return 'piece';
-    if (item.packetRatio > 0 && (item.packetSellingPrice > 0 || item.packetWholesalePrice > 0)) return 'packet';
-    if (item.ratio > 0 && (item.cartonSellingPrice > 0 || item.cartonWholesalePrice > 0)) return 'carton';
-    return 'piece';
   };
 
   const handleAddItemToOrder = (item: Item) => {
     const exists = selectedItems.find(si => si.item.id === item.id);
     if (exists) {
       const newQty = exists.quantity + 1;
-      const totalPieces = getPiecesByUnit(exists.item, exists.unit || 'piece', newQty);
-      if (totalPieces > exists.item.quantity) {
+      if (newQty > (exists.item.quantity || 0)) {
         alert('بڕی داواکراو لە کۆگا بەردەست نییە');
         return;
       }
@@ -231,33 +152,31 @@ export default function OrdersView({ role }: { role: Role }) {
         si.item.id === item.id ? { ...si, quantity: newQty } : si
       ));
     } else {
-      if (item.quantity < 1) {
+      if ((item.quantity || 0) < 1) {
         alert('بڕی داواکراو لە کۆگا بەردەست نییە');
         return;
       }
-      const unit = getDefaultUnit(item);
+      const unit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
       setSelectedItems([...selectedItems, { item, quantity: 1, unit }]);
     }
   };
 
-  const handleUpdateItemQuantity = (id: string, qty: number, unit?: string) => {
+  const handleUpdateItemQuantity = (id: string, qty: number, unit?: 'carton' | 'packet') => {
     if (qty <= 0) {
       setSelectedItems(selectedItems.filter(si => si.item.id !== id));
       return;
     }
     
-    const item = selectedItems.find(si => si.item.id === id);
-    if (item) {
-      const selectedUnit = unit || item.unit || 'piece';
-      const totalPieces = getPiecesByUnit(item.item, selectedUnit, qty);
-      if (totalPieces > item.item.quantity) {
-        alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${item.item.quantity} دانە ماوە.`);
+    const itemObj = selectedItems.find(si => si.item.id === id);
+    if (itemObj) {
+      if (qty > (itemObj.item.quantity || 0)) {
+        alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${itemObj.item.quantity} بەردەستە.`);
         return;
       }
     }
 
     setSelectedItems(selectedItems.map(si => 
-      si.item.id === id ? { ...si, quantity: qty, unit: (unit || si.unit) as any } : si
+      si.item.id === id ? { ...si, quantity: qty, unit: unit || si.unit } : si
     ));
   };
 
@@ -270,6 +189,14 @@ export default function OrdersView({ role }: { role: Role }) {
 
   const submitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!repName.trim()) {
+      alert('تکایە ناوی مەندووب دیاری بکە');
+      return;
+    }
+    if (!marketName.trim()) {
+      alert('تکایە ناوی مارکێت دیاری بکە');
+      return;
+    }
     if (selectedItems.length === 0) {
       alert('هیچ کاڵایەک هەڵنەبژێردراوە');
       return;
@@ -281,7 +208,9 @@ export default function OrdersView({ role }: { role: Role }) {
     }, 0);
 
     const totalCost = selectedItems.reduce((acc, curr) => {
-      const cost = curr.unit === 'carton' ? (curr.item.cartonCostPrice || (curr.item.costPrice * (curr.item.ratio || 1))) : (curr.unit === 'packet' ? (curr.item.packetCostPrice || (curr.item.costPrice * (curr.item.packetRatio || 1))) : curr.item.costPrice);
+      const cost = curr.unit === 'packet'
+        ? (curr.item.packetCostPrice || curr.item.costPrice || 0)
+        : (curr.item.cartonCostPrice || curr.item.costPrice || 0);
       return acc + (cost * curr.quantity);
     }, 0);
 
@@ -296,18 +225,30 @@ export default function OrdersView({ role }: { role: Role }) {
     }));
 
     try {
-      if (repName && !reps.find(r => r.name === repName)) {
-        await addDoc(collection(db, 'reps'), { name: repName, phone: '', totalSales: 0, totalProfit: 0, createdAt: Date.now() });
+      if (repName && !reps.find(r => r.name === repName.trim())) {
+        await addDoc(collection(db, 'reps'), { 
+          name: repName.trim(), 
+          phone: '', 
+          totalSales: 0, 
+          totalProfit: 0, 
+          createdAt: Date.now() 
+        });
       }
-      if (marketName && !markets.find(m => m.name === marketName)) {
-        await addDoc(collection(db, 'markets'), { name: marketName, phone: '', location: location || '', type: 'market', createdAt: Date.now() });
+      if (marketName && !markets.find(m => m.name === marketName.trim())) {
+        await addDoc(collection(db, 'markets'), { 
+          name: marketName.trim(), 
+          phone: '', 
+          location: location.trim() || '', 
+          type: 'market', 
+          createdAt: Date.now() 
+        });
       }
 
       if (editingOrderId) {
         await updateDoc(doc(db, 'orders', editingOrderId), {
-          repName,
-          marketName,
-          location,
+          repName: repName.trim(),
+          marketName: marketName.trim(),
+          location: location.trim(),
           totalAmount,
           totalProfit,
           items: orderItems,
@@ -317,9 +258,9 @@ export default function OrdersView({ role }: { role: Role }) {
         setEditingOrderId(null);
       } else {
         await addDoc(collection(db, 'orders'), {
-          repName,
-          marketName,
-          location,
+          repName: repName.trim(),
+          marketName: marketName.trim(),
+          location: location.trim(),
           totalAmount,
           totalProfit,
           items: orderItems,
@@ -329,14 +270,14 @@ export default function OrdersView({ role }: { role: Role }) {
       }
       
       setShowNewOrder(false);
-      setRepName('');
+      if (role !== 'sales_rep') setRepName('');
       setMarketName('');
       setLocation('');
       setSelectedItems([]);
-      
+      alert('داواکارییەکە بە سەرکەوتوویی تۆمارکرا');
     } catch (error) {
       console.error(error);
-      alert('هەڵەیەک ڕوویدا');
+      alert('هەڵەیەک ڕوویدا لە تۆمارکردنی داواکاری');
     }
   };
 
@@ -348,10 +289,8 @@ export default function OrdersView({ role }: { role: Role }) {
           const itemSnap = await getDoc(itemRef);
           if (itemSnap.exists()) {
             const data = itemSnap.data();
-            const ratio = data.ratio || 1;
-            const packetRatio = data.packetRatio || 1;
-            const totalPieces = item.unit === 'carton' ? item.quantity * ratio : (item.unit === 'packet' ? item.quantity * packetRatio : item.quantity);
-            const newQty = (data.quantity || 0) - totalPieces;
+            const currentQty = data.quantity || 0;
+            const newQty = Math.max(0, currentQty - item.quantity);
             await updateDoc(itemRef, { quantity: newQty });
           }
         }
@@ -365,7 +304,6 @@ export default function OrdersView({ role }: { role: Role }) {
   const settleOrder = async (type: 'cash' | 'debt') => {
     if (!settlingOrder) return;
     try {
-      // 1. Create a transaction
       await addDoc(collection(db, 'transactions'), {
         type,
         amount: settlingOrder.totalAmount,
@@ -373,13 +311,15 @@ export default function OrdersView({ role }: { role: Role }) {
         description: type === 'cash' ? `نەقدی ئۆردەری مارکێتی ${settlingOrder.marketName}` : `قەرزی ئۆردەری مارکێتی ${settlingOrder.marketName}`,
         relatedEntityId: settlingOrder.marketName
       });
-      // 2. Mark order as accounted
-      if (settlingOrder.status !== 'completed') { await updateOrderStatus(settlingOrder, 'completed'); } await updateDoc(doc(db, 'orders', settlingOrder.id), { 
+
+      if (settlingOrder.status !== 'completed') {
+        await updateOrderStatus(settlingOrder, 'completed');
+      }
+      await updateDoc(doc(db, 'orders', settlingOrder.id), { 
         status: 'completed',
         paymentStatus: type
       });
       
-      // 3. Update Rep stats
       const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', settlingOrder.repName)));
       if (!repSnap.empty) {
         const repDoc = repSnap.docs[0];
@@ -390,6 +330,7 @@ export default function OrdersView({ role }: { role: Role }) {
       }
 
       setSettlingOrder(null);
+      alert('حیساباتی ئۆردەر بە سەرکەوتوویی تۆمارکرا');
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە کاتی تۆمارکردنی حیسابات');
@@ -400,25 +341,21 @@ export default function OrdersView({ role }: { role: Role }) {
     setRepName(order.repName);
     setMarketName(order.marketName);
     setLocation(order.location);
-    // order.items might not have the full 'item' object, just itemId
-    // we need to match it with the inventory items
     const mappedItems = (order.items || []).map(oi => {
       const fullItem = items.find(i => i.id === oi.itemId) || {
         id: oi.itemId,
         name: oi.name,
-        quantity: 9999, // dummy so it doesn't fail
+        quantity: 9999,
         costPrice: 0,
         sellingPrice: oi.price,
         wholesalePrice: 0,
-        barcode: '',
-        ratio: 1,
-        packetRatio: 1
+        barcode: ''
       } as unknown as Item;
       
       return {
         item: fullItem,
         quantity: oi.quantity,
-        unit: oi.unit || 'piece'
+        unit: (oi.unit === 'packet' ? 'packet' : 'carton') as 'carton' | 'packet'
       };
     });
     setSelectedItems(mappedItems);
@@ -498,10 +435,8 @@ export default function OrdersView({ role }: { role: Role }) {
               <th style="padding: 8px; border: 1px solid #ccc;">ژ</th>
               <th style="padding: 8px; border: 1px solid #ccc;">کۆدی کاڵا</th>
               <th style="padding: 8px; border: 1px solid #ccc;">ناوی کاڵا</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">عددی مەواد</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">کۆی بڕی کارتۆن</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">نرخی تاک</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">نرخی کارتۆن</th>
+              <th style="padding: 8px; border: 1px solid #ccc;">بڕ و یەکە</th>
+              <th style="padding: 8px; border: 1px solid #ccc;">نرخ</th>
               <th style="padding: 8px; border: 1px solid #ccc;">کۆی گشتی</th>
             </tr>
           </thead>
@@ -509,53 +444,41 @@ export default function OrdersView({ role }: { role: Role }) {
             ${(order.items || []).map((item, index) => {
               const globalItem = items.find(i => i.id === item.itemId);
               const barcode = globalItem?.barcode || '-';
-              const ratio = globalItem?.ratio || 1;
-              const packetRatio = globalItem?.packetRatio || 1;
-              const totalPieces = item.unit === 'carton' ? item.quantity * ratio : (item.unit === 'packet' ? item.quantity * packetRatio : item.quantity);
-              const cartonQty = (totalPieces / ratio).toFixed(2);
-              const piecePrice = item.unit === 'carton' ? item.price / ratio : (item.unit === 'packet' ? item.price / packetRatio : item.price);
-              const cartonPrice = (piecePrice * ratio).toLocaleString();
-              const unitLabel = item.unit === 'carton' ? 'کار' : (item.unit === 'packet' ? 'پاک' : 'دان');
+              const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
               return `
                 <tr>
                   <td style="padding: 8px; border: 1px solid #ccc;">${index + 1}</td>
                   <td style="padding: 8px; border: 1px solid #ccc; font-family: monospace;">${barcode}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc; text-align: right;">${item.name}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc;">${item.quantity}/${unitLabel}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc;">${cartonQty}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc;">${item.price.toLocaleString()}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc;">${cartonPrice}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc; font-weight: bold;">${(item.price * item.quantity).toLocaleString()}</td>
+                  <td style="padding: 8px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${item.name}</td>
+                  <td style="padding: 8px; border: 1px solid #ccc;">${item.quantity} ${unitLabel}</td>
+                  <td style="padding: 8px; border: 1px solid #ccc;" dir="ltr">${item.price.toLocaleString()} د.ع</td>
+                  <td style="padding: 8px; border: 1px solid #ccc; font-weight: bold;" dir="ltr">${(item.price * item.quantity).toLocaleString()} د.ع</td>
                 </tr>
               `;
             }).join('')}
           </tbody>
           <tfoot>
             <tr>
-              <th colspan="7" style="padding: 10px; border: 1px solid #ccc; text-align: left; font-size: 16px;">کۆی گشتی:</th>
-              <th style="padding: 10px; border: 1px solid #ccc; font-size: 16px; color: #4338ca;">${order.totalAmount.toLocaleString()} د.ع</th>
+              <th colspan="5" style="padding: 10px; border: 1px solid #ccc; text-align: left; font-size: 16px;">کۆی گشتی:</th>
+              <th style="padding: 10px; border: 1px solid #ccc; font-size: 16px; color: #4338ca;" dir="ltr">${order.totalAmount.toLocaleString()} د.ع</th>
             </tr>
           </tfoot>
         </table>
       </div>
     `;
 
-    if (printWindow) {
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>Print Order</title>
-          </head>
-          <body onload="window.print();window.close()">
-            ${printContent}
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      
-      // Mark as printed automatically
-      updateOrderStatus(order, 'printed');
-    }
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Print Order</title>
+        </head>
+        <body onload="window.print();window.close()">
+          ${printContent}
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    updateOrderStatus(order, 'printed');
   };
 
   const filteredItems = items.filter(item => {
@@ -566,64 +489,99 @@ export default function OrdersView({ role }: { role: Role }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-        <h2 className="text-xl font-bold text-slate-800">{role === 'admin' ? 'تەسفییەکردن' : role === 'cashvan' ? 'کاشڤان نەقدە' : 'بەشی ئۆردەرەکان'}</h2>
-        {(role === 'sales_rep' || role === 'admin' || role === 'cashvan') && (
-          <button
-            onClick={() => setShowNewOrder(!showNewOrder)}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center gap-2 font-medium text-sm"
-          >
-            <Plus size={18} />
-            <span>ئۆردەری نوێ</span>
-          </button>
-        )}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+        <div>
+          <h2 className="text-xl font-bold text-slate-800">
+            {role === 'admin' ? 'تەسفییەکردن و ئۆردەرەکان' : role === 'cashvan' ? 'کاشڤان و ئۆردەرەکان' : 'بەشی داواکاری و ئۆردەرەکان'}
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {role === 'warehouse' ? 'کارمەندی کۆگا دەتوانێت بە ناوی هەر مەندووبێکەوە تەڵەبیە تۆمار بکات' : 'تۆمارکردن و بەڕێوەبردنی تەڵەبیەی مارکێتەکان'}
+          </p>
+        </div>
+
+        <button
+          onClick={() => setShowNewOrder(!showNewOrder)}
+          className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition flex items-center gap-2 font-bold text-xs shadow-sm"
+        >
+          <Plus size={16} />
+          <span>{showNewOrder ? 'داخستنی فۆڕم' : 'تۆمارکردنی ئۆردەری نوێ'}</span>
+        </button>
       </div>
 
-      {showNewOrder && (role === 'sales_rep' || role === 'admin' || role === 'cashvan') && (
+      {showNewOrder && (
         <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6">
-          <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3">فۆڕمی داواکاری نوێ</h3>
-          <form onSubmit={submitOrder} className="space-y-6">
+          <h3 className="text-base font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">
+            <ShoppingCart className="text-indigo-600" size={18} />
+            {editingOrderId ? 'دەستکاریکردنی داواکاری' : 'فۆڕمی تۆمارکردنی داواکاری نوێ'}
+          </h3>
+          
+          <form onSubmit={submitOrder} className="space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Rep selector: Editable/Selectable for Warehouse & Admin */}
               <div>
-                <label className="block text-sm text-slate-600 mb-1">{role === 'cashvan' ? 'ناوی کاشڤان' : 'ناوی مەندووب'}</label>
+                <label className="block text-xs font-bold text-slate-600 mb-1 flex items-center gap-1">
+                  <User size={14} className="text-indigo-600" />
+                  ناوی مەندووب * {role === 'warehouse' && <span className="text-[10px] text-indigo-600">(هەڵبژاردنی مەندووب لە سیستەم)</span>}
+                </label>
+                {role === 'sales_rep' ? (
+                  <input
+                    type="text"
+                    required
+                    readOnly
+                    className="w-full px-3 py-2 border border-slate-200 bg-slate-100 text-slate-600 rounded-xl outline-none text-xs font-bold"
+                    value={repName}
+                  />
+                ) : (
+                  <div>
+                    <input
+                      type="text"
+                      list="reps-list"
+                      required
+                      placeholder="ناوی مەندووب بنووسە یان هەڵبژێرە..."
+                      className="w-full px-3 py-2 border border-indigo-300 bg-indigo-50/20 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-bold text-slate-800"
+                      value={repName}
+                      onChange={(e) => setRepName(e.target.value)}
+                    />
+                    <datalist id="reps-list">
+                      {reps.map(r => (
+                        <option key={r.id || r.name} value={r.name}>
+                          {r.name} {r.isCashvan ? '(کاشڤان)' : '(مەندووب)'}
+                        </option>
+                      ))}
+                    </datalist>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">ناوی مارکێت / شوێن *</label>
                 <input
                   type="text"
+                  list="order-markets"
                   required
-                  readOnly={role === 'sales_rep' || role === 'cashvan'}
-                  className={`w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm ${role === 'sales_rep' || role === 'cashvan' ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
-                  value={repName}
-                  onChange={(e) => setRepName(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-slate-600 mb-1">ناوی مارکێت / شوێن</label>
-                <select
-                  required
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  placeholder="ناوی مارکێت بنووسە یان هەڵبژێرە..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
                   value={marketName}
                   onChange={(e) => {
                     const val = e.target.value;
                     setMarketName(val);
-                    const existingMarket = displayMarkets.find(m => m.name === val);
-                    if (existingMarket) {
-                      setLocation(existingMarket.location);
-                    }
+                    const existing = markets.find(m => m.name === val);
+                    if (existing) setLocation(existing.location);
                   }}
-                >
-                  <option value="" disabled>-- هەڵبژێرە --</option>
-                  {displayMarkets.map(m => (
-                    <option key={m.id} value={m.name}>{m.name}</option>
-                  ))}
-                </select>
+                />
+                <datalist id="order-markets">
+                  {markets.map(m => <option key={m.id} value={m.name} />)}
+                </datalist>
               </div>
+
               <div>
-                <label className="block text-sm text-slate-600 mb-1">ناونیشان / گەڕەک</label>
+                <label className="block text-xs font-bold text-slate-600 mb-1">ناونیشان / گەڕەک</label>
                 <input
                   type="text"
-                  required
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
+                  placeholder="ناونیشان..."
                 />
               </div>
             </div>
@@ -631,30 +589,33 @@ export default function OrdersView({ role }: { role: Role }) {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Items Selection */}
               <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50">
-                <div className="mb-4 relative">
+                <div className="mb-3 relative">
                   <input
                     type="text"
-                    placeholder="گەڕان بەدوای کاڵا..."
-                    className="w-full pr-10 pl-4 py-2 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                    placeholder="گەڕان بۆ کاڵا لە کۆگا..."
+                    className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
-                  <Search className="absolute right-3 top-2.5 text-slate-400" size={18} />
+                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
                 </div>
-                <div className="h-64 overflow-y-auto space-y-2 pr-2">
+                <div className="h-64 overflow-y-auto space-y-2 pr-1">
                   {filteredItems.map(item => (
-                    <div key={item.id} className="flex justify-between items-center p-3 bg-white rounded-xl border border-slate-200 shadow-sm">
+                    <div key={item.id} className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-200/80 shadow-xs">
                       <div>
-                        <div className="font-semibold text-slate-800 text-sm">{item.name}</div>
-                        <div className="text-xs text-slate-500 mt-0.5">بەردەستە: <span dir="ltr">{item.quantity}</span> | نرخ: <span dir="ltr">{calcPrice(item, "piece")}</span></div>
+                        <div className="font-bold text-slate-800 text-xs">{item.name}</div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          بەردەست: <strong className="text-indigo-600">{item.quantity || 0} {item.packetSellingPrice && !item.cartonSellingPrice ? 'پاکەت' : 'کارتۆن'}</strong>
+                        </div>
                       </div>
                       <button
                         type="button"
                         onClick={() => handleAddItemToOrder(item)}
-                        disabled={item.quantity <= 0}
-                        className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition"
+                        disabled={(item.quantity || 0) <= 0}
+                        className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg disabled:opacity-40 transition text-xs font-bold flex items-center gap-1"
                       >
-                        <Plus size={20} />
+                        <Plus size={14} />
+                        زیادکردن
                       </button>
                     </div>
                   ))}
@@ -662,53 +623,72 @@ export default function OrdersView({ role }: { role: Role }) {
               </div>
 
               {/* Selected Items */}
-              <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50">
-                <h4 className="font-semibold text-slate-800 mb-4 text-sm">کاڵا هەڵبژێردراوەکان</h4>
-                <div className="h-64 overflow-y-auto space-y-2 pr-2">
-                  {selectedItems.length === 0 ? (
-                    <div className="text-center text-slate-500 py-8 text-sm">هیچ کاڵایەک نەخراوەتە سەبەتەکەوە</div>
-                  ) : (
-                    selectedItems.map((si) => (
-                      <div key={si.item.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-white rounded-xl border border-slate-200 shadow-sm gap-2">
-                        <div className="font-semibold text-slate-800 text-sm flex-1">{si.item.name}</div>
-                        <div className="flex items-center gap-3 flex-wrap justify-end">
+              <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50 flex flex-col justify-between">
+                <div>
+                  <h4 className="font-bold text-slate-800 mb-3 text-xs flex items-center gap-2">
+                    <ShoppingCart size={14} className="text-indigo-600" />
+                    کاڵا هەڵبژێردراوەکانی داواکاری ({selectedItems.length})
+                  </h4>
+                  <div className="h-48 overflow-y-auto space-y-2 pr-1">
+                    {selectedItems.map((si) => (
+                      <div key={si.item.id} className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-200/80 text-xs">
+                        <div className="font-bold text-slate-800 flex-1 truncate pr-2">{si.item.name}</div>
+                        <div className="flex items-center gap-2">
                           <select 
-                            className="px-2 py-1 border border-slate-200 rounded-lg outline-none text-sm bg-slate-50"
-                            value={si.unit || 'piece'}
-                            onChange={(e) => handleUpdateItemQuantity(si.item.id, si.quantity, e.target.value)}
+                            className="px-2 py-1 border border-slate-300 rounded-lg text-xs bg-slate-50 font-bold"
+                            value={si.unit}
+                            onChange={(e) => handleUpdateItemQuantity(si.item.id, si.quantity, e.target.value as 'carton' | 'packet')}
                           >
-                            { (si.item.sellingPrice > 0 || si.item.wholesalePrice > 0 || (!si.item.ratio && !si.item.packetRatio)) && <option value="piece">دانە</option> }
-                            {si.item.packetRatio > 0 && <option value="packet">پاکەت</option>}
-                            {si.item.ratio > 0 && <option value="carton">کارتۆن</option>}
+                            <option value="carton">کارتۆن</option>
+                            <option value="packet">پاکەت</option>
                           </select>
-                          <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-2 py-1 bg-white">
-                            <button type="button" onClick={() => handleQuantityDelta(si.item.id, -1)} className="px-2 text-xl font-bold text-slate-500 hover:text-indigo-600 focus:outline-none">-</button>
-                            <span className="w-8 text-center text-sm font-medium">{si.quantity}</span>
-                            <button type="button" onClick={() => handleQuantityDelta(si.item.id, 1)} className="px-2 text-xl font-bold text-slate-500 hover:text-indigo-600 focus:outline-none">+</button>
+
+                          <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden">
+                            <button type="button" onClick={() => handleQuantityDelta(si.item.id, -1)} className="px-2 py-0.5 text-xs font-bold">-</button>
+                            <span className="w-8 text-center font-mono font-bold text-xs">{si.quantity}</span>
+                            <button type="button" onClick={() => handleQuantityDelta(si.item.id, 1)} className="px-2 py-0.5 text-xs font-bold">+</button>
                           </div>
-                          <span className="font-bold min-w-[80px] text-left text-slate-800 text-sm" dir="ltr">
-                            {(si.quantity * calcPrice(si.item, si.unit || 'piece')).toLocaleString()}
+
+                          <span className="font-bold min-w-[70px] text-left text-indigo-700 font-mono text-xs" dir="ltr">
+                            {(si.quantity * calcPrice(si.item, si.unit)).toLocaleString()}
                           </span>
                         </div>
                       </div>
-                    ))
-                  )}
+                    ))}
+                    {selectedItems.length === 0 && (
+                      <div className="text-center text-slate-400 py-12 text-xs">هیچ کاڵایەک هەڵنەبژێردراوە</div>
+                    )}
+                  </div>
                 </div>
-                <div className="mt-4 pt-4 border-t border-slate-200 flex justify-between items-center">
-                  <div className="font-bold text-slate-800 text-sm">کۆی گشتی:</div>
-                  <div className="font-bold text-xl text-indigo-600" dir="ltr">
-                    {selectedItems.reduce((acc, curr) => acc + (curr.quantity * calcPrice(curr.item, curr.unit || 'piece')), 0).toLocaleString()}
+
+                <div className="mt-3 pt-3 border-t border-slate-200 flex justify-between items-center">
+                  <div className="font-bold text-slate-800 text-xs">کۆی گشتی داواکاری:</div>
+                  <div className="font-bold text-base text-indigo-600 font-mono" dir="ltr">
+                    {selectedItems.reduce((acc, curr) => acc + (curr.quantity * calcPrice(curr.item, curr.unit)), 0).toLocaleString()} د.ع
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-3 pt-2">
+              {editingOrderId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingOrderId(null);
+                    setShowNewOrder(false);
+                    setSelectedItems([]);
+                  }}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              )}
               <button
                 type="submit"
-                className="px-8 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition font-bold text-sm shadow-sm"
+                className="px-8 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition font-bold text-xs shadow-sm"
               >
-                ناردنی داواکاری بۆ کۆگا
+                {editingOrderId ? 'پاشەکەوتکردنی گۆڕانکاری' : 'ناردنی داواکاری بۆ کۆگا'}
               </button>
             </div>
           </form>
@@ -718,91 +698,86 @@ export default function OrdersView({ role }: { role: Role }) {
       {/* Orders List */}
       <div className="space-y-4">
         {loading ? (
-          <div className="text-center py-10 text-slate-500">خەریکی هێنانە...</div>
+          <div className="text-center py-10 text-slate-500 text-xs">خەریکی هێنانە...</div>
         ) : orders.length === 0 ? (
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-500 text-sm">
+          <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-500 text-xs">
             هیچ داواکارییەک نییە
           </div>
         ) : (
           orders.map((order, index) => (
-            <div key={order.id} className={`p-5 rounded-2xl shadow-sm border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${order.status === 'pending' ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+            <div key={order.id} className={`p-4 rounded-2xl shadow-sm border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${order.status === 'pending' ? 'bg-amber-50/40 border-amber-200' : order.status === 'printed' ? 'bg-indigo-50/40 border-indigo-200' : 'bg-green-50/40 border-green-200'}`}>
               <div className="flex-1">
-                <div className="flex items-center gap-3 mb-3">
-                  <h3 className="font-bold text-lg text-slate-800">{order.marketName}</h3>
-                  <span className={`px-2.5 py-1 rounded text-xs font-bold ${
+                <div className="flex items-center gap-3 mb-2">
+                  <h3 className="font-bold text-sm text-slate-800">{order.marketName}</h3>
+                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
                     order.status === 'pending' ? 'bg-amber-100 text-amber-800' :
                     order.status === 'printed' ? 'bg-indigo-100 text-indigo-800' :
                     'bg-green-100 text-green-800'
                   }`}>
-                    {order.status === 'pending' ? 'چاوەڕێ' :
-                     order.status === 'printed' ? 'چاپکراو' : 'تەواوکراو'}
+                    {order.status === 'pending' ? 'چاوەڕێ' : order.status === 'printed' ? 'چاپکراو' : 'تەواوکراو'}
                   </span>
                 </div>
-                <div className="text-sm text-slate-600 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2">
-                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>مەندووب:</strong> {order.repName}</div>
-                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>شوێن:</strong> {order.location}</div>
-                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>بەروار:</strong> <span dir="ltr" className="font-mono text-xs">{format(order.timestamp, 'yyyy-MM-dd HH:mm')}</span></div>
-                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span> <strong>ژمارەی کاڵا:</strong> {(order.items || []).reduce((acc, curr) => acc + curr.quantity, 0)} دانە</div>
+                <div className="text-xs text-slate-600 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
+                  <div><strong>مەندووب:</strong> {order.repName}</div>
+                  <div><strong>شوێن:</strong> {order.location || '-'}</div>
+                  <div><strong>بەروار:</strong> <span dir="ltr" className="font-mono">{format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span></div>
+                  <div><strong>ژمارەی کاڵا:</strong> {(order.items || []).reduce((acc, curr) => acc + curr.quantity, 0)} {order.items?.[0]?.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-6 border-t border-slate-100 lg:border-t-0 lg:border-r lg:border-slate-100 pt-4 lg:pt-0 lg:pr-6">
+              <div className="flex items-center gap-4 border-t lg:border-t-0 lg:border-r border-slate-200 pt-3 lg:pt-0 lg:pr-4 justify-between lg:justify-end">
                 <div className="text-left">
-                  <div className="text-sm text-slate-500 mb-1">کۆی گشتی</div>
-                  <div className="font-bold text-xl text-slate-900" dir="ltr">{order.totalAmount.toLocaleString()}</div>
+                  <div className="text-[11px] text-slate-500">کۆی گشتی</div>
+                  <div className="font-bold text-sm text-slate-900 font-mono" dir="ltr">{order.totalAmount.toLocaleString()} د.ع</div>
                 </div>
                 
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                   {(role === 'admin' || role === 'warehouse') && (
                     <button
                       onClick={() => printOrder(order, String(orders.length - index).padStart(6, '0'))}
-                      className="p-2.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
-                      title="چاپکردن"
+                      className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
+                      title="چاپکردنی وەسڵ"
                     >
-                      <Printer size={20} />
+                      <Printer size={16} />
                     </button>
                   )}
                   {role === 'warehouse' && order.status !== 'completed' && (
                     <button
                       onClick={() => updateOrderStatus(order, 'completed')}
-                      className="p-2.5 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition"
+                      className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition"
                       title="تەواوکردن"
                     >
-                      <CheckCircle size={20} />
+                      <CheckCircle size={16} />
                     </button>
                   )}
                   {role === 'admin' && (!order.paymentStatus) && (
                     <button
                       onClick={() => setSettlingOrder(order)}
-                      className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm font-medium flex items-center justify-center"
+                      className="px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-xs font-bold"
                     >
                       تەسفیەکردن
                     </button>
                   )}
                   {order.paymentStatus === 'cash' && (
-                    <div className="px-3 py-2 bg-green-50 text-green-700 rounded-lg text-sm font-bold border border-green-100 flex items-center justify-center">نەقدە</div>
+                    <span className="px-2.5 py-1 bg-green-100 text-green-800 rounded-lg text-xs font-bold">نەقدە</span>
                   )}
                   {order.paymentStatus === 'debt' && (
-                    <div className="px-3 py-2 bg-amber-50 text-amber-700 rounded-lg text-sm font-bold border border-amber-100 flex items-center justify-center">قەرزە</div>
+                    <span className="px-2.5 py-1 bg-amber-100 text-amber-800 rounded-lg text-xs font-bold">قەرزە</span>
                   )}
-                                    {true && (
-                    <button
-                      onClick={() => handleEditOrder(order)}
-                      className="p-2.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
-                      title="دەستکاری"
-                    >
-                      <Edit2 size={20} />
-                    </button>
-                  )}
-                  {true && (
-                    <button
-                      onClick={() => setDeletingOrder(order)}
-                      className="p-2.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
-                      title="سڕینەوە"
-                    >
-                      <Trash2 size={20} />
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handleEditOrder(order)}
+                    className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
+                    title="دەستکاری"
+                  >
+                    <Edit2 size={16} />
+                  </button>
+                  <button
+                    onClick={() => setDeletingOrder(order)}
+                    className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
+                    title="سڕینەوە"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
               </div>
             </div>
@@ -826,38 +801,38 @@ export default function OrdersView({ role }: { role: Role }) {
 
       {/* Settlement Modal */}
       {settlingOrder && (
-        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="font-bold text-slate-800 text-lg">تەسفیەکردنی ئۆردەر</h3>
-              <button onClick={() => setSettlingOrder(null)} className="text-slate-500 hover:text-slate-700">
-                <X size={24} />
+              <h3 className="font-bold text-slate-800 text-sm">تەسفیەکردنی ئۆردەر لە حیساباتدا</h3>
+              <button onClick={() => setSettlingOrder(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
               </button>
             </div>
             <div className="p-6">
-              <p className="text-slate-600 mb-6 text-center leading-relaxed">
-                ئایا دەتەوێت ئۆردەری مارکێتی <strong className="text-slate-800">{settlingOrder.marketName}</strong> چۆن لە حیساباتدا تۆمار بکەیت؟
+              <p className="text-slate-600 mb-5 text-center text-xs leading-relaxed">
+                ئایا دەتەوێت ئۆردەری مارکێتی <strong className="text-slate-800">{settlingOrder.marketName}</strong> بە چی شێوازێک تۆمار بکەیت؟
               </p>
               
               <div className="grid grid-cols-2 gap-4">
                 <button
                   onClick={() => settleOrder('cash')}
-                  className="flex flex-col items-center gap-3 p-4 border-2 border-green-100 rounded-xl hover:bg-green-50 hover:border-green-300 transition group"
+                  className="flex flex-col items-center gap-2 p-4 border-2 border-emerald-100 rounded-xl hover:bg-emerald-50 hover:border-emerald-300 transition group"
                 >
-                  <div className="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <DollarSign size={24} />
+                  <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
+                    <DollarSign size={20} />
                   </div>
-                  <span className="font-bold text-green-700">بە نەقد</span>
+                  <span className="font-bold text-emerald-800 text-xs">بە نەقد</span>
                 </button>
                 
                 <button
                   onClick={() => settleOrder('debt')}
-                  className="flex flex-col items-center gap-3 p-4 border-2 border-amber-100 rounded-xl hover:bg-amber-50 hover:border-amber-300 transition group"
+                  className="flex flex-col items-center gap-2 p-4 border-2 border-amber-100 rounded-xl hover:bg-amber-50 hover:border-amber-300 transition group"
                 >
-                  <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <CreditCard size={24} />
+                  <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center">
+                    <CreditCard size={20} />
                   </div>
-                  <span className="font-bold text-amber-700">بە قەرز</span>
+                  <span className="font-bold text-amber-800 text-xs">بە قەرز</span>
                 </button>
               </div>
             </div>
