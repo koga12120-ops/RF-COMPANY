@@ -7,13 +7,22 @@ import { doc, getDoc, setDoc, getDocs, collection, query, where, updateDoc } fro
 interface PinEntryProps {
   onSuccess: (role: Role) => void;
   onLogout: () => void;
+  initialNotice?: string;
+  onClearNotice?: () => void;
 }
 
-export default function PinEntry({ onSuccess, onLogout }: PinEntryProps) {
+export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNotice }: PinEntryProps) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
-  const [infoMessage, setInfoMessage] = useState('');
+  const [infoMessage, setInfoMessage] = useState(initialNotice || '');
   const [loading, setLoading] = useState(false);
+
+  // Sync initialNotice if it changes
+  React.useEffect(() => {
+    if (initialNotice) {
+      setInfoMessage(initialNotice);
+    }
+  }, [initialNotice]);
 
   // Rep Registration modal states
   const [showRegisterModal, setShowRegisterModal] = useState(false);
@@ -25,6 +34,7 @@ export default function PinEntry({ onSuccess, onLogout }: PinEntryProps) {
     e.preventDefault();
     setError('');
     setInfoMessage('');
+    if (onClearNotice) onClearNotice();
     setLoading(true);
 
     // Convert Eastern Arabic/Persian/Kurdish numerals to standard Latin numerals
@@ -55,12 +65,15 @@ export default function PinEntry({ onSuccess, onLogout }: PinEntryProps) {
 
       // Static Roles
       if (normalizedPin === '27890') {
+        sessionStorage.setItem('active_session_pin', '27890');
         await onSuccess('admin');
         return;
       } else if (normalizedPin === '35278') {
+        sessionStorage.setItem('active_session_pin', '35278');
         await onSuccess('warehouse');
         return;
       } else if (normalizedPin === '47953') {
+        sessionStorage.setItem('active_session_pin', '47953');
         await onSuccess('cashvan');
         return;
       } 
@@ -103,11 +116,16 @@ export default function PinEntry({ onSuccess, onLogout }: PinEntryProps) {
           return;
         }
 
+        // Save active session PIN
+        sessionStorage.setItem('active_session_pin', normalizedPin);
+
         if (currentUser) {
-          // Sync with users collection
+          // Sync with users collection and clear any forceReauth
           await setDoc(doc(db, 'users', currentUser.uid), {
             role: 'sales_rep',
             accessCode: normalizedPin,
+            forceReauth: false,
+            lastReauthAt: Date.now(),
             name: repData.name || currentUser.displayName || currentUser.email,
             phone: repData.phone || '',
             email: currentUser.email || '',
@@ -115,11 +133,12 @@ export default function PinEntry({ onSuccess, onLogout }: PinEntryProps) {
             isDeleted: false
           }, { merge: true });
 
-          // Update rep doc with uid/email
+          // Update rep doc with uid/email and clear forceReauth
           await updateDoc(doc(db, 'reps', repDocSnap.id), {
             uid: currentUser.uid,
             email: currentUser.email || '',
-            status: 'active'
+            status: 'active',
+            forceReauth: false
           });
         }
 
@@ -127,7 +146,48 @@ export default function PinEntry({ onSuccess, onLogout }: PinEntryProps) {
         return;
       }
 
-      setError('کۆدی ئەمنی هەڵەیە');
+      // Check for Cashvan Personal Access Code (assigned by Admin)
+      const cashvansQuery = query(collection(db, 'cashvans'), where('accessCode', '==', normalizedPin));
+      const cashvansSnap = await getDocs(cashvansQuery);
+
+      if (!cashvansSnap.empty) {
+        const cvDocSnap = cashvansSnap.docs[0];
+        const cvData = cvDocSnap.data();
+
+        if (cvData.status === 'disabled' || cvData.isDeleted) {
+          setError('ئەم کۆدە لەلایەن بەڕێوەبەرەوە ڕاگیراوە یان پەک خراوە.');
+          setPin('');
+          return;
+        }
+
+        sessionStorage.setItem('active_session_pin', normalizedPin);
+
+        if (currentUser) {
+          await setDoc(doc(db, 'users', currentUser.uid), {
+            role: 'cashvan',
+            accessCode: normalizedPin,
+            forceReauth: false,
+            lastReauthAt: Date.now(),
+            name: cvData.name || currentUser.displayName || currentUser.email,
+            phone: cvData.phone || '',
+            email: currentUser.email || '',
+            status: 'active',
+            isDeleted: false
+          }, { merge: true });
+
+          await updateDoc(doc(db, 'cashvans', cvDocSnap.id), {
+            uid: currentUser.uid,
+            email: currentUser.email || '',
+            status: 'active',
+            forceReauth: false
+          });
+        }
+
+        await onSuccess('cashvan');
+        return;
+      }
+
+      setError('تێپەڕەوشە (کۆدی ئەمنی) هەڵەیە. تکایە کۆدی دروست بنووسە.');
       setPin('');
     } catch (err: any) {
       console.error(err);

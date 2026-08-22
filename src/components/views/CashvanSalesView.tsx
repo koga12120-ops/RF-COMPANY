@@ -147,13 +147,22 @@ export default function CashvanSalesView() {
   }, [activeCashvanName]);
 
   const calcPrice = (item: any, unit: string, marketName: string) => {
+    if (!item) return 0;
+    // Also lookup from warehouseItems if prices are missing in cashvan_inventory
+    const whItem = warehouseItems.find(w => w.id === item.itemId || w.id === item.id);
+
+    const cartonPrice = Number(item.cartonSellingPrice) || Number(item.sellingPrice) || Number(item.cartonPrice) || Number(item.price) || Number(whItem?.cartonSellingPrice) || Number(whItem?.sellingPrice) || Number(whItem?.pieceSellingPrice) || 0;
+    const packetPrice = Number(item.packetSellingPrice) || Number(item.packetPrice) || Number(item.sellingPrice) || Number(item.price) || Number(whItem?.packetSellingPrice) || Number(whItem?.sellingPrice) || 0;
+
     const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
     if (isWholesale) {
-      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
-      return item.cartonWholesalePrice || item.cartonSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
+      const cartonWS = Number(item.cartonWholesalePrice) || Number(item.wholesalePrice) || Number(whItem?.cartonWholesalePrice) || Number(whItem?.wholesalePrice) || cartonPrice;
+      const packetWS = Number(item.packetWholesalePrice) || Number(item.wholesalePrice) || Number(whItem?.packetWholesalePrice) || Number(whItem?.wholesalePrice) || packetPrice;
+      if (unit === 'packet') return packetWS || packetPrice || cartonPrice;
+      return cartonWS || cartonPrice || packetPrice;
     } else {
-      if (unit === 'packet') return item.packetSellingPrice || item.sellingPrice || 0;
-      return item.cartonSellingPrice || item.sellingPrice || 0;
+      if (unit === 'packet') return packetPrice || cartonPrice;
+      return cartonPrice || packetPrice;
     }
   };
 
@@ -510,27 +519,37 @@ export default function CashvanSalesView() {
           )}
 
           {/* Navigation Buttons */}
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-2xs">
             <button
               onClick={() => setActiveTab('sales')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${activeTab === 'sales' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'sales' ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-300' : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'}`}
             >
-              <Truck size={14} />
-              فرۆشتن بە مارکێت
+              <Truck size={16} />
+              <span>فرۆشتن بە مارکێت</span>
+              {cart.length > 0 && (
+                <span className="bg-amber-400 text-slate-900 text-[10px] px-1.5 py-0.2 rounded-full font-black">
+                  {cart.length}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setActiveTab('preorder')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${activeTab === 'preorder' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'preorder' ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-300' : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'}`}
             >
-              <Send size={14} />
-              تەڵەبیە بۆ کۆگا
+              <Send size={16} />
+              <span>تەڵەبیە بۆ کۆگا</span>
+              {preOrderCart.length > 0 && (
+                <span className="bg-amber-400 text-slate-900 text-[10px] px-1.5 py-0.2 rounded-full font-black">
+                  {preOrderCart.length}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setActiveTab('history')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${activeTab === 'history' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-300' : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'}`}
             >
-              <FileText size={14} />
-              مێژووی فرۆشتن
+              <FileText size={16} />
+              <span>مێژووی فرۆشتن</span>
             </button>
           </div>
         </div>
@@ -561,22 +580,24 @@ export default function CashvanSalesView() {
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto p-1">
               {filteredInventory.map(item => {
                 const currentUnit = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+                const unitKey = item.unit === 'packet' ? 'packet' : 'carton';
+                const displayPrice = calcPrice(item, unitKey, selectedMarket);
                 return (
                   <div
                     key={item.id}
                     onClick={() => addToCart(item)}
-                    className="p-3 border border-slate-200/80 hover:border-indigo-500 rounded-xl cursor-pointer transition bg-slate-50/50 hover:bg-indigo-50/20 flex flex-col justify-between"
+                    className="p-3.5 border border-slate-200 hover:border-indigo-500 rounded-xl cursor-pointer transition bg-white hover:bg-indigo-50/20 flex flex-col justify-between shadow-xs group"
                   >
                     <div>
-                      <div className="font-bold text-xs text-slate-800 line-clamp-1">{item.name}</div>
-                      {item.barcode && <div className="text-[10px] text-slate-400 font-mono" dir="ltr">{item.barcode}</div>}
+                      <div className="font-bold text-xs text-slate-800 line-clamp-1 group-hover:text-indigo-600 transition">{item.name}</div>
+                      {item.barcode && <div className="text-[10px] text-slate-400 font-mono mt-0.5" dir="ltr">{item.barcode}</div>}
                     </div>
-                    <div className="mt-2 pt-2 border-t border-slate-100 flex justify-between items-center">
+                    <div className="mt-2.5 pt-2 border-t border-slate-100 flex justify-between items-center">
                       <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
                         {item.quantity} {currentUnit}
                       </span>
-                      <span className="text-xs font-bold text-slate-800 font-mono" dir="ltr">
-                        {(item.sellingPrice || 0).toLocaleString()} د.ع
+                      <span className="text-xs font-bold text-emerald-700 font-mono" dir="ltr">
+                        {displayPrice.toLocaleString()} د.ع
                       </span>
                     </div>
                   </div>
@@ -694,24 +715,32 @@ export default function CashvanSalesView() {
             </div>
 
             <div className="max-h-[380px] overflow-y-auto space-y-2 flex-1">
-              {filteredWarehouseItems.map(item => (
-                <div key={item.id} className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200/70 flex justify-between items-center transition">
-                  <div>
-                    <div className="font-bold text-xs text-slate-800">{item.name}</div>
-                    <div className="text-[11px] text-slate-500">
-                      لە کۆگا هەیە: <strong className="text-emerald-700">{item.quantity || 0} {item.packetSellingPrice && !item.cartonSellingPrice ? 'پاکەت' : 'کارتۆن'}</strong>
+              {filteredWarehouseItems.map(item => {
+                const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
+                const itemPrice = defaultUnit === 'packet' 
+                  ? (item.packetSellingPrice || item.packetCostPrice || item.sellingPrice || item.price || 0)
+                  : (item.cartonSellingPrice || item.cartonCostPrice || item.sellingPrice || item.price || 0);
+                return (
+                  <div key={item.id} className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200/70 flex justify-between items-center transition">
+                    <div>
+                      <div className="font-bold text-xs text-slate-800">{item.name}</div>
+                      <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
+                        <span>لە کۆگا: <strong className="text-emerald-700">{item.quantity || 0} {defaultUnit === 'packet' ? 'پاکەت' : 'کارتۆن'}</strong></span>
+                        <span className="text-slate-300">•</span>
+                        <span>نرخ: <strong className="text-indigo-600 font-mono" dir="ltr">{itemPrice.toLocaleString()} د.ع</strong></span>
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => addPreOrderItem(item)}
+                      className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 rounded-lg text-xs font-bold transition flex items-center gap-1"
+                    >
+                      <Plus size={14} />
+                      داواکردن
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => addPreOrderItem(item)}
-                    className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 rounded-lg text-xs font-bold transition flex items-center gap-1"
-                  >
-                    <Plus size={14} />
-                    داواکردن
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 

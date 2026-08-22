@@ -131,12 +131,18 @@ export default function OrdersView({ role }: { role: Role }) {
   const calcPrice = (item: Item, unit: 'carton' | 'packet') => {
     if (!item) return 0;
     const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
+
+    const cartonPrice = Number(item.cartonSellingPrice) || Number(item.cartonPrice) || Number(item.sellingPrice) || Number(item.price) || Number(item.pieceSellingPrice) || 0;
+    const packetPrice = Number(item.packetSellingPrice) || Number(item.packetPrice) || Number(item.pieceSellingPrice) || Number(item.sellingPrice) || Number(item.price) || 0;
+    const cartonWS = Number(item.cartonWholesalePrice) || Number(item.wholesalePrice) || cartonPrice;
+    const packetWS = Number(item.packetWholesalePrice) || Number(item.wholesalePrice) || packetPrice;
+
     if (isWholesale) {
-      if (unit === 'packet') return item.packetWholesalePrice || item.packetSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
-      return item.cartonWholesalePrice || item.cartonSellingPrice || item.wholesalePrice || item.sellingPrice || 0;
+      if (unit === 'packet') return packetWS || packetPrice || cartonPrice;
+      return cartonWS || cartonPrice || packetPrice;
     } else {
-      if (unit === 'packet') return item.packetSellingPrice || item.sellingPrice || 0;
-      return item.cartonSellingPrice || item.sellingPrice || 0;
+      if (unit === 'packet') return packetPrice || cartonPrice;
+      return cartonPrice || packetPrice;
     }
   };
 
@@ -600,25 +606,31 @@ export default function OrdersView({ role }: { role: Role }) {
                   <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
                 </div>
                 <div className="h-64 overflow-y-auto space-y-2 pr-1">
-                  {filteredItems.map(item => (
-                    <div key={item.id} className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-200/80 shadow-xs">
-                      <div>
-                        <div className="font-bold text-slate-800 text-xs">{item.name}</div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          بەردەست: <strong className="text-indigo-600">{item.quantity || 0} {item.packetSellingPrice && !item.cartonSellingPrice ? 'پاکەت' : 'کارتۆن'}</strong>
+                  {filteredItems.map(item => {
+                    const defaultUnit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
+                    const unitPrice = calcPrice(item, defaultUnit);
+                    return (
+                      <div key={item.id} className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-200/80 shadow-xs">
+                        <div>
+                          <div className="font-bold text-slate-800 text-xs">{item.name}</div>
+                          <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
+                            <span>بەردەست: <strong className="text-indigo-600">{item.quantity || 0} {defaultUnit === 'packet' ? 'پاکەت' : 'کارتۆن'}</strong></span>
+                            <span className="text-slate-300">•</span>
+                            <span>نرخ: <strong className="text-emerald-600 font-mono font-bold" dir="ltr">{unitPrice.toLocaleString()} د.ع</strong></span>
+                          </div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => handleAddItemToOrder(item)}
+                          disabled={(item.quantity || 0) <= 0}
+                          className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg disabled:opacity-40 transition text-xs font-bold flex items-center gap-1"
+                        >
+                          <Plus size={14} />
+                          زیادکردن
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleAddItemToOrder(item)}
-                        disabled={(item.quantity || 0) <= 0}
-                        className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg disabled:opacity-40 transition text-xs font-bold flex items-center gap-1"
-                      >
-                        <Plus size={14} />
-                        زیادکردن
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

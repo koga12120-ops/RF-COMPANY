@@ -32,6 +32,11 @@ export interface Item {
   // Backward compatibility fields
   ratio?: number;
   packetRatio?: number;
+  price?: number;
+  cartonPrice?: number;
+  packetPrice?: number;
+  pieceSellingPrice?: number;
+  [key: string]: any;
 }
 
 export interface Market {

@@ -141,17 +141,39 @@ export default function RepsView() {
       const userRole = codeModalItem.type === 'rep' ? 'sales_rep' : 'cashvan';
       const itemUid = codeModalItem.uid || codeModalItem.id;
 
-      // 1. Update collection document
+      // 1. Update collection document with new code and timestamp
       await updateDoc(doc(db, targetCol, codeModalItem.id), {
         accessCode: normalized,
+        pinChangedAt: Date.now(),
+        forceReauth: true,
         status: 'active'
       });
 
-      // 2. Update/Sync user document
-      if (itemUid) {
-        await setDoc(doc(db, 'users', itemUid), {
-          role: userRole,
+      // 2. Find and update all corresponding user document(s) to immediately terminate active session
+      const userUidsToReset = new Set<string>();
+      if (itemUid) userUidsToReset.add(itemUid);
+      if (codeModalItem.id) userUidsToReset.add(codeModalItem.id);
+
+      try {
+        if (codeModalItem.email) {
+          const uSnap = await getDocs(query(collection(db, 'users'), where('email', '==', codeModalItem.email)));
+          uSnap.forEach(d => userUidsToReset.add(d.id));
+        }
+        if (codeModalItem.name) {
+          const uSnap = await getDocs(query(collection(db, 'users'), where('name', '==', codeModalItem.name)));
+          uSnap.forEach(d => userUidsToReset.add(d.id));
+        }
+      } catch (err) {
+        console.error("Error finding matching users:", err);
+      }
+
+      // Update users documents with role: null and forceReauth: true so open sessions close instantly
+      for (const uId of Array.from(userUidsToReset)) {
+        await setDoc(doc(db, 'users', uId), {
+          role: null, // Forces back to PinEntry on active client
           accessCode: normalized,
+          forceReauth: true,
+          pinChangedAt: Date.now(),
           status: 'active',
           isDeleted: false,
           name: codeModalItem.name || '',
@@ -159,7 +181,7 @@ export default function RepsView() {
         }, { merge: true });
       }
 
-      showToast(`کۆدی ئەمنی بۆ (${codeModalItem.name}) بە سەرکەوتوویی پاشەکەوت کرا.`);
+      showToast(`کۆدی ئەمنی بۆ (${codeModalItem.name}) پاشەکەوت کرا و سیستەمەکە داخرایەوە تا بە کۆدی تازە بچێتە ژوورەوە.`);
       setCodeModalItem(null);
       setInputCode('');
     } catch (error) {
