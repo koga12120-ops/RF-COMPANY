@@ -171,3 +171,141 @@ export function printStatementPopup(entityName: string, transactions: Transactio
     win.document.close();
   }
 }
+
+export interface PaymentReceiptData {
+  entityName: string;
+  roleTitle?: string;
+  invoiceNo?: string;
+  originalDebtAmount: number;
+  paidAmount: number;
+  remainingDebtAmount: number;
+  date: number;
+  description?: string;
+}
+
+export function generatePaymentReceiptHtml(data: PaymentReceiptData): string {
+  const role = data.roleTitle || 'کۆمپانیا';
+  return `
+    <html dir="rtl">
+      <head>
+        <title>پسوڵەی واسڵکردن - ${data.entityName}</title>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Tahoma, 'Segoe UI', Arial, sans-serif; padding: 24px; color: #1e293b; line-height: 1.5; background: #fff; }
+          .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #059669; padding-bottom: 12px; }
+          .header h2 { margin: 0 0 4px 0; color: #064e3b; font-size: 24px; }
+          .header h3 { margin: 0; color: #059669; font-size: 17px; font-weight: bold; }
+          .header p { margin: 4px 0 0 0; font-size: 12px; color: #64748b; }
+          
+          .info-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; margin-bottom: 20px; }
+          .info-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+          .info-row:last-child { margin-bottom: 0; }
+          .label { color: #64748b; font-weight: 500; }
+          .value { font-weight: bold; color: #0f172a; }
+          
+          .amount-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+          .amount-table th { background: #f1f5f9; padding: 10px 14px; text-align: right; border: 1px solid #cbd5e1; font-size: 13px; color: #334155; }
+          .amount-table td { padding: 12px 14px; border: 1px solid #e2e8f0; font-size: 14px; }
+          
+          .badge-paid { color: #166534; font-weight: bold; font-size: 18px; }
+          .badge-rem { color: #b45309; font-weight: bold; font-size: 18px; }
+          
+          .notes { background: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #92400e; margin-bottom: 24px; }
+          
+          .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 10px; }
+          .sig-block { text-align: center; }
+          .sig-line { margin-top: 35px; border-top: 1px dashed #64748b; width: 160px; }
+          
+          @media print {
+            body { padding: 10px; }
+            @page { margin: 15mm; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2>کۆمپانیای RF</h2>
+          <h3>پسوڵەی واسڵکردنی قەرز (پاردانەوە)</h3>
+          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
+        </div>
+
+        <div class="info-box">
+          <div class="info-row">
+            <span class="label">ناوی ${role}:</span>
+            <span class="value">${data.entityName}</span>
+          </div>
+          ${data.invoiceNo ? `
+          <div class="info-row">
+            <span class="label">ژمارەی سەر وەسڵ:</span>
+            <span class="value" dir="ltr" style="font-family:monospace;color:#059669;">#${data.invoiceNo}</span>
+          </div>
+          ` : ''}
+          <div class="info-row">
+            <span class="label">بەرواری واسڵکردن:</span>
+            <span class="value" dir="ltr">${format(data.date, 'yyyy-MM-dd HH:mm')}</span>
+          </div>
+        </div>
+
+        <table class="amount-table">
+          <thead>
+            <tr>
+              <th>وردەکاری حیساب</th>
+              <th style="text-align: left; width: 180px;">بڕی پارە</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>کۆی قەرزی سەر وەسڵەکە (یان قەرزی پێشوو)</strong></td>
+              <td dir="ltr" style="text-align: left; font-weight: bold; color: #334155; font-size: 15px;">
+                ${data.originalDebtAmount.toLocaleString()} د.ع
+              </td>
+            </tr>
+            <tr style="background: #f0fdf4;">
+              <td><strong style="color: #166534;">بڕی پارەی واسڵکراو (دراوە لەم پسوڵەیەدا)</strong></td>
+              <td dir="ltr" style="text-align: left;" class="badge-paid">
+                ${data.paidAmount.toLocaleString()} د.ع
+              </td>
+            </tr>
+            <tr style="background: #fffbeb;">
+              <td><strong style="color: #b45309;">بڕی ماوە لەسەر ئەم وەسڵە (قەرزی ئێستا)</strong></td>
+              <td dir="ltr" style="text-align: left;" class="badge-rem">
+                ${data.remainingDebtAmount.toLocaleString()} د.ع
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        ${data.description ? `
+        <div class="notes">
+          <strong>تێبینی:</strong> ${data.description}
+        </div>
+        ` : ''}
+
+        <div class="signatures">
+          <div class="sig-block">
+            <div>واژووی ڕادەستکەر (پێدەر)</div>
+            <div class="sig-line"></div>
+          </div>
+          <div class="sig-block">
+            <div>واژووی وەرگر (کۆمپانیای RF)</div>
+            <div class="sig-line"></div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+}
+
+export function printPaymentReceiptPopup(data: PaymentReceiptData) {
+  const html = generatePaymentReceiptHtml(data);
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+

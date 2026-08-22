@@ -6,7 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Trash2, Printer, FileText, Calendar, Search, CheckCircle2, Clock, X, TrendingUp } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, printPaymentReceiptPopup } from '../../lib/statementPrinter';
 
 export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_debt' | 'company_paid_debt' }) {
   const [paidDebts, setPaidDebts] = useState<Transaction[]>([]);
@@ -96,13 +96,59 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
   const avgPaid = filteredDebts.length > 0 ? Math.round(totalFilteredPaid / filteredDebts.length) : 0;
 
 
-  const printTransaction = (transaction: Transaction) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
+  const printTransaction = async (transaction: Transaction) => {
     const isCompany = transaction.type.includes('company');
     const roleTitle = isCompany ? 'کۆمپانیا' : 'مارکێت';
     
+    if (transaction.type.includes('paid') && transaction.relatedEntityId) {
+      try {
+        const entityName = transaction.relatedEntityId;
+        const q = query(collection(db, 'transactions'), where('relatedEntityId', '==', entityName));
+        const snap = await getDocs(q);
+        const allTrans: Transaction[] = [];
+        snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
+
+        let origDebt = 0;
+        let totalPaidForTarget = 0;
+
+        if (transaction.invoiceNo) {
+          const cleanInv = transaction.invoiceNo.trim();
+          const invDebts = allTrans.filter(t => t.type.includes('debt') && !t.type.includes('paid') && t.invoiceNo?.trim() === cleanInv);
+          const invPaids = allTrans.filter(t => t.type.includes('paid') && t.invoiceNo?.trim() === cleanInv);
+
+          origDebt = invDebts.reduce((sum, t) => sum + (t.amount || 0), 0);
+          totalPaidForTarget = invPaids.reduce((sum, t) => sum + (t.amount || 0), 0);
+        } else {
+          const entityDebts = allTrans.filter(t => t.type.includes('debt') && !t.type.includes('paid'));
+          const entityPaids = allTrans.filter(t => t.type.includes('paid'));
+          origDebt = entityDebts.reduce((sum, t) => sum + (t.amount || 0), 0);
+          totalPaidForTarget = entityPaids.reduce((sum, t) => sum + (t.amount || 0), 0);
+        }
+
+        if (origDebt === 0) {
+          origDebt = transaction.amount || 0;
+        }
+        const remainingDebt = Math.max(0, origDebt - totalPaidForTarget);
+
+        printPaymentReceiptPopup({
+          entityName,
+          roleTitle,
+          invoiceNo: transaction.invoiceNo,
+          originalDebtAmount: origDebt,
+          paidAmount: transaction.amount || 0,
+          remainingDebtAmount: remainingDebt,
+          date: transaction.date,
+          description: transaction.description
+        });
+        return;
+      } catch (err) {
+        console.error('Error fetching details for receipt:', err);
+      }
+    }
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
     let typeLabel = '';
     if (transaction.type.includes('debt')) typeLabel = 'قەرز';
     if (transaction.type.includes('paid')) typeLabel = 'واسڵکراو';

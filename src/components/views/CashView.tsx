@@ -77,14 +77,18 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
         await addDoc(collection(db, collectionName), docData);
       }
 
-      await addDoc(collection(db, 'transactions'), {
+      const trnData: any = {
         type,
         amount: Number(amount),
         description,
         relatedEntityId, // Name of the shop/person
-        invoiceNo: invoiceNo.trim() || undefined,
         date: Date.now()
-      });
+      };
+      if (invoiceNo.trim()) {
+        trnData.invoiceNo = invoiceNo.trim();
+      }
+
+      await addDoc(collection(db, 'transactions'), trnData);
       setAmount('');
       setDescription('');
       setInvoiceNo('');
