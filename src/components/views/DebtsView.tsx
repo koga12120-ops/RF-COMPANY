@@ -4,8 +4,9 @@ import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
-import { Plus, Check, Trash2, Printer, FileText, X, Calendar, Search, CreditCard, CheckCircle2, TrendingDown, Clock, ArrowDownLeft } from 'lucide-react';
+import { Plus, Check, Trash2, Printer, FileText, X, Calendar, Search, CreditCard, CheckCircle2, TrendingDown, Clock, ArrowDownLeft, DollarSign } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
+import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
 import { printStatementPopup } from '../../lib/statementPrinter';
 
 export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }: { type?: 'debt' | 'company_debt', targetName?: string }) {
@@ -13,9 +14,11 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
   const [paidDebts, setPaidDebts] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingDebt, setDeletingDebt] = useState<Transaction | null>(null);
-  const [payingDebt, setPayingDebt] = useState<Transaction | null>(null);
-  const [payAmountInput, setPayAmountInput] = useState<string>('');
-  const [isProcessingPay, setIsProcessingPay] = useState(false);
+
+  // Pay Modal States
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [payModalDebt, setPayModalDebt] = useState<Transaction | null>(null);
+  const [payModalCompany, setPayModalCompany] = useState<string>('');
 
   // Filters
   const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | 'this_week' | 'this_month' | 'custom_day' | 'range'>('all');
@@ -124,53 +127,6 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
       });
     } catch (error) {
       console.error(error);
-    }
-  };
-
-
-  const confirmPayDebt = async () => {
-    if (!payingDebt) return;
-    const num = Number(payAmountInput);
-    if (isNaN(num) || num <= 0) {
-      alert('تکایە بڕێکی دروست بنووسە');
-      return;
-    }
-    setIsProcessingPay(true);
-    try {
-      const isPaidType = type === 'debt' ? 'paid_debt' : 'company_paid_debt';
-      
-      if (num >= payingDebt.amount) {
-        // تەواوی قەرزەکە دراوەتەوە: جۆری تۆمارە ئەسڵییەکە دەگۆڕین بۆ واسڵکراو (paid_debt) تا لە لیستی قەرزە ماوەکان لابرێت
-        await updateDoc(doc(db, 'transactions', payingDebt.id), {
-          type: isPaidType,
-          amount: num,
-          date: Date.now(),
-          description: `دانەوەی تەواوی قەرزی: ${payingDebt.description}`
-        });
-      } else {
-        // بەشێکی قەرزەکە دراوەتەوە: 
-        // 1. بڕی قەرزی ئەسڵی کەمدەکەینەوە بەپێی بڕی دراوە تا لە لیستەکە کەم ببێتەوە
-        const remainingAmount = payingDebt.amount - num;
-        await updateDoc(doc(db, 'transactions', payingDebt.id), {
-          amount: remainingAmount
-        });
-
-        // 2. تۆمارێکی نوێ بۆ بڕی واسڵکراو لە قەرزەکە زیاد دەکەین
-        await addDoc(collection(db, 'transactions'), {
-          type: isPaidType,
-          amount: num,
-          date: Date.now(),
-          description: `دانەوەی بەشێک لە قەرزی: ${payingDebt.description}`,
-          relatedEntityId: payingDebt.relatedEntityId || ''
-        });
-      }
-      
-      setPayingDebt(null);
-    } catch (error) {
-      console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی واسڵکردنی پارە');
-    } finally {
-      setIsProcessingPay(false);
     }
   };
 
@@ -353,23 +309,37 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
             <span className="font-bold text-slate-800 text-sm">فلتەری بەروار و گەڕان</span>
           </div>
           
-          <div className="w-full md:w-72 relative">
-            <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-            <input
-              type="text"
-              placeholder={`گەڕان بەپێی ناوی ${targetName} یان وردەکاری...`}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-3 pr-9 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none"
-            />
-            {searchQuery && (
-              <button 
-                onClick={() => setSearchQuery('')}
-                className="absolute left-2.5 top-2.5 text-slate-400 hover:text-slate-600"
-              >
-                <X size={14} />
-              </button>
-            )}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+            <button
+              onClick={() => {
+                setPayModalDebt(null);
+                setPayModalCompany('');
+                setIsPayModalOpen(true);
+              }}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
+            >
+              <CheckCircle2 size={16} />
+              <span>دانەوەی قەرز (بەپێی وەسڵ یان بڕی پارە)</span>
+            </button>
+
+            <div className="w-full sm:w-64 relative">
+              <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+              <input
+                type="text"
+                placeholder={`گەڕان بەپێی ناوی ${targetName} یان وردەکاری...`}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-3 pr-9 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none"
+              />
+              {searchQuery && (
+                <button 
+                  onClick={() => setSearchQuery('')}
+                  className="absolute left-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -644,11 +614,12 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => {
-                            setPayingDebt(debt);
-                            setPayAmountInput(debt.amount.toString());
+                            setPayModalDebt(debt);
+                            setPayModalCompany(debt.relatedEntityId || '');
+                            setIsPayModalOpen(true);
                           }}
                           className="p-1.5 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition"
-                          title="پاردانەوە"
+                          title="دانەوەی قەرز (بە وەسڵ یان بڕی دیاریکراو)"
                         >
                           <Check size={16} />
                         </button>
@@ -705,70 +676,18 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
       />
 
       {/* Pay Debt Modal */}
-      {payingDebt && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-150" dir="rtl">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-green-50">
-              <h3 className="font-bold text-green-800 text-base flex items-center gap-2">
-                <Check className="text-green-600" size={20} />
-                دانەوەی قەرز (واسڵکردن)
-              </h3>
-              <button 
-                onClick={() => setPayingDebt(null)} 
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
-                disabled={isProcessingPay}
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-sm space-y-1.5">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">{targetName}:</span>
-                  <span className="font-bold text-slate-800">{payingDebt.relatedEntityId || '-'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">کۆی قەرز:</span>
-                  <span className="font-bold text-amber-600 font-mono" dir="ltr">{payingDebt.amount.toLocaleString()} د.ع</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">بڕی واسڵکراو (د.ع):</label>
-                <input
-                  type="number"
-                  dir="ltr"
-                  value={payAmountInput}
-                  onChange={(e) => setPayAmountInput(e.target.value)}
-                  className="w-full p-3 border border-slate-300 rounded-xl font-bold font-mono text-lg focus:ring-2 focus:ring-green-500 focus:outline-none"
-                  placeholder="بڕی پارە بنووسە"
-                  autoFocus
-                />
-              </div>
-
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={confirmPayDebt}
-                  disabled={isProcessingPay}
-                  className="flex-1 py-2.5 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
-                >
-                  <Check size={18} />
-                  {isProcessingPay ? 'تۆمار دەکرێت...' : 'واسڵکردن'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPayingDebt(null)}
-                  disabled={isProcessingPay}
-                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
-                >
-                  پاشگەزبوونەوە
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <PayCompanyDebtModal
+        isOpen={isPayModalOpen}
+        onClose={() => {
+          setIsPayModalOpen(false);
+          setPayModalDebt(null);
+          setPayModalCompany('');
+        }}
+        initialCompany={payModalCompany}
+        initialDebt={payModalDebt}
+        type={type}
+        targetName={targetName}
+      />
     </div>
   );
 }

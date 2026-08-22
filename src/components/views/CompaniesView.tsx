@@ -3,9 +3,10 @@ import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, order
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Company, Item } from '../../types';
-import { Building2, Plus, Edit2, Trash2, History, X, Check } from 'lucide-react';
+import { Building2, Plus, Edit2, Trash2, History, X, Check, CheckCircle2 } from 'lucide-react';
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
+import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
 import { updateItemAndSyncEverywhere } from '../../lib/invoiceSync';
 
 export default function CompaniesView() {
@@ -13,6 +14,10 @@ export default function CompaniesView() {
   const [loading, setLoading] = useState(true);
   const [deletingCompany, setDeletingCompany] = useState<Company | null>(null);
   
+  // Pay Company Debt Modal State
+  const [payingCompany, setPayingCompany] = useState<Company | null>(null);
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+
   // Form states
   const [name, setName] = useState('');
   const [location, setLocation] = useState('');
@@ -204,6 +209,16 @@ export default function CompaniesView() {
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-2">
                         <button
+                          onClick={() => {
+                            setPayingCompany(company);
+                            setIsPayModalOpen(true);
+                          }}
+                          className="text-green-600 font-bold px-2 py-1 hover:bg-green-50 rounded transition flex items-center gap-1"
+                          title="دانەوەی قەرز (بە وەسڵ یان بڕی دیاریکراو)"
+                        >
+                          <CheckCircle2 size={16} /> دانەوەی قەرز
+                        </button>
+                        <button
                           onClick={() => setSelectedCompany(company)}
                           className="text-blue-600 font-bold px-2 py-1 hover:bg-blue-50 rounded transition flex items-center gap-1"
                         >
@@ -386,6 +401,18 @@ export default function CompaniesView() {
           </div>
         </div>
       )}
+
+      {/* Pay Company Debt Modal */}
+      <PayCompanyDebtModal
+        isOpen={isPayModalOpen}
+        onClose={() => {
+          setIsPayModalOpen(false);
+          setPayingCompany(null);
+        }}
+        initialCompany={payingCompany?.name || ''}
+        type="company_debt"
+        targetName="کۆمپانیا"
+      />
     </div>
   );
 }
