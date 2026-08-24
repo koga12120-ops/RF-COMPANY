@@ -18,10 +18,12 @@ import {
   TrendingDown, 
   Printer, 
   FileText,
-  Clock
+  Clock,
+  Check
 } from 'lucide-react';
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
+import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
 import { printStatementPopup } from '../../lib/statementPrinter';
 
 export default function MarketsView() {
@@ -31,6 +33,10 @@ export default function MarketsView() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingMarket, setDeletingMarket] = useState<Market | null>(null);
+
+  // Pay Debt Modal State
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [payModalMarket, setPayModalMarket] = useState<Market | null>(null);
 
   // Form states
   const [name, setName] = useState('');
@@ -447,6 +453,17 @@ export default function MarketsView() {
                       <td className="px-4 py-4">
                         <div className="flex items-center justify-center gap-1.5">
                           <button
+                            onClick={() => {
+                              setPayModalMarket(market);
+                              setIsPayModalOpen(true);
+                            }}
+                            className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg transition flex items-center gap-1 text-xs font-bold"
+                            title="دانەوەی قەرز"
+                          >
+                            <CreditCard size={15} />
+                            <span>دانەوەی قەرز</span>
+                          </button>
+                          <button
                             onClick={() => setSelectedMarket(market)}
                             className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg transition flex items-center gap-1 text-xs font-bold"
                             title="حسابات و مێژووی مامەڵەکان"
@@ -532,6 +549,16 @@ export default function MarketsView() {
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setPayModalMarket(selectedMarket);
+                    setIsPayModalOpen(true);
+                  }}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
+                >
+                  <CreditCard size={15} />
+                  <span>دانەوەی قەرز</span>
+                </button>
                 <button
                   onClick={() => printStatement(selectedMarket.name)}
                   className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
@@ -825,6 +852,17 @@ export default function MarketsView() {
           </div>
         </div>
       )}
+      {/* Pay Debt Modal */}
+      <PayCompanyDebtModal
+        isOpen={isPayModalOpen}
+        onClose={() => {
+          setIsPayModalOpen(false);
+          setPayModalMarket(null);
+        }}
+        initialCompany={payModalMarket?.name || ''}
+        type="debt"
+        targetName="مارکێت"
+      />
     </div>
   );
 }

@@ -242,7 +242,7 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
     const snap = await getDocs(q);
     const allTrans: Transaction[] = [];
     snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
-    printStatementPopup(entityName, allTrans);
+    printStatementPopup(entityName, allTrans, { isCompany: type.includes('company'), roleTitle: targetName });
   };
   const isDateInFilter = (timestamp: number) => {
     if (filterPeriod === 'all') return true;

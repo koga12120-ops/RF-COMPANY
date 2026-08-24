@@ -28,6 +28,7 @@ export default function LedgerView() {
   const [description, setDescription] = useState('');
   const [dealFilterType, setDealFilterType] = useState<'all' | 'company' | 'market' | 'warehouse'>('all');
   const [dealFilterName, setDealFilterName] = useState('all');
+  const [dealFilterRep, setDealFilterRep] = useState('all');
 
   useEffect(() => {
     const qTrans = query(collection(db, 'transactions'), orderBy('date', 'desc'));
@@ -191,13 +192,25 @@ export default function LedgerView() {
     }
     
     if (dealFilterName !== 'all' && dealFilterName.trim() !== '') {
-       list = list.filter(d => d.entityName.includes(dealFilterName));
+       list = list.filter(d => d.entityName?.includes(dealFilterName));
+    }
+
+    if (dealFilterRep !== 'all' && dealFilterRep.trim() !== '') {
+       list = list.filter(d => d.personName === dealFilterRep || d.entityName === dealFilterRep);
     }
 
     list.sort((a, b) => b.date - a.date);
     return list;
-  }, [fTrans, fOrders, fCashvan, dealFilterType, dealFilterName]);
+  }, [fTrans, fOrders, fCashvan, dealFilterType, dealFilterName, dealFilterRep]);
   
+  // Get unique reps and cashvans for classification
+  const uniqueReps = useMemo(() => {
+    const repsSet = new Set<string>();
+    fOrders.forEach(o => { if (o.repName) repsSet.add(o.repName.trim()); });
+    fCashvan.forEach(c => { if (c.cashvanName) repsSet.add(c.cashvanName.trim()); });
+    return Array.from(repsSet).filter(Boolean).sort();
+  }, [fOrders, fCashvan]);
+
   // Get unique entities for the name dropdown
   const uniqueEntities = useMemo(() => {
     const entities = new Map<string, string>();
@@ -619,9 +632,20 @@ export default function LedgerView() {
               <ShoppingBag size={18} />
               مامەڵەکان
             </h4>
-            <div className="flex gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
               <select
-                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm flex-1 sm:flex-none"
+                className="px-3 py-1.5 border border-indigo-200 bg-indigo-50/40 font-bold text-indigo-900 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
+                value={dealFilterRep}
+                onChange={(e) => setDealFilterRep(e.target.value)}
+                title="پۆلێنکردن بەپێی مەندووب / کاشڤان"
+              >
+                <option value="all">هەموو مەندووبەکان</option>
+                {uniqueReps.map(rep => (
+                  <option key={rep} value={rep}>{rep}</option>
+                ))}
+              </select>
+              <select
+                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
                 value={dealFilterType}
                 onChange={(e) => {
                   setDealFilterType(e.target.value as any);
@@ -633,7 +657,7 @@ export default function LedgerView() {
                 <option value="market">مارکێت/کۆگا</option>
               </select>
               <select
-                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm flex-1 sm:flex-none"
+                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
                 value={dealFilterName}
                 onChange={(e) => setDealFilterName(e.target.value)}
               >

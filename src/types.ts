@@ -61,13 +61,17 @@ export interface StockHistory {
 
 export interface Transaction {
   id: string;
-  type: 'income' | 'expense' | 'debt' | 'cash' | 'paid_debt' | 'company_debt' | 'company_cash' | 'company_paid_debt' | 'return_expense';
+  type: 'income' | 'expense' | 'debt' | 'cash' | 'paid_debt' | 'company_debt' | 'company_cash' | 'company_paid_debt' | 'return_expense' | 'market_debt' | 'market_paid_debt';
   amount: number;
   date: number; // timestamp
   description: string;
   relatedEntityId?: string; // e.g. market name or person name
   profitReversal?: number;
   invoiceNo?: string; // ژمارەی دەفتەر وەسڵ
+  collectorName?: string; // مەندووب، کاشڤان، یان کەسی وەرگر
+  repName?: string;
+  cashvanName?: string;
+  receivedBy?: string;
 }
 
 export interface SalesRep {
@@ -93,6 +97,7 @@ export interface OrderItem {
 
 export interface Order {
   id: string;
+  invoiceId?: string;
   repName: string;
   marketName: string;
   location: string;

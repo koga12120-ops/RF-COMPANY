@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, deleteDoc, doc, updateDoc, setDoc, addDoc, getDocs, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, deleteDoc, doc, setDoc, addDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { SalesRep } from '../../types';
@@ -14,12 +14,9 @@ import {
   AlertTriangle, 
   X, 
   Save, 
-  Phone, 
   Mail, 
-  Lock,
   Copy, 
   Check,
-  Truck,
   Plus,
   Search,
   Sparkles
@@ -28,17 +25,15 @@ import ConfirmModal from '../common/ConfirmModal';
 import { renameRepOrCashvan } from '../../lib/syncHelper';
 
 export default function RepsView() {
-  const [activeTab, setActiveTab] = useState<'reps' | 'cashvans'>('reps');
   const [reps, setReps] = useState<SalesRep[]>([]);
-  const [cashvans, setCashvans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
   // Delete modal
-  const [deletingItem, setDeletingItem] = useState<{ id: string; name: string; phone?: string; accessCode?: string; totalSales?: number; uid?: string; type: 'rep' | 'cashvan' } | null>(null);
+  const [deletingItem, setDeletingItem] = useState<{ id: string; name: string; phone?: string; accessCode?: string; totalSales?: number; uid?: string } | null>(null);
 
-  // Edit Rep / Cashvan Info modal
-  const [editingItem, setEditingItem] = useState<{ id: string; name: string; phone?: string; uid?: string; type: 'rep' | 'cashvan' } | null>(null);
+  // Edit Rep Info modal
+  const [editingItem, setEditingItem] = useState<{ id: string; name: string; phone?: string; uid?: string } | null>(null);
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -51,7 +46,7 @@ export default function RepsView() {
   const [isSavingNew, setIsSavingNew] = useState(false);
 
   // Manage PIN Code modal
-  const [codeModalItem, setCodeModalItem] = useState<{ id: string; name: string; phone?: string; email?: string; accessCode?: string; uid?: string; type: 'rep' | 'cashvan' } | null>(null);
+  const [codeModalItem, setCodeModalItem] = useState<{ id: string; name: string; phone?: string; email?: string; accessCode?: string; uid?: string } | null>(null);
   const [inputCode, setInputCode] = useState('');
   const [isProcessingCode, setIsProcessingCode] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -63,7 +58,6 @@ export default function RepsView() {
   };
 
   useEffect(() => {
-    // 1. Listen to reps
     const qReps = query(collection(db, 'reps'));
     const unsubReps = onSnapshot(
       qReps,
@@ -85,26 +79,8 @@ export default function RepsView() {
       }
     );
 
-    // 2. Listen to cashvans
-    const qCVs = query(collection(db, 'cashvans'));
-    const unsubCVs = onSnapshot(
-      qCVs,
-      (snapshot) => {
-        const cvsData: any[] = [];
-        snapshot.forEach((docSnap) => {
-          cvsData.push({ id: docSnap.id, ...docSnap.data() });
-        });
-        cvsData.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        setCashvans(cvsData);
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'cashvans');
-      }
-    );
-
     return () => {
       unsubReps();
-      unsubCVs();
     };
   }, []);
 
@@ -113,87 +89,52 @@ export default function RepsView() {
     setInputCode(randomCode);
   };
 
-  const handleOpenCodeModal = (item: any, type: 'rep' | 'cashvan') => {
-    setCodeModalItem({ ...item, type });
+  const handleOpenCodeModal = (item: any) => {
+    setCodeModalItem({ ...item });
     setInputCode(item.accessCode || '');
   };
 
   const handleSavePinCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!codeModalItem) return;
-
-    const eastern = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-    const persian = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
-    let normalized = inputCode.trim();
-    for (let i = 0; i < 10; i++) {
-      normalized = normalized.replace(new RegExp(eastern[i], 'g'), i.toString());
-      normalized = normalized.replace(new RegExp(persian[i], 'g'), i.toString());
-    }
-
-    if (normalized.length !== 5 || !/^\d{5}$/.test(normalized)) {
-      alert('تکایە کۆدێکی ٥ ژمارەیی بنووسە (بۆ نموونە: 48291)');
+    if (!inputCode || inputCode.length !== 5) {
+      alert('تکایە کۆدێکی دروستی ٥ ژمارەیی بنووسە');
       return;
     }
 
     setIsProcessingCode(true);
     try {
-      const targetCol = codeModalItem.type === 'rep' ? 'reps' : 'cashvans';
-      const userRole = codeModalItem.type === 'rep' ? 'sales_rep' : 'cashvan';
-      const itemUid = codeModalItem.uid || codeModalItem.id;
+      const trimmedCode = inputCode.trim();
 
-      // 1. Update collection document with new code and timestamp
-      await updateDoc(doc(db, targetCol, codeModalItem.id), {
-        accessCode: normalized,
-        pinChangedAt: Date.now(),
-        forceReauth: true,
+      // 1. Update in reps collection
+      await setDoc(doc(db, 'reps', codeModalItem.id), {
+        accessCode: trimmedCode,
         status: 'active'
-      });
+      }, { merge: true });
 
-      // 2. Find and update all corresponding user document(s) to immediately terminate active session
-      const userUidsToReset = new Set<string>();
-      if (itemUid) userUidsToReset.add(itemUid);
-      if (codeModalItem.id) userUidsToReset.add(codeModalItem.id);
+      // 2. Set or update credentials in users collection
+      const userUid = codeModalItem.uid || codeModalItem.id;
+      await setDoc(doc(db, 'users', userUid), {
+        role: 'sales_rep',
+        accessCode: trimmedCode,
+        status: 'active',
+        name: codeModalItem.name,
+        phone: codeModalItem.phone || '',
+        updatedAt: Date.now()
+      }, { merge: true });
 
-      try {
-        if (codeModalItem.email) {
-          const uSnap = await getDocs(query(collection(db, 'users'), where('email', '==', codeModalItem.email)));
-          uSnap.forEach(d => userUidsToReset.add(d.id));
-        }
-        if (codeModalItem.name) {
-          const uSnap = await getDocs(query(collection(db, 'users'), where('name', '==', codeModalItem.name)));
-          uSnap.forEach(d => userUidsToReset.add(d.id));
-        }
-      } catch (err) {
-        console.error("Error finding matching users:", err);
-      }
-
-      // Update users documents with role: null and forceReauth: true so open sessions close instantly
-      for (const uId of Array.from(userUidsToReset)) {
-        await setDoc(doc(db, 'users', uId), {
-          role: null, // Forces back to PinEntry on active client
-          accessCode: normalized,
-          forceReauth: true,
-          pinChangedAt: Date.now(),
-          status: 'active',
-          isDeleted: false,
-          name: codeModalItem.name || '',
-          phone: codeModalItem.phone || ''
-        }, { merge: true });
-      }
-
-      showToast(`کۆدی ئەمنی بۆ (${codeModalItem.name}) پاشەکەوت کرا و سیستەمەکە داخرایەوە تا بە کۆدی تازە بچێتە ژوورەوە.`);
+      showToast(`کۆدی چوونەژوورەوە بۆ مەندووب (${codeModalItem.name}) بە سەرکەوتوویی جێگیر کرا: [${trimmedCode}]`);
       setCodeModalItem(null);
-      setInputCode('');
     } catch (error) {
-      console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی پاشەکەوتکردنی کۆد');
+      console.error('Error setting PIN code:', error);
+      alert('هەڵەیەک ڕوویدا لە کاتی پاشەکەوتکردنی کۆدی ئەمنی');
     } finally {
       setIsProcessingCode(false);
     }
   };
 
-  const handleEditInfo = (item: any, type: 'rep' | 'cashvan') => {
-    setEditingItem({ id: item.id, name: item.name || '', phone: item.phone || '', uid: item.uid, type });
+  const handleEditInfo = (item: any) => {
+    setEditingItem(item);
     setEditName(item.name || '');
     setEditPhone(item.phone || '');
   };
@@ -208,21 +149,31 @@ export default function RepsView() {
       const newNameTrimmed = editName.trim();
       const newPhoneTrimmed = editPhone.trim();
 
-      // Call global multi-table sync helper to update everywhere:
-      // reps, cashvans, users, orders, cashvan_sales, cashvan_transfers, cashvan_inventory, requisitions, transactions!
-      await renameRepOrCashvan(oldName, newNameTrimmed, {
-        entityId: editingItem.id,
-        uid: editingItem.uid,
-        phone: newPhoneTrimmed,
-        isCashvan: editingItem.type === 'cashvan',
-        isRep: editingItem.type === 'rep'
-      });
+      // 1. Sync name globally across all system records if name was modified
+      if (oldName !== newNameTrimmed) {
+        await renameRepOrCashvan(oldName, newNameTrimmed, { isRep: true, entityId: editingItem.id, phone: newPhoneTrimmed });
+      }
 
-      showToast(`ناوی (${oldName}) بە سەرکەوتوویی گۆڕدرا بۆ (${newNameTrimmed}) لە سەرانسەری سیستەم، کۆگا، وەسڵ و پسوڵەکاندا.`);
+      // 2. Update rep doc
+      await setDoc(doc(db, 'reps', editingItem.id), {
+        name: newNameTrimmed,
+        phone: newPhoneTrimmed
+      }, { merge: true });
+
+      // 3. Update user doc if exists
+      const userUid = editingItem.uid || editingItem.id;
+      if (userUid) {
+        await setDoc(doc(db, 'users', userUid), {
+          name: newNameTrimmed,
+          phone: newPhoneTrimmed
+        }, { merge: true });
+      }
+
+      showToast(`زانیارییەکانی مەندووب (${newNameTrimmed}) لە سەرانسەری سیستەمدا نوێکرایەوە.`);
       setEditingItem(null);
     } catch (error) {
       console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی نوێکردنەوەی زانیاری');
+      alert('هەڵەیەک ڕوویدا لە کاتی پاشەکەوتکردنی زانیاری');
     } finally {
       setIsSavingEdit(false);
     }
@@ -234,14 +185,12 @@ export default function RepsView() {
 
     setIsSavingNew(true);
     try {
-      const targetCol = activeTab === 'reps' ? 'reps' : 'cashvans';
-      const roleName = activeTab === 'reps' ? 'sales_rep' : 'cashvan';
       const trimmedN = newName.trim();
       const trimmedP = newPhone.trim();
       const trimmedC = newCode.trim();
 
       // Create in collection
-      const docRef = await addDoc(collection(db, targetCol), {
+      const docRef = await addDoc(collection(db, 'reps'), {
         name: trimmedN,
         phone: trimmedP,
         accessCode: trimmedC || null,
@@ -254,7 +203,7 @@ export default function RepsView() {
       // If code was entered, create user record as well
       if (trimmedC) {
         await setDoc(doc(db, 'users', docRef.id), {
-          role: roleName,
+          role: 'sales_rep',
           accessCode: trimmedC,
           status: 'active',
           name: trimmedN,
@@ -263,7 +212,7 @@ export default function RepsView() {
         }, { merge: true });
       }
 
-      showToast(`${activeTab === 'reps' ? 'مەندووب' : 'کاشڤان'} (${trimmedN}) بە سەرکەوتوویی زیادکرا.`);
+      showToast(`مەندووب (${trimmedN}) بە سەرکەوتوویی زیادکرا.`);
       setShowAddModal(false);
       setNewName('');
       setNewPhone('');
@@ -279,11 +228,10 @@ export default function RepsView() {
   const confirmDelete = async () => {
     if (!deletingItem) return;
     try {
-      const targetCol = deletingItem.type === 'rep' ? 'reps' : 'cashvans';
       const itemUid = deletingItem.uid || deletingItem.id;
 
       // 1. Remove from collection
-      await deleteDoc(doc(db, targetCol, deletingItem.id));
+      await deleteDoc(doc(db, 'reps', deletingItem.id));
 
       // 2. Disable user access
       if (itemUid) {
@@ -295,13 +243,13 @@ export default function RepsView() {
           bannedAt: Date.now()
         }, { merge: true });
 
-        // Remove schedule if rep
+        // Remove schedule
         try {
           await deleteDoc(doc(db, 'schedules', itemUid));
         } catch (e) {}
       }
 
-      showToast(`(${deletingItem.name}) سڕدرایەوە و دەستڕاگەیشتنی بە سیستەم پەک خرا.`);
+      showToast(`مەندووب (${deletingItem.name}) سڕدرایەوە و دەستڕاگەیشتنی بە سیستەم پەک خرا.`);
       setDeletingItem(null);
     } catch (error) {
       console.error(error);
@@ -315,8 +263,7 @@ export default function RepsView() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const currentList = activeTab === 'reps' ? reps : cashvans;
-  const filteredList = currentList.filter(item => {
+  const filteredList = reps.filter(item => {
     const nameMatch = (item.name || '').toLowerCase().includes(searchTerm.toLowerCase());
     const phoneMatch = (item.phone || '').includes(searchTerm);
     return nameMatch || phoneMatch;
@@ -336,7 +283,7 @@ export default function RepsView() {
       )}
 
       {/* Header Info Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
             <Users size={24} />
@@ -348,21 +295,11 @@ export default function RepsView() {
         </div>
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-            <Truck size={24} />
-          </div>
-          <div>
-            <div className="text-xs text-slate-500 font-medium">کۆی کاشڤانەکان</div>
-            <div className="text-2xl font-bold text-blue-600 font-mono mt-0.5">{cashvans.length}</div>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
             <ShieldCheck size={24} />
           </div>
           <div>
-            <div className="text-xs text-slate-500 font-medium">مەندووبی خاوەن کۆد</div>
+            <div className="text-xs text-slate-500 font-medium">مەندووبی خاوەن کۆد (چالاک)</div>
             <div className="text-2xl font-bold text-emerald-600 font-mono mt-0.5">{activeRepsCount}</div>
           </div>
         </div>
@@ -380,31 +317,13 @@ export default function RepsView() {
 
       {/* Main Container */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
-        {/* Top bar with tabs and search */}
+        {/* Top bar with search and add button */}
         <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-50">
-          <div className="flex items-center gap-2 bg-slate-200/70 p-1 rounded-xl">
-            <button
-              onClick={() => setActiveTab('reps')}
-              className={`px-4 py-2 rounded-lg font-bold text-xs transition flex items-center gap-2 ${
-                activeTab === 'reps' 
-                  ? 'bg-white text-indigo-600 shadow-xs' 
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Users size={16} />
-              <span>مەندووبەکان ({reps.length})</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('cashvans')}
-              className={`px-4 py-2 rounded-lg font-bold text-xs transition flex items-center gap-2 ${
-                activeTab === 'cashvans' 
-                  ? 'bg-white text-blue-600 shadow-xs' 
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Truck size={16} />
-              <span>کاشڤانەکان ({cashvans.length})</span>
-            </button>
+          <div className="flex items-center gap-2">
+            <h2 className="font-bold text-slate-800 text-base flex items-center gap-2">
+              <Users size={20} className="text-indigo-600" />
+              <span>لیستی مەندووبەکان ({reps.length})</span>
+            </h2>
           </div>
 
           <div className="flex items-center gap-3 w-full md:w-auto">
@@ -412,7 +331,7 @@ export default function RepsView() {
               <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
               <input
                 type="text"
-                placeholder={`گەڕان لە ${activeTab === 'reps' ? 'مەندووبەکان' : 'کاشڤانەکان'}...`}
+                placeholder="گەڕان لە مەندووبەکان..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-3 pr-9 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
@@ -429,7 +348,7 @@ export default function RepsView() {
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-xs"
             >
               <Plus size={16} />
-              <span>{activeTab === 'reps' ? 'زیادکردنی مەندووب' : 'زیادکردنی کاشڤان'}</span>
+              <span>زیادکردنی مەندووب</span>
             </button>
           </div>
         </div>
@@ -438,7 +357,7 @@ export default function RepsView() {
         <div className="bg-indigo-50/60 border-b border-indigo-100 px-4 py-2.5 text-xs text-indigo-900 flex items-center gap-2">
           <Sparkles size={16} className="text-indigo-600 shrink-0" />
           <span>
-            <strong>تێبینی سیستەم:</strong> کاتێک ناوی مەندووب یان کاشڤانێک دەگۆڕیت، ناوەکە ڕاستەوخۆ لای مەندووب، سەرجەم وەسڵ و پسوڵەکان، ئۆردەرەکان، و کۆگا بە شێوەی ئۆتۆماتیک نوێ دەبێتەوە.
+            <strong>تێبینی سیستەم:</strong> کاتێک ناوی مەندووبێک دەگۆڕیت، ناوەکە ڕاستەوخۆ لای مەندووب، سەرجەم وەسڵ و پسوڵەکان، ئۆردەرەکان، و کۆگا بە شێوەی ئۆتۆماتیک نوێ دەبێتەوە.
           </span>
         </div>
 
@@ -449,7 +368,7 @@ export default function RepsView() {
             <table className="w-full text-right">
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-100">
                 <tr>
-                  <th className="px-5 py-3.5 font-semibold">{activeTab === 'reps' ? 'ناوی مەندووب' : 'ناوی کاشڤان'}</th>
+                  <th className="px-5 py-3.5 font-semibold">ناوی مەندووب</th>
                   <th className="px-5 py-3.5 font-semibold">تەلەفۆن</th>
                   <th className="px-5 py-3.5 font-semibold">دۆخ</th>
                   <th className="px-5 py-3.5 font-semibold">کۆدی ئەمنی چوونەژوورەوە</th>
@@ -466,12 +385,8 @@ export default function RepsView() {
                     <tr key={item.id} className="hover:bg-slate-50/70 transition">
                       <td className="px-5 py-4">
                         <div className="font-bold text-slate-900 flex items-center gap-2">
-                          {activeTab === 'reps' ? (
-                            <Users size={16} className="text-indigo-600" />
-                          ) : (
-                            <Truck size={16} className="text-blue-600" />
-                          )}
-                          <span>{item.name || (activeTab === 'reps' ? 'مەندووبی بێ ناو' : 'کاشڤانی بێ ناو')}</span>
+                          <Users size={16} className="text-indigo-600" />
+                          <span>{item.name || 'مەندووبی بێ ناو'}</span>
                         </div>
                         {item.email && (
                           <div className="text-xs text-slate-400 font-mono mt-0.5 flex items-center gap-1" dir="ltr">
@@ -514,7 +429,7 @@ export default function RepsView() {
                           </div>
                         ) : (
                           <button
-                            onClick={() => handleOpenCodeModal(item, activeTab === 'reps' ? 'rep' : 'cashvan')}
+                            onClick={() => handleOpenCodeModal(item)}
                             className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-2xs"
                           >
                             <KeyRound size={14} />
@@ -530,7 +445,7 @@ export default function RepsView() {
                       <td className="px-5 py-4 text-center">
                         <div className="flex items-center justify-center gap-1.5">
                           <button
-                            onClick={() => handleOpenCodeModal(item, activeTab === 'reps' ? 'rep' : 'cashvan')}
+                            onClick={() => handleOpenCodeModal(item)}
                             className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg transition flex items-center gap-1"
                             title="دانان یان گۆڕینی کۆد"
                           >
@@ -539,7 +454,7 @@ export default function RepsView() {
                           </button>
 
                           <button
-                            onClick={() => handleEditInfo(item, activeTab === 'reps' ? 'rep' : 'cashvan')}
+                            onClick={() => handleEditInfo(item)}
                             className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition"
                             title="گۆڕینی ناو و زانیاری لە هەموو سیستەم"
                           >
@@ -547,7 +462,7 @@ export default function RepsView() {
                           </button>
 
                           <button
-                            onClick={() => setDeletingItem({ ...item, type: activeTab === 'reps' ? 'rep' : 'cashvan' })}
+                            onClick={() => setDeletingItem({ ...item })}
                             className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
                             title="سڕینەوە"
                           >
@@ -563,10 +478,10 @@ export default function RepsView() {
                   <tr>
                     <td colSpan={6} className="text-center py-12 text-slate-500">
                       <div className="flex flex-col items-center justify-center gap-2">
-                        {activeTab === 'reps' ? <Users size={32} className="text-slate-300" /> : <Truck size={32} className="text-slate-300" />}
-                        <span>هیچ تۆمارێک نەدۆزرایەوە</span>
+                        <Users size={32} className="text-slate-300" />
+                        <span>هیچ مەندووبێک نەدۆزرایەوە</span>
                         <span className="text-xs text-slate-400">
-                          دەتوانیت بە دوگمەی سەرەوە ڕاستەوخۆ ناوی نوێ زیاد بکەیت.
+                          دەتوانیت بە دوگمەی سەرەوە ناوی نوێ زیاد بکەیت.
                         </span>
                       </div>
                     </td>
@@ -578,14 +493,14 @@ export default function RepsView() {
         )}
       </section>
 
-      {/* Add New Modal */}
+      {/* Add New Rep Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
               <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
                 <Plus className="text-indigo-600" size={20} />
-                {activeTab === 'reps' ? 'زیادکردنی مەندووبی نوێ' : 'زیادکردنی کاشڤانی نوێ'}
+                زیادکردنی مەندووبی نوێ
               </h3>
               <button 
                 onClick={() => setShowAddModal(false)} 
@@ -598,13 +513,11 @@ export default function RepsView() {
 
             <form onSubmit={handleAddNew} className="p-6 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {activeTab === 'reps' ? 'ناوی مەندووب *' : 'ناوی کاشڤان *'}
-                </label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی مەندووب *</label>
                 <input
                   type="text"
                   required
-                  placeholder={activeTab === 'reps' ? 'بۆ نموونە: مەندووب کاروان' : 'بۆ نموونە: کاشڤان ئاراس'}
+                  placeholder="بۆ نموونە: مەندووب کاروان"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
@@ -667,7 +580,7 @@ export default function RepsView() {
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
               <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
                 <KeyRound className="text-indigo-600" size={20} />
-                دانان و گۆڕینی کۆدی ئەمنی {codeModalItem.type === 'rep' ? 'مەندووب' : 'کاشڤان'}
+                دانان و گۆڕینی کۆدی ئەمنی مەندووب
               </h3>
               <button 
                 onClick={() => setCodeModalItem(null)} 
@@ -681,7 +594,7 @@ export default function RepsView() {
             <form onSubmit={handleSavePinCode} className="p-6 space-y-4">
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-1.5 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-slate-500">ناو:</span>
+                  <span className="text-slate-500">ناوی مەندووب:</span>
                   <span className="font-bold text-slate-800">{codeModalItem.name}</span>
                 </div>
                 {codeModalItem.phone && (
@@ -747,7 +660,7 @@ export default function RepsView() {
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
               <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
                 <Edit2 size={18} className="text-indigo-600" />
-                گۆڕینی ناوی {editingItem.type === 'rep' ? 'مەندووب' : 'کاشڤان'} لە سەرانسەری سیستەم
+                گۆڕینی ناوی مەندووب لە سەرانسەری سیستەم
               </h3>
               <button 
                 onClick={() => setEditingItem(null)} 
@@ -760,7 +673,7 @@ export default function RepsView() {
 
             <form onSubmit={handleSaveInfo} className="p-6 space-y-4">
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 leading-relaxed">
-                بە گۆڕینی ئەم ناوە، سیستەمەکە ڕاستەوخۆ ناوەکە لە <strong>سەرجەم وەسڵەکان، ئۆردەرەکان، فرۆشتنی کاشڤان، کۆگای کاشڤان، و حیسابات</strong> نوێ دەکاتەوە.
+                بە گۆڕینی ئەم ناوە، سیستەمەکە ڕاستەوخۆ ناوەکە لە <strong>سەرجەم وەسڵەکان، ئۆردەرەکان، و حیسابات</strong> نوێ دەکاتەوە.
               </div>
 
               <div>
@@ -814,7 +727,7 @@ export default function RepsView() {
         isOpen={!!deletingItem}
         onClose={() => setDeletingItem(null)}
         onConfirm={confirmDelete}
-        title={deletingItem?.type === 'rep' ? 'سڕینەوەی مەندووب' : 'سڕینەوەی کاشڤان'}
+        title="سڕینەوەی مەندووب"
         message={`ئایا دڵنیایت لە سڕینەوەی (${deletingItem?.name})؟ بە سڕینەوەی، دەستڕاگەیشتنی بە سیستەم ڕادەگیرێت.`}
         itemName={deletingItem?.name}
         details={deletingItem ? [

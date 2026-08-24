@@ -1,19 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, where, addDoc, updateDoc, doc, onSnapshot, query, orderBy, deleteDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { Order, Item, Role, Market } from '../../types';
-import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, UserCheck } from 'lucide-react';
-import { format } from 'date-fns';
+import { Order, Item, Role, Market, Transaction } from '../../types';
+import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, UserCheck, Calendar, FileText, CheckCircle2 } from 'lucide-react';
+import { format, startOfDay, endOfDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
+import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
+import { printDailyRepReceiptPopup } from '../../lib/statementPrinter';
 
 export default function OrdersView({ role }: { role: Role }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [reps, setReps] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
+
+  // Pay Debt Modal state for Mandoub
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [payTargetMarket, setPayTargetMarket] = useState('');
+
+  // Daily receipt filter state
+  const [dailyReceiptDate, setDailyReceiptDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [showDailyReceiptModal, setShowDailyReceiptModal] = useState(false);
 
   // New Order State
   const [showNewOrder, setShowNewOrder] = useState(false);
@@ -26,6 +37,15 @@ export default function OrdersView({ role }: { role: Role }) {
   // Search & Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [settlingOrder, setSettlingOrder] = useState<Order | null>(null);
+
+  // Filtered orders: for sales_rep, strictly their own orders so they never see or manage other reps' orders
+  const displayedOrders = useMemo(() => {
+    if (role === 'sales_rep') {
+      const activeRep = repName?.trim();
+      return orders.filter(o => o.repName === activeRep);
+    }
+    return orders;
+  }, [orders, role, repName]);
 
   // Auto-fill rep name for sales_rep and sync live with database
   useEffect(() => {
@@ -119,14 +139,98 @@ export default function OrdersView({ role }: { role: Role }) {
       }
     );
 
+    const qTrans = query(collection(db, 'transactions'));
+    const unsubTrans = onSnapshot(
+      qTrans,
+      (snapshot) => {
+        const transData: Transaction[] = [];
+        snapshot.forEach(doc => transData.push({ id: doc.id, ...doc.data() } as Transaction));
+        setTransactions(transData);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'transactions');
+      }
+    );
+
     return () => {
       unsubOrders();
       unsubItems();
       unsubMarkets();
       unsubReps();
       unsubCVs();
+      unsubTrans();
     };
   }, []);
+
+  // Compute live market debt map for quick balance lookups
+  const marketDebtMap = useMemo(() => {
+    const map = new Map<string, number>();
+    transactions.forEach(t => {
+      const entity = t.relatedEntityId?.trim();
+      if (!entity) return;
+      let key = entity;
+      for (const m of markets) {
+        if (m.name.trim().toLowerCase() === entity.toLowerCase()) {
+          key = m.name;
+          break;
+        }
+      }
+      const cur = map.get(key) || 0;
+      if (t.type === 'debt') map.set(key, cur + (t.amount || 0));
+      else if (t.type === 'paid_debt') map.set(key, Math.max(0, cur - (t.amount || 0)));
+    });
+    return map;
+  }, [transactions, markets]);
+
+  const handlePrintDailyReceipt = (dateStr: string) => {
+    const targetDate = dateStr ? new Date(dateStr) : new Date();
+    const dayStart = startOfDay(targetDate).getTime();
+    const dayEnd = endOfDay(targetDate).getTime();
+
+    // Sales by this rep or all reps if admin
+    const repSales = orders.filter(o => 
+      (role === 'sales_rep' ? (o.repName === repName) : (repName ? o.repName === repName : true)) &&
+      o.status !== 'deleted' &&
+      o.timestamp >= dayStart && o.timestamp <= dayEnd
+    ).map(o => ({
+      id: o.id,
+      marketName: o.marketName,
+      invoiceNo: o.id.slice(-6).toUpperCase(),
+      amount: o.totalAmount,
+      paymentType: o.paymentMethod === 'cash' ? 'نەقد' : 'قەرز'
+    }));
+
+    // Collections
+    const targetRep = repName?.trim();
+    const repCollections = transactions.filter(t => {
+      const isPaid = t.type === 'paid_debt' || t.type === 'market_paid_debt';
+      const isDate = t.date >= dayStart && t.date <= dayEnd;
+      if (!isPaid || !isDate) return false;
+
+      // If repName is not specified and user is admin, allow all
+      if (!targetRep && role === 'admin') return true;
+
+      // Otherwise, MUST match this specific rep
+      if (!targetRep) return false;
+      return t.collectorName === targetRep ||
+             t.repName === targetRep ||
+             (t.description && t.description.includes(targetRep));
+    }).map(t => ({
+      id: t.id,
+      marketName: t.relatedEntityId || 'مارکێت',
+      invoiceNo: t.invoiceNo,
+      amount: t.amount,
+      notes: t.description
+    }));
+
+    printDailyRepReceiptPopup({
+      repName: repName || 'مەندووب',
+      roleTitle: 'مەندووب',
+      date: targetDate.getTime(),
+      sales: repSales,
+      collections: repCollections
+    });
+  };
 
   const calcPrice = (item: Item, unit: 'carton' | 'packet') => {
     if (!item) return 0;
@@ -505,13 +609,36 @@ export default function OrdersView({ role }: { role: Role }) {
           </p>
         </div>
 
-        <button
-          onClick={() => setShowNewOrder(!showNewOrder)}
-          className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition flex items-center gap-2 font-bold text-xs shadow-sm"
-        >
-          <Plus size={16} />
-          <span>{showNewOrder ? 'داخستنی فۆڕم' : 'تۆمارکردنی ئۆردەری نوێ'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setShowDailyReceiptModal(true)}
+            className="px-3.5 py-2.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl transition flex items-center gap-1.5 font-bold text-xs shadow-xs"
+            title="وەسڵی ڕۆژانەی فرۆشتن و قەرزی وەرگیراو"
+          >
+            <FileText size={15} />
+            <span>وەسڵی ڕۆژانەی کارەکان</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setPayTargetMarket('');
+              setIsPayModalOpen(true);
+            }}
+            className="px-3.5 py-2.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl transition flex items-center gap-1.5 font-bold text-xs shadow-xs"
+            title="وەرگرتنەوەی پارەی قەرز لە مارکێت"
+          >
+            <CreditCard size={15} />
+            <span>وەرگرتنەوەی قەرز</span>
+          </button>
+
+          <button
+            onClick={() => setShowNewOrder(!showNewOrder)}
+            className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition flex items-center gap-2 font-bold text-xs shadow-sm"
+          >
+            <Plus size={16} />
+            <span>{showNewOrder ? 'داخستنی فۆڕم' : 'تۆمارکردنی ئۆردەری نوێ'}</span>
+          </button>
+        </div>
       </div>
 
       {showNewOrder && (
@@ -522,22 +649,14 @@ export default function OrdersView({ role }: { role: Role }) {
           </h3>
           
           <form onSubmit={submitOrder} className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Rep selector: Editable/Selectable for Warehouse & Admin */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1 flex items-center gap-1">
-                  <User size={14} className="text-indigo-600" />
-                  ناوی مەندووب * {role === 'warehouse' && <span className="text-[10px] text-indigo-600">(هەڵبژاردنی مەندووب لە سیستەم)</span>}
-                </label>
-                {role === 'sales_rep' ? (
-                  <input
-                    type="text"
-                    required
-                    readOnly
-                    className="w-full px-3 py-2 border border-slate-200 bg-slate-100 text-slate-600 rounded-xl outline-none text-xs font-bold"
-                    value={repName}
-                  />
-                ) : (
+            <div className={`grid grid-cols-1 ${role === 'sales_rep' ? 'md:grid-cols-2' : 'md:grid-cols-3'} gap-4`}>
+              {/* Rep selector: Editable/Selectable ONLY for Warehouse & Admin */}
+              {role !== 'sales_rep' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1 flex items-center gap-1">
+                    <User size={14} className="text-indigo-600" />
+                    ناوی مەندووب * {role === 'warehouse' && <span className="text-[10px] text-indigo-600">(هەڵبژاردنی مەندووب لە سیستەم)</span>}
+                  </label>
                   <div>
                     <input
                       type="text"
@@ -556,8 +675,8 @@ export default function OrdersView({ role }: { role: Role }) {
                       ))}
                     </datalist>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">ناوی مارکێت / شوێن *</label>
@@ -578,6 +697,30 @@ export default function OrdersView({ role }: { role: Role }) {
                 <datalist id="order-markets">
                   {markets.map(m => <option key={m.id} value={m.name} />)}
                 </datalist>
+
+                {marketName && marketDebtMap.has(marketName) && (
+                  <div className="mt-1.5 flex items-center justify-between bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-xl text-xs">
+                    <div className="flex items-center gap-1.5 text-amber-900 font-medium">
+                      <CreditCard size={13} className="text-amber-600" />
+                      <span>قەرزی پێشوو:</span>
+                      <strong className="font-mono font-bold text-amber-700" dir="ltr">
+                        {(marketDebtMap.get(marketName) || 0).toLocaleString()} د.ع
+                      </strong>
+                    </div>
+                    {(marketDebtMap.get(marketName) || 0) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayTargetMarket(marketName);
+                          setIsPayModalOpen(true);
+                        }}
+                        className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-[10px] transition shadow-2xs"
+                      >
+                        وەرگرتنەوەی قەرز
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -711,12 +854,12 @@ export default function OrdersView({ role }: { role: Role }) {
       <div className="space-y-4">
         {loading ? (
           <div className="text-center py-10 text-slate-500 text-xs">خەریکی هێنانە...</div>
-        ) : orders.length === 0 ? (
+        ) : displayedOrders.length === 0 ? (
           <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-500 text-xs">
             هیچ داواکارییەک نییە
           </div>
         ) : (
-          orders.map((order, index) => (
+          displayedOrders.map((order, index) => (
             <div key={order.id} className={`p-4 rounded-2xl shadow-sm border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${order.status === 'pending' ? 'bg-amber-50/40 border-amber-200' : order.status === 'printed' ? 'bg-indigo-50/40 border-indigo-200' : 'bg-green-50/40 border-green-200'}`}>
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-2">
@@ -746,7 +889,7 @@ export default function OrdersView({ role }: { role: Role }) {
                 <div className="flex gap-2 items-center">
                   {(role === 'admin' || role === 'warehouse') && (
                     <button
-                      onClick={() => printOrder(order, String(orders.length - index).padStart(6, '0'))}
+                      onClick={() => printOrder(order, String(displayedOrders.length - index).padStart(6, '0'))}
                       className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
                       title="چاپکردنی وەسڵ"
                     >
@@ -845,6 +988,96 @@ export default function OrdersView({ role }: { role: Role }) {
                     <CreditCard size={20} />
                   </div>
                   <span className="font-bold text-amber-800 text-xs">بە قەرز</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pay Debt Modal for Mandoub */}
+      <PayCompanyDebtModal
+        isOpen={isPayModalOpen}
+        onClose={() => {
+          setIsPayModalOpen(false);
+          setPayTargetMarket('');
+        }}
+        isCompany={false}
+        initialEntityName={payTargetMarket}
+        collectorName={repName || (role === 'sales_rep' ? 'مەندووب' : '')}
+      />
+
+      {/* Daily Rep Activity Receipt Modal */}
+      {showDailyReceiptModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div className="flex items-center gap-2">
+                <FileText size={18} className="text-blue-600" />
+                <h3 className="font-bold text-slate-800 text-sm">چاپکردنی وەسڵی ڕۆژانەی مەندووب</h3>
+              </div>
+              <button onClick={() => setShowDailyReceiptModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1">
+                  <Calendar size={14} className="text-indigo-600" />
+                  بەرواری ڕۆژ دیاری بکە:
+                </label>
+                <input
+                  type="date"
+                  value={dailyReceiptDate}
+                  onChange={(e) => setDailyReceiptDate(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-bold text-slate-800"
+                />
+              </div>
+
+              {role !== 'sales_rep' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1">
+                    <User size={14} className="text-indigo-600" />
+                    مەندووب (ئارەزوومەندانە):
+                  </label>
+                  <input
+                    type="text"
+                    list="daily-reps-list"
+                    value={repName}
+                    onChange={(e) => setRepName(e.target.value)}
+                    placeholder="هەموو مەندووبەکان یان ناوی دیاریکراو..."
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs text-slate-800"
+                  />
+                  <datalist id="daily-reps-list">
+                    {reps.map(r => (
+                      <option key={r.id || r.name} value={r.name} />
+                    ))}
+                  </datalist>
+                </div>
+              )}
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-600 leading-relaxed">
+                ئەم وەسڵە هەموو فرۆشراوەکان (نەقد و قەرز) لەگەڵ سەرجەم ئەو قەرزانەی لەم بەروارەدا وەرگیراونەتەوە لەخۆدەگرێت.
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handlePrintDailyReceipt(dailyReceiptDate);
+                    setShowDailyReceiptModal(false);
+                  }}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition"
+                >
+                  <Printer size={16} />
+                  <span>چاپکردنی وەسڵ</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDailyReceiptModal(false)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition"
+                >
+                  داخستن
                 </button>
               </div>
             </div>

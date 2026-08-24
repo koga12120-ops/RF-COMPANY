@@ -1,326 +1,314 @@
-import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, updateDoc, doc, addDoc, getDocs, where, deleteDoc } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  collection, 
+  query, 
+  onSnapshot, 
+  updateDoc, 
+  doc, 
+  addDoc, 
+  getDocs, 
+  where, 
+  deleteDoc, 
+  orderBy,
+  getDoc
+} from 'firebase/firestore';
+import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { CashvanSale, CashvanTransfer, Transaction } from '../../types';
-import { Truck, CheckCircle2, DollarSign, History, Trash2, Edit2, Printer, FileText, X, AlertTriangle, Check } from 'lucide-react';
-import { format } from 'date-fns';
+import { CashvanSale, CashvanTransfer, Order, Transaction, Market, Item, SalesRep } from '../../types';
+import { 
+  Truck, 
+  CheckCircle2, 
+  DollarSign, 
+  History, 
+  Trash2, 
+  Edit2, 
+  Printer, 
+  FileText, 
+  X, 
+  AlertTriangle, 
+  Check, 
+  Calendar, 
+  User, 
+  Users, 
+  ShoppingCart, 
+  Search, 
+  ArrowDownLeft, 
+  Layers, 
+  CreditCard,
+  Building2,
+  Receipt,
+  Store,
+  Filter
+} from 'lucide-react';
+import { format, startOfDay, endOfDay } from 'date-fns';
+import { printDailyRepReceiptPopup, printStatementPopup } from '../../lib/statementPrinter';
+import ConfirmModal from '../common/ConfirmModal';
 
 export default function AdminCashvanView() {
+  // Navigation tabs
+  const [activeTab, setActiveTab] = useState<'rep_sales' | 'cashvan_sales' | 'transfers' | 'daily_statement'>('rep_sales');
+
+  // Core Data
+  const [orders, setOrders] = useState<Order[]>([]);
   const [sales, setSales] = useState<CashvanSale[]>([]);
   const [transfers, setTransfers] = useState<CashvanTransfer[]>([]);
-  const [activeTab, setActiveTab] = useState<'sales' | 'transfers'>('sales');
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
+  const [reps, setReps] = useState<SalesRep[]>([]);
+  const [cashvans, setCashvans] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Modal States
-  const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
-  const [editingSale, setEditingSale] = useState<CashvanSale | null>(null);
-  const [editSaleAmount, setEditSaleAmount] = useState<string>('');
+  // Search & Sub-Filters
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedRepFilter, setSelectedRepFilter] = useState('all');
+  const [selectedCashvanFilter, setSelectedCashvanFilter] = useState('all');
+  const [repStatusFilter, setRepStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
+  const [cashvanStatusFilter, setCashvanStatusFilter] = useState<'all' | 'pending_accounting' | 'accounted'>('all');
+
+  // Daily Statement Tool State
+  const [dailyDate, setDailyDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [dailySelectedPerson, setDailySelectedPerson] = useState('all');
+  const [dailyPersonType, setDailyPersonType] = useState<'all' | 'rep' | 'cashvan'>('all');
+
+  // Settlement States
+  const [settlingOrder, setSettlingOrder] = useState<Order | null>(null);
   const [settlingSale, setSettlingSale] = useState<CashvanSale | null>(null);
 
-  const [deletingTransfer, setDeletingTransfer] = useState<CashvanTransfer | null>(null);
+  // Editing & Deleting
+  const [editingSale, setEditingSale] = useState<CashvanSale | null>(null);
+  const [editSaleAmount, setEditSaleAmount] = useState<string>('');
+  const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
+
+  const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
+
   const [editingTransfer, setEditingTransfer] = useState<CashvanTransfer | null>(null);
   const [editTransferValue, setEditTransferValue] = useState<string>('');
+  const [deletingTransfer, setDeletingTransfer] = useState<CashvanTransfer | null>(null);
 
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   useEffect(() => {
-    const unsubSales = onSnapshot(
-      query(collection(db, 'cashvan_sales')),
+    // 1. Orders (Reps)
+    const unsubOrders = onSnapshot(
+      query(collection(db, 'orders'), orderBy('timestamp', 'desc')),
       (snapshot) => {
-        const data: CashvanSale[] = [];
-        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanSale));
-        setSales(data.sort((a,b) => b.date - a.date));
+        const data: Order[] = [];
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() } as Order));
+        setOrders(data.filter(o => o.status !== 'deleted'));
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'cashvan_sales');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'orders')
     );
 
+    // 2. Direct Sales (Cashvans)
+    const unsubSales = onSnapshot(
+      query(collection(db, 'cashvan_sales'), orderBy('date', 'desc')),
+      (snapshot) => {
+        const data: CashvanSale[] = [];
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() } as CashvanSale));
+        setSales(data);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'cashvan_sales')
+    );
+
+    // 3. Stock Transfers (Cashvans)
     const unsubTransfers = onSnapshot(
-      query(collection(db, 'cashvan_transfers')),
+      query(collection(db, 'cashvan_transfers'), orderBy('date', 'desc')),
       (snapshot) => {
         const data: CashvanTransfer[] = [];
-        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CashvanTransfer));
-        setTransfers(data.sort((a,b) => b.date - a.date));
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() } as CashvanTransfer));
+        setTransfers(data);
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'cashvan_transfers');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'cashvan_transfers')
+    );
+
+    // 4. Transactions (Ledger)
+    const unsubTrans = onSnapshot(
+      query(collection(db, 'transactions')),
+      (snapshot) => {
+        const data: Transaction[] = [];
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() } as Transaction));
+        setTransactions(data);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'transactions')
+    );
+
+    // 5. Markets
+    const unsubMarkets = onSnapshot(
+      query(collection(db, 'markets')),
+      (snapshot) => {
+        const data: Market[] = [];
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() } as Market));
+        setMarkets(data);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'markets')
+    );
+
+    // 6. Items
+    const unsubItems = onSnapshot(
+      query(collection(db, 'items')),
+      (snapshot) => {
+        const data: Item[] = [];
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() } as Item));
+        setItems(data);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'items')
+    );
+
+    // 7. Reps
+    const unsubReps = onSnapshot(
+      query(collection(db, 'reps')),
+      (snapshot) => {
+        const data: SalesRep[] = [];
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() } as SalesRep));
+        setReps(data);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'reps')
+    );
+
+    // 8. Cashvans
+    const unsubCV = onSnapshot(
+      query(collection(db, 'cashvans')),
+      (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(docSnap => data.push({ id: docSnap.id, ...docSnap.data() }));
+        setCashvans(data);
+        setLoading(false);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'cashvans')
     );
 
     return () => {
+      unsubOrders();
       unsubSales();
       unsubTransfers();
+      unsubTrans();
+      unsubMarkets();
+      unsubItems();
+      unsubReps();
+      unsubCV();
     };
   }, []);
 
-  const printTransferReceipt = (transfer: CashvanTransfer) => {
-    const itemsHtml = (transfer.items || []).map((item, idx) => {
-      const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const itemTotal = (item.price || 0) * (item.quantity || 0);
-      return `
-        <tr>
-          <td style="text-align: center;">${idx + 1}</td>
-          <td style="font-weight: bold;">${item.name}</td>
-          <td style="text-align: center;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
-          <td style="text-align: center; font-weight: bold;" dir="ltr">${itemTotal.toLocaleString()} د.ع</td>
-        </tr>
-      `;
-    }).join('');
+  // Filtered Orders (Reps)
+  const filteredOrders = useMemo(() => {
+    return orders.filter(order => {
+      const matchRep = selectedRepFilter === 'all' || order.repName === selectedRepFilter;
+      const matchStatus = repStatusFilter === 'all' 
+        ? true 
+        : repStatusFilter === 'pending' 
+          ? order.status !== 'completed' 
+          : order.status === 'completed';
+      const matchSearch = (order.marketName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (order.repName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (order.invoiceId || '').includes(searchTerm);
+      return matchRep && matchStatus && matchSearch;
+    });
+  }, [orders, selectedRepFilter, repStatusFilter, searchTerm]);
 
-    const html = `
-      <!DOCTYPE html>
-      <html dir="rtl">
-        <head>
-          <meta charset="utf-8">
-          <title>وەسڵی بارکردن - ${transfer.cashvanName}</title>
-          <style>
-            @page { size: A4; margin: 15mm; }
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
-            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; font-size: 24px; color: #0f172a; }
-            .header h2 { margin: 5px 0; font-size: 18px; color: #4338ca; }
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
-            .meta-item { display: flex; justify-content: space-between; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 8px; text-align: right; }
-            th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
-            .total-box { margin-top: 15px; padding: 15px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 8px; text-align: left; font-size: 16px; font-weight: bold; }
-            @media print { body { padding: 0; } }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>کۆمپانیای RF</h1>
-            <h2>پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان</h2>
-          </div>
-          <div class="meta-grid">
-            <div class="meta-item"><span>کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
-            <div class="meta-item"><span>ژمارەی پسوڵە:</span> <strong dir="ltr">${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</strong></div>
-            <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(transfer.date, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span>کۆی جۆر:</span> <strong>${(transfer.items || []).length} جۆر</strong></div>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 40px; text-align: center;">#</th>
-                <th>ناوی کاڵا</th>
-                <th style="text-align: center; width: 120px;">بڕ و یەکە</th>
-                <th style="text-align: center; width: 120px;">تێچوو</th>
-                <th style="text-align: center; width: 130px;">کۆی گشتی</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsHtml}
-            </tbody>
-          </table>
-          <div class="total-box">
-            کۆی گشتی تێچوو: <span dir="ltr">${(transfer.totalValue || 0).toLocaleString()} د.ع</span>
-          </div>
-          <script>window.onload = () => { window.print(); window.close(); };</script>
-        </body>
-      </html>
-    `;
-    const win = window.open('', '_blank');
-    win?.document.write(html);
-    win?.document.close();
+  // Filtered Sales (Cashvans)
+  const filteredSales = useMemo(() => {
+    return sales.filter(sale => {
+      if (sale.status === 'deleted') return false;
+      const matchCV = selectedCashvanFilter === 'all' || sale.cashvanName === selectedCashvanFilter;
+      const matchStatus = cashvanStatusFilter === 'all' 
+        ? true 
+        : cashvanStatusFilter === 'pending_accounting' 
+          ? sale.status === 'pending_accounting' 
+          : sale.status === 'accounted';
+      const matchSearch = (sale.marketName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (sale.cashvanName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (sale.invoiceNo || '').includes(searchTerm);
+      return matchCV && matchStatus && matchSearch;
+    });
+  }, [sales, selectedCashvanFilter, cashvanStatusFilter, searchTerm]);
+
+  // Filtered Transfers
+  const filteredTransfers = useMemo(() => {
+    return transfers.filter(transfer => {
+      const matchCV = selectedCashvanFilter === 'all' || transfer.cashvanName === selectedCashvanFilter;
+      const matchSearch = (transfer.cashvanName || '').toLowerCase().includes(searchTerm.toLowerCase());
+      return matchCV && matchSearch;
+    });
+  }, [transfers, selectedCashvanFilter, searchTerm]);
+
+  // KPI Calculations
+  const repPendingOrders = orders.filter(o => o.status !== 'completed');
+  const repPendingTotal = repPendingOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+  const repCompletedOrders = orders.filter(o => o.status === 'completed');
+  const repCompletedTotal = repCompletedOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+
+  const cvPendingSales = sales.filter(s => s.status === 'pending_accounting');
+  const cvPendingTotal = cvPendingSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+  const cvAccountedSales = sales.filter(s => s.status === 'accounted');
+  const cvAccountedTotal = cvAccountedSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+
+  // Print market statement
+  const printStatement = (marketName: string) => {
+    const marketTrans = transactions.filter(t => t.relatedEntityId === marketName);
+    printStatementPopup(marketName, marketTrans, { isCompany: false, roleTitle: 'مارکێت' });
   };
 
-  const printStatement = async (entityName: string) => {
-    if (!entityName || entityName === 'نەزانراو' || entityName === '') {
-      alert('ناوی مارکێت دیاری نەکراوە بۆ چاپکردنی کەشف حیساب');
-      return;
-    }
-    const q = query(collection(db, 'transactions'), where('relatedEntityId', '==', entityName));
-    const snap = await getDocs(q);
-    const allTrans: Transaction[] = [];
-    snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
-    
-    allTrans.sort((a,b) => a.date - b.date);
-    
-    let totalDebt = 0;
-    let totalPaid = 0;
-    let totalCash = 0;
-
-    const rowsHtml = allTrans.map(t => {
-      let typeLabel = '';
-      if (t.type.includes('debt') && !t.type.includes('paid')) { typeLabel = 'قەرز'; totalDebt += t.amount || 0; }
-      else if (t.type.includes('paid')) { typeLabel = 'واسڵکراو'; totalPaid += t.amount || 0; }
-      else { typeLabel = 'نەقد/تر'; totalCash += t.amount || 0; }
-      
-      return `<tr>
-        <td dir="ltr">${format(t.date, 'yyyy-MM-dd HH:mm')}</td>
-        <td>${typeLabel}</td>
-        <td>${t.description}</td>
-        <td dir="ltr">${(t.amount || 0).toLocaleString()}</td>
-      </tr>`;
-    }).join('');
-    
-    let finalBalance = totalDebt - totalPaid;
-    
-    const html = `
-    <html dir="rtl">
-      <head>
-        <title>کەشف حیساب - ${entityName}</title>
-        <style>
-          body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
-          th { background-color: #f8f9fa; }
-          .header { text-align: center; margin-bottom: 20px; }
-          .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-          @media print { body { padding: 0; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>کەشف حیساب - ${entityName}</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
-        <table style="width: 100%">
-          <thead><tr><th>بەروار و کات</th><th>جۆر</th><th>وردەکاری</th><th>بڕی پارە</th></tr></thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-        <div class="summary">
-          <p>کۆی قەرزەکان: <span dir="ltr">${totalDebt.toLocaleString()}</span></p>
-          <p>کۆی واسڵکراو: <span dir="ltr">${totalPaid.toLocaleString()}</span></p>
-          <p>کۆی نەقد: <span dir="ltr">${totalCash.toLocaleString()}</span></p>
-          <hr style="margin: 10px 0;" />
-          <h3 style="margin: 0; font-size: 20px;">ماوەی قەرز (باڵانس): <span dir="ltr">${finalBalance.toLocaleString()}</span> د.ع</h3>
-        </div>
-        <script>window.onload = () => window.print();</script>
-      </body>
-    </html>`;
-    const win = window.open('', '_blank');
-    win?.document.write(html);
-    win?.document.close();
-  };
-
-  const confirmDeleteSale = async () => {
-    if (!deletingSale) return;
+  // --- Settle Rep Order ---
+  const handleSettleOrder = async (type: 'cash' | 'debt') => {
+    if (!settlingOrder) return;
     setIsProcessing(true);
     try {
-      // 1. Delete from cashvan_sales
-      await deleteDoc(doc(db, 'cashvan_sales', deletingSale.id));
+      // 1. Record in transactions ledger
+      await addDoc(collection(db, 'transactions'), {
+        type: type === 'cash' ? 'cash_in' : 'debt',
+        invoiceNo: settlingOrder.invoiceId || settlingOrder.id,
+        amount: settlingOrder.totalAmount,
+        date: Date.now(),
+        description: type === 'cash' 
+          ? `نەقدی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})` 
+          : `قەرزی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})`,
+        relatedEntityId: settlingOrder.marketName
+      });
+
+      // 2. Update order document
+      await updateDoc(doc(db, 'orders', settlingOrder.id), { 
+        status: 'completed',
+        paymentStatus: type
+      });
       
-      // 2. Restore items to cashvan inventory
-      for (const item of (deletingSale.items || [])) {
-        try {
-          const q = query(
-            collection(db, 'cashvan_inventory'), 
-            where('itemId', '==', item.itemId), 
-            where('cashvanName', '==', deletingSale.cashvanName)
-          );
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            const itemDoc = snap.docs[0];
-            const currentQty = itemDoc.data().quantity || itemDoc.data().cartonQuantity || 0;
-            await updateDoc(doc(db, 'cashvan_inventory', itemDoc.id), {
-              quantity: currentQty + item.quantity
-            });
-          }
-        } catch (itemErr) {
-          console.warn('Could not restore inventory item:', itemErr);
-        }
+      // 3. Update rep stats
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', settlingOrder.repName)));
+      if (!repSnap.empty) {
+        const repDoc = repSnap.docs[0];
+        await updateDoc(doc(db, 'reps', repDoc.id), {
+          totalSales: (repDoc.data().totalSales || 0) + settlingOrder.totalAmount,
+          totalProfit: (repDoc.data().totalProfit || 0) + (settlingOrder.totalProfit || 0)
+        });
       }
 
-      // 3. If sale was accounted, deduct from cashvan totalSales
-      if (deletingSale.status === 'accounted') {
-        try {
-          const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', deletingSale.cashvanName)));
-          if (!cvSnap.empty) {
-            const cvDoc = cvSnap.docs[0];
-            const currentSales = cvDoc.data().totalSales || 0;
-            const currentProfit = cvDoc.data().totalProfit || 0;
-            await updateDoc(doc(db, 'cashvans', cvDoc.id), {
-              totalSales: Math.max(0, currentSales - deletingSale.totalAmount),
-              totalProfit: Math.max(0, currentProfit - (deletingSale.totalProfit || 0))
-            });
-          }
-        } catch (cvErr) {
-          console.warn('Could not update cashvan stats:', cvErr);
-        }
-      }
-
-      setDeletingSale(null);
-    } catch (error: any) {
-      console.error('Delete error:', error);
-      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە: ' + (error.message || error));
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const confirmEditSale = async () => {
-    if (!editingSale) return;
-    const num = Number(editSaleAmount);
-    if (isNaN(num) || num < 0) {
-      alert('تکایە بڕێکی دروست بنووسە');
-      return;
-    }
-    setIsProcessing(true);
-    try {
-      await updateDoc(doc(db, 'cashvan_sales', editingSale.id), { totalAmount: num });
-      setEditingSale(null);
-    } catch (error: any) {
+      setSettlingOrder(null);
+    } catch (error) {
       console.error(error);
-      alert('هەڵە لە دەستکاریکردن: ' + error.message);
+      alert('هەڵەیەک ڕوویدا لە کاتی تۆمارکردنی تەسفییەی ئۆردەر');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const confirmDeleteTransfer = async () => {
-    if (!deletingTransfer) return;
-    setIsProcessing(true);
-    try {
-      await deleteDoc(doc(db, 'cashvan_transfers', deletingTransfer.id));
-      setDeletingTransfer(null);
-    } catch (error: any) {
-      console.error(error);
-      alert('هەڵە لە سڕینەوە: ' + error.message);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const confirmEditTransfer = async () => {
-    if (!editingTransfer) return;
-    const num = Number(editTransferValue);
-    if (isNaN(num) || num < 0) {
-      alert('تکایە بڕێکی دروست بنووسە');
-      return;
-    }
-    setIsProcessing(true);
-    try {
-      await updateDoc(doc(db, 'cashvan_transfers', editingTransfer.id), { totalValue: num });
-      setEditingTransfer(null);
-    } catch (error: any) {
-      console.error(error);
-      alert('هەڵە لە دەستکاریکردن: ' + error.message);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const settleCashvanSale = async (type: 'cash' | 'debt') => {
+  // --- Settle Cashvan Sale ---
+  const handleSettleCashvanSale = async (type: 'cash' | 'debt') => {
     if (!settlingSale) return;
     setIsProcessing(true);
     try {
-      // 1. Create a ledger transaction for cash or debt
+      // 1. Record transaction in ledger
       await addDoc(collection(db, 'transactions'), {
-        type,
+        type: type === 'cash' ? 'cash_in' : 'debt',
+        invoiceNo: settlingSale.invoiceNo || settlingSale.id,
         amount: settlingSale.totalAmount,
         date: Date.now(),
         description: type === 'cash' 
-          ? `نەقدی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})`
+          ? `نەقدی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})` 
           : `قەرزی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})`,
-        relatedEntityId: settlingSale.marketName || 'نەزانراو'
-      } as Transaction);
+        relatedEntityId: settlingSale.marketName
+      });
 
-      // 2. Mark as accounted
+      // 2. Update sale status
       await updateDoc(doc(db, 'cashvan_sales', settlingSale.id), {
         status: 'accounted',
         paymentType: type
@@ -339,169 +327,703 @@ export default function AdminCashvanView() {
       setSettlingSale(null);
     } catch (error) {
       console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی ناردن بۆ حیسابات');
+      alert('هەڵەیەک ڕوویدا لە کاتی تۆمارکردنی تەسفییەی فرۆشتنی کاشڤان');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const pendingSales = sales.filter(s => s.status === 'pending_accounting');
-  const accountedSales = sales.filter(s => s.status === 'accounted');
-  const pendingTotal = pendingSales.reduce((a, b) => a + b.totalAmount, 0);
+  // --- Delete Rep Order Safely ---
+  const confirmDeleteOrder = async () => {
+    if (!deletingOrder) return;
+    try {
+      const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'بەڕێوەبەر';
+      await updateDoc(doc(db, 'orders', deletingOrder.id), { 
+        status: 'deleted', 
+        deletedBy: userName,
+        deletedAt: Date.now()
+      });
+      setDeletingOrder(null);
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی ئۆردەر');
+    }
+  };
+
+  // --- Delete Cashvan Sale & Return Items to Cashvan Van ---
+  const confirmDeleteCashvanSale = async () => {
+    if (!deletingSale) return;
+    setIsProcessing(true);
+    try {
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', deletingSale.cashvanName)));
+      if (!cvSnap.empty) {
+        const cvDoc = cvSnap.docs[0];
+        const cvData = cvDoc.data();
+        let cvInventory = cvData.inventory || [];
+
+        for (const saleItem of deletingSale.items) {
+          const itemDocSnap = await getDoc(doc(db, 'items', saleItem.itemId));
+          const conversionFactor = itemDocSnap.exists() && itemDocSnap.data().conversionFactor ? itemDocSnap.data().conversionFactor : 1;
+          const returnedPackets = saleItem.unit === 'packet' ? saleItem.quantity : saleItem.quantity * conversionFactor;
+
+          const invIndex = cvInventory.findIndex((i: any) => i.itemId === saleItem.itemId);
+          if (invIndex > -1) {
+            cvInventory[invIndex].quantity = (cvInventory[invIndex].quantity || 0) + returnedPackets;
+          } else {
+            cvInventory.push({
+              itemId: saleItem.itemId,
+              name: saleItem.name,
+              quantity: returnedPackets,
+              unit: 'packet'
+            });
+          }
+        }
+
+        await updateDoc(doc(db, 'cashvans', cvDoc.id), {
+          inventory: cvInventory
+        });
+      }
+
+      await updateDoc(doc(db, 'cashvan_sales', deletingSale.id), {
+        status: 'deleted',
+        deletedAt: Date.now(),
+        deletedBy: auth.currentUser?.displayName || 'بەڕێوەبەر'
+      });
+
+      setDeletingSale(null);
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی فرۆشتن');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // --- Edit Cashvan Sale Amount ---
+  const handleSaveEditSale = async () => {
+    if (!editingSale) return;
+    const newAmt = parseFloat(editSaleAmount);
+    if (isNaN(newAmt) || newAmt <= 0) {
+      alert('تکایە بڕی پارەی دروست بنووسە');
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      await updateDoc(doc(db, 'cashvan_sales', editingSale.id), {
+        totalAmount: newAmt
+      });
+      setEditingSale(null);
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە دەستکاریکردنی بڕی پارە');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // --- Print Rep Order Voucher ---
+  const printRepOrder = async (order: Order) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+    
+    let oldDebt = 0;
+    try {
+      const q = query(
+        collection(db, 'transactions'), 
+        where('relatedEntityId', '==', order.marketName)
+      );
+      const snapshot = await getDocs(q);
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        if (data.date && data.date < order.timestamp) {
+          if (data.type === 'debt' || data.type === 'market_debt') {
+            oldDebt += data.amount || 0;
+          } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
+            oldDebt -= data.amount || 0;
+          }
+        }
+      });
+    } catch (e) {
+      console.error('Error fetching old debt', e);
+    }
+    
+    const marketObj = markets.find(m => m.name === order.marketName);
+    const marketPhone = marketObj?.phone || '-';
+    const invoiceNum = (order.invoiceId || order.id || '0').slice(-6);
+
+    const itemsHtml = (order.items || []).map((item, idx) => {
+      const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const total = (item.quantity * item.price);
+      return `
+        <tr>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">${total.toLocaleString()} د.ع</td>
+        </tr>
+      `;
+    }).join('');
+
+    const newTotalDebt = oldDebt + order.totalAmount;
+
+    const printContent = `
+      <div dir="rtl" style="font-family: sans-serif; padding: 20px;">
+        <div style="display: flex; align-items: flex-start; margin-bottom: 20px;">
+          <div style="text-align: right; width: 250px;">
+            <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="width: 80px; height: 80px; object-fit: contain; margin-bottom: 5px;" onerror="this.style.display='none'" />
+            <h2 style="margin: 0; color: #333; font-size: 16px;">وەسڵی کۆگا</h2>
+            <p style="margin: 2px 0; font-size: 12px;">ناونیشان: هەولێر-ڕێگای کەرکوک</p>
+            <p style="margin: 2px 0; font-size: 12px;">مۆبایل: 07506144894</p>
+          </div>
+          <div style="text-align: center; flex: 1; padding-top: 20px;">
+            <h1 style="margin: 0; color: #1e293b; font-size: 52px; font-weight: 900; letter-spacing: 2px; white-space: nowrap;">TAM TAM</h1>
+          </div>
+        </div>
+        
+        <hr style="border: 0; border-top: 2px solid #1e293b; margin: 15px 0;" />
+        
+        <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 14px;">
+          <div style="text-align: right; flex: 1;">
+            <p style="margin: 5px 0;"><strong>بۆ:</strong> ${order.marketName}</p>
+            <p style="margin: 5px 0;"><strong>ژمارەی مۆبایل:</strong> ${marketPhone}</p>
+            <p style="margin: 5px 0;"><strong>ناونیشان:</strong> ${order.location || '-'}</p>
+            <p style="margin: 5px 0;"><strong>مەندووب:</strong> ${order.repName}</p>
+          </div>
+          <div style="text-align: left; flex: 1;">
+            <p style="margin: 5px 0;"><strong>ژ.وەسڵ:</strong> #${invoiceNum}</p>
+            <p style="margin: 5px 0;"><strong>بەروار:</strong> ${format(order.timestamp, 'yyyy/MM/dd')}</p>
+            <p style="margin: 5px 0;"><strong>کات:</strong> ${format(order.timestamp, 'HH:mm')}</p>
+          </div>
+        </div>
+        
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
+          <thead>
+            <tr style="background-color: #f1f5f9;">
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 40px;">#</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; text-align: right;">ناوی کاڵا</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">یەکە</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">بڕ</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 110px; text-align: left;">نرخ</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 130px; text-align: left;">کۆی گشتی</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsHtml}
+          </tbody>
+        </table>
+        
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 30px;">
+          <div style="width: 320px; font-size: 14px;">
+            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
+              <span>کۆی ئەم وەسڵە:</span>
+              <strong dir="ltr">${order.totalAmount.toLocaleString()} د.ع</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
+              <span>قەرزی پێشوو:</span>
+              <strong dir="ltr" style="color: #d97706;">${oldDebt.toLocaleString()} د.ع</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 16px; border-bottom: 2px solid #1e293b; background: #f8fafc;">
+              <span>کۆی گشتی ماوە:</span>
+              <strong dir="ltr" style="color: #dc2626;">${newTotalDebt.toLocaleString()} د.ع</strong>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; margin-top: 50px; font-size: 14px; text-align: center;">
+          <div>
+            <p style="margin-bottom: 40px;">واژووی مەندووب</p>
+            <p>.......................................</p>
+          </div>
+          <div>
+            <p style="margin-bottom: 40px;">واژووی وەرگر (مارکێت)</p>
+            <p>.......................................</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>وەسڵی ئۆردەر - #${invoiceNum}</title>
+          <style>
+            @media print {
+              body { margin: 0; padding: 0; }
+              @page { margin: 10mm; }
+            }
+          </style>
+        </head>
+        <body>
+          ${printContent}
+          <script>
+            window.onload = () => {
+              window.print();
+            }
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // --- Print Transfer Receipt (Stock to Cashvan) ---
+  const printTransferReceipt = (transfer: CashvanTransfer) => {
+    const itemsHtml = (transfer.items || []).map((item, idx) => {
+      const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const total = (item.quantity * item.price);
+      return `
+        <tr>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">${total.toLocaleString()} د.ع</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+      <html dir="rtl">
+        <head>
+          <title>پسوڵەی بارکردن بۆ کاشڤان - ${transfer.cashvanName}</title>
+          <meta charset="utf-8" />
+          <style>
+            body { font-family: Tahoma, Arial, sans-serif; padding: 24px; color: #1e293b; }
+            .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #4f46e5; padding-bottom: 12px; }
+            .header h2 { margin: 0; color: #3730a3; font-size: 20px; }
+            .header p { margin: 4px 0 0 0; font-size: 13px; color: #64748b; }
+            .meta { display: flex; justify-content: space-between; margin-bottom: 16px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th { background: #f1f5f9; padding: 10px; border: 1px solid #cbd5e1; text-align: right; font-size: 13px; }
+            td { padding: 10px; border: 1px solid #e2e8f0; font-size: 13px; }
+            .total-box { text-align: left; font-size: 16px; font-weight: bold; margin-top: 15px; }
+            .signatures { display: flex; justify-content: space-between; margin-top: 45px; }
+            .sig-line { margin-top: 35px; border-top: 1px dashed #64748b; width: 160px; }
+            @media print {
+              body { padding: 10px; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h2>پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان</h2>
+            <p>بەروار: <span dir="ltr">${format(transfer.date, 'yyyy-MM-dd HH:mm')}</span></p>
+          </div>
+          <div class="meta">
+            <div><span>کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
+            <div><span>ژمارەی تۆمار:</span> <strong dir="ltr">#${(transfer.id || '').slice(-6)}</strong></div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 40px; text-align: center;">#</th>
+                <th>ناوی کاڵا</th>
+                <th style="width: 70px; text-align: center;">یەکە</th>
+                <th style="width: 70px; text-align: center;">بڕ</th>
+                <th style="width: 110px; text-align: left;">نرخی تاک</th>
+                <th style="width: 130px; text-align: left;">کۆی گشتی</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml || '<tr><td colspan="6" style="text-align:center;padding:15px;color:#94a3b8;">کاڵا دیاری نەکراوە</td></tr>'}
+            </tbody>
+          </table>
+          <div class="total-box">
+            <span>کۆی گشتی بەهای بارکراو: </span>
+            <span dir="ltr" style="color: #4f46e5;">${(transfer.totalValue || 0).toLocaleString()} د.ع</span>
+          </div>
+          <div class="signatures">
+            <div style="text-align: center;">
+              <span>ڕادەستکار (لێپرسراوی کۆگا)</span>
+              <div class="sig-line"></div>
+            </div>
+            <div style="text-align: center;">
+              <span>وەرگر (کاشڤان)</span>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+          <script>
+            window.onload = () => window.print();
+          </script>
+        </body>
+      </html>
+    `;
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+    }
+  };
+
+  // --- Print Comprehensive Daily Work Statement ---
+  const handlePrintDailyReport = () => {
+    const targetDate = dailyDate ? new Date(dailyDate) : new Date();
+    const dayStart = startOfDay(targetDate).getTime();
+    const dayEnd = endOfDay(targetDate).getTime();
+
+    // 1. Filter Sales
+    const daySales = sales.filter(s => {
+      const isDate = s.date >= dayStart && s.date <= dayEnd;
+      const isPerson = dailySelectedPerson === 'all' || s.cashvanName === dailySelectedPerson;
+      return isDate && isPerson && s.status !== 'deleted';
+    });
+
+    // 2. Filter Rep Orders
+    const dayOrders = orders.filter(o => {
+      const isDate = o.timestamp >= dayStart && o.timestamp <= dayEnd;
+      const isPerson = dailySelectedPerson === 'all' || o.repName === dailySelectedPerson;
+      return isDate && isPerson && o.status !== 'deleted';
+    });
+
+    // Collections from transactions (market paid debts)
+    const dayCollections = transactions.filter(t => {
+      const isDate = t.date >= dayStart && t.date <= dayEnd;
+      const isPaid = t.type === 'paid_debt' || t.type === 'market_paid_debt';
+      if (!isDate || !isPaid) return false;
+
+      if (dailySelectedPerson === 'all') return true;
+
+      return t.collectorName === dailySelectedPerson ||
+             t.repName === dailySelectedPerson ||
+             t.cashvanName === dailySelectedPerson ||
+             (t.description && t.description.includes(dailySelectedPerson));
+    }).map(t => ({
+      id: t.id,
+      marketName: t.relatedEntityId || 'مارکێت',
+      invoiceNo: t.invoiceNo,
+      amount: t.amount || 0,
+      notes: t.description || 'وەرگرتنەوەی قەرز'
+    }));
+
+    const isRepSelected = reps.some(r => r.name === dailySelectedPerson);
+    const roleTitle = isRepSelected ? 'مەندووب' : 'کاشڤان';
+
+    const formattedSales = [
+      ...daySales.map(s => ({
+        id: s.id,
+        marketName: s.marketName,
+        invoiceNo: s.invoiceNo,
+        amount: s.totalAmount || 0,
+        paymentType: s.paymentType === 'debt' ? 'قەرز' : 'نەقد'
+      })),
+      ...dayOrders.map(o => ({
+        id: o.id,
+        marketName: o.marketName,
+        invoiceNo: o.invoiceId || o.id.slice(-6),
+        amount: o.totalAmount || 0,
+        paymentType: o.paymentStatus === 'debt' ? 'قەرز' : 'نەقد'
+      }))
+    ];
+
+    printDailyRepReceiptPopup({
+      repName: dailySelectedPerson === 'all' ? 'سەرجەم مەندووب و کاشڤانەکان' : dailySelectedPerson,
+      roleTitle: dailySelectedPerson === 'all' ? 'مەندووب و کاشڤان' : roleTitle,
+      date: targetDate.getTime(),
+      sales: formattedSales,
+      collections: dayCollections
+    });
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row gap-2 bg-white p-2 rounded-xl shadow-sm border border-slate-200">
+      {/* Top Header & Overview Bar */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h1 className="text-xl font-black text-slate-900 flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+              <Truck size={24} />
+            </div>
+            <span>حساباتی مەندووب و کاشڤان</span>
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            بەڕێوەبردنی گشتگیر بۆ تەسفییەی فرۆشتنی مەندووبەکان، فرۆشتنی کاشڤانەکان، بارکردنی کاڵا لە کۆگا، و وەسڵی ڕۆژانە.
+          </p>
+        </div>
+      </div>
+
+      {/* Main Navigation Tabs */}
+      <div className="flex flex-col sm:flex-row gap-2 bg-white p-2 rounded-2xl shadow-sm border border-slate-200">
         <button
-          onClick={() => setActiveTab('sales')}
-          className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition ${activeTab === 'sales' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-600 hover:bg-slate-50'}`}
+          onClick={() => setActiveTab('rep_sales')}
+          className={`flex-1 py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+            activeTab === 'rep_sales' 
+              ? 'bg-indigo-600 text-white shadow-sm' 
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
         >
-          <div className="flex justify-center items-center gap-2">
-            <DollarSign size={18} /> فرۆشتنەکانی کاشڤان
-            {pendingSales.length > 0 && (
-              <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{pendingSales.length}</span>
-            )}
-          </div>
+          <ShoppingCart size={18} />
+          <span>فرۆشتنی مەندووب</span>
+          {repPendingOrders.length > 0 && (
+            <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono ${
+              activeTab === 'rep_sales' ? 'bg-indigo-800 text-indigo-100' : 'bg-amber-100 text-amber-800'
+            }`}>
+              {repPendingOrders.length}
+            </span>
+          )}
         </button>
+
+        <button
+          onClick={() => setActiveTab('cashvan_sales')}
+          className={`flex-1 py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+            activeTab === 'cashvan_sales' 
+              ? 'bg-indigo-600 text-white shadow-sm' 
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
+        >
+          <Truck size={18} />
+          <span>فرۆشتنی کاشڤان</span>
+          {cvPendingSales.length > 0 && (
+            <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono ${
+              activeTab === 'cashvan_sales' ? 'bg-indigo-800 text-indigo-100' : 'bg-amber-100 text-amber-800'
+            }`}>
+              {cvPendingSales.length}
+            </span>
+          )}
+        </button>
+
         <button
           onClick={() => setActiveTab('transfers')}
-          className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition ${activeTab === 'transfers' ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-600 hover:bg-slate-50'}`}
+          className={`flex-1 py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+            activeTab === 'transfers' 
+              ? 'bg-indigo-600 text-white shadow-sm' 
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
         >
-          <div className="flex justify-center items-center gap-2">
-            <Truck size={18} /> کاڵا پێدراوەکان لە کۆگاوە
-          </div>
+          <Layers size={18} />
+          <span>بارکردنی کاڵا بۆ کاشڤان</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('daily_statement')}
+          className={`py-3 px-5 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+            activeTab === 'daily_statement' 
+              ? 'bg-blue-600 text-white shadow-sm' 
+              : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+          }`}
+        >
+          <FileText size={18} />
+          <span>وەسڵی ڕۆژانە و ژمێریاری</span>
         </button>
       </div>
 
-      {activeTab === 'sales' && (
+      {/* ========================================================================= */}
+      {/* TAB 1: SALES REPS (MANDOUB) ORDERS & SETTLEMENTS                          */}
+      {/* ========================================================================= */}
+      {activeTab === 'rep_sales' && (
         <div className="space-y-6">
-          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-amber-50/50">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <History className="text-amber-500" /> چاوەڕێی حیسابات
-              </h3>
-              <div className="text-sm font-bold text-amber-700">
-                کۆی گشتی چاوەڕوانکراو: <span dir="ltr">{pendingTotal.toLocaleString()} د.ع</span>
+          {/* KPI Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-500 font-bold">کۆی ئۆردەرەکانی مەندووب</div>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1">{orders.length}</div>
+              </div>
+              <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                <ShoppingCart size={24} />
               </div>
             </div>
+
+            <div className="bg-amber-50/70 p-5 rounded-2xl border border-amber-200 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-amber-800 font-bold">چاوەڕێی تەسفییە و حیسابات</div>
+                <div className="text-2xl font-black text-amber-700 font-mono mt-1" dir="ltr">
+                  {repPendingTotal.toLocaleString()} د.ع
+                </div>
+                <div className="text-[11px] text-amber-600 mt-0.5">({repPendingOrders.length} ئۆردەری تەسفییەنەکراو)</div>
+              </div>
+              <div className="p-3 bg-amber-100 text-amber-700 rounded-xl">
+                <History size={24} />
+              </div>
+            </div>
+
+            <div className="bg-emerald-50/70 p-5 rounded-2xl border border-emerald-200 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-emerald-800 font-bold">تەسفییەکراو (چووەتە حیسابات)</div>
+                <div className="text-2xl font-black text-emerald-700 font-mono mt-1" dir="ltr">
+                  {repCompletedTotal.toLocaleString()} د.ع
+                </div>
+                <div className="text-[11px] text-emerald-600 mt-0.5">({repCompletedOrders.length} ئۆردەری تەسفییەکراو)</div>
+              </div>
+              <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
+                <CheckCircle2 size={24} />
+              </div>
+            </div>
+          </div>
+
+          {/* Table Container & Filter Bar */}
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                {/* Rep Filter Dropdown */}
+                <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                  <User size={16} className="text-indigo-600 shrink-0" />
+                  <select
+                    value={selectedRepFilter}
+                    onChange={(e) => setSelectedRepFilter(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                  >
+                    <option value="all">سەرجەم مەندووبەکان ({reps.length})</option>
+                    {reps.map(r => (
+                      <option key={r.id} value={r.name}>{r.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Status Filter */}
+                <div className="flex items-center gap-1 bg-slate-200/80 p-1 rounded-xl">
+                  <button
+                    onClick={() => setRepStatusFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      repStatusFilter === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    هەموو ({orders.length})
+                  </button>
+                  <button
+                    onClick={() => setRepStatusFilter('pending')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      repStatusFilter === 'pending' ? 'bg-white text-amber-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    چاوەڕێی تەسفییە ({repPendingOrders.length})
+                  </button>
+                  <button
+                    onClick={() => setRepStatusFilter('completed')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      repStatusFilter === 'completed' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    تەسفییەکراو ({repCompletedOrders.length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative w-full md:w-72">
+                <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                <input
+                  type="text"
+                  placeholder="گەڕان بەپێی مارکێت، مەندووب، ژ.وەسڵ..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-3 pr-9 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            {/* Orders Table */}
             <div className="overflow-x-auto">
               <table className="w-full text-right">
-                <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                <thead className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-100">
                   <tr>
-                    <th className="p-4">کاشڤان</th>
+                    <th className="p-4">ژ.وەسڵ</th>
+                    <th className="p-4">مەندووب</th>
                     <th className="p-4">مارکێت</th>
-                    <th className="p-4">بەروار</th>
-                    <th className="p-4">بڕی پارە</th>
-                    <th className="p-4">کردارەکان</th>
+                    <th className="p-4">بەروار و کات</th>
+                    <th className="p-4">کۆی بڕ</th>
+                    <th className="p-4">دۆخی تەسفییە</th>
+                    <th className="p-4 text-center">کردارەکان</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
-                  {pendingSales.map(sale => (
-                    <tr key={sale.id} className="hover:bg-slate-50 transition">
-                      <td className="p-4 font-bold text-slate-800">{sale.cashvanName}</td>
-                      <td className="p-4">{sale.marketName}</td>
-                      <td className="p-4 text-slate-500">{format(sale.date, 'yyyy/MM/dd HH:mm')}</td>
-                      <td className="p-4 font-bold text-indigo-600" dir="ltr">{sale.totalAmount.toLocaleString()} د.ع</td>
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setSettlingSale(sale)}
-                            className="px-3 py-1.5 bg-green-50 text-green-700 hover:bg-green-100 font-bold rounded-lg transition flex items-center gap-1.5 text-xs"
-                          >
-                            <CheckCircle2 size={16} /> تەسفییە / حیسابات
-                          </button>
-                          <button 
-                            onClick={() => printStatement(sale.marketName)} 
-                            className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition" 
-                            title="کەشف حیساب"
-                          >
-                            <FileText size={16}/>
-                          </button>
-                          <button 
-                            onClick={() => {
-                              setEditingSale(sale);
-                              setEditSaleAmount(sale.totalAmount.toString());
-                            }} 
-                            className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
-                            title="دەستکاری بڕی پارە"
-                          >
-                            <Edit2 size={16}/>
-                          </button>
-                          <button 
-                            onClick={() => setDeletingSale(sale)} 
-                            className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
-                            title="سڕینەوەی وەسڵ"
-                          >
-                            <Trash2 size={16}/>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {pendingSales.length === 0 && (
-                    <tr><td colSpan={5} className="text-center py-6 text-slate-400">هیچ فرۆشتنێکی نوێ نییە</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                  {filteredOrders.map(order => {
+                    const isCompleted = order.status === 'completed';
+                    const invNo = order.invoiceId || order.id.slice(-6);
 
-          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden opacity-90">
-            <div className="p-4 border-b border-slate-100 bg-slate-50">
-              <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                <CheckCircle2 className="text-green-500" /> چووەتە حیسابات
-              </h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-right">
-                <thead className="bg-slate-50 text-slate-400 text-xs uppercase">
-                  <tr>
-                    <th className="p-4">کاشڤان</th>
-                    <th className="p-4">مارکێت</th>
-                    <th className="p-4">بەروار</th>
-                    <th className="p-4">بڕی پارە</th>
-                    <th className="p-4">کردارەکان</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
-                  {accountedSales.map(sale => (
-                    <tr key={sale.id} className="hover:bg-slate-50/50 transition">
-                      <td className="p-4 font-medium">{sale.cashvanName}</td>
-                      <td className="p-4">{sale.marketName}</td>
-                      <td className="p-4">{format(sale.date, 'yyyy/MM/dd HH:mm')}</td>
-                      <td className="p-4 font-bold text-slate-700" dir="ltr">{sale.totalAmount.toLocaleString()} د.ع</td>
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          <button 
-                            onClick={() => printStatement(sale.marketName)} 
-                            className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition" 
-                            title="کەشف حیساب"
-                          >
-                            <FileText size={16}/>
-                          </button>
-                          <button 
-                            onClick={() => {
-                              setEditingSale(sale);
-                              setEditSaleAmount(sale.totalAmount.toString());
-                            }} 
-                            className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
-                            title="دەستکاری بڕی پارە"
-                          >
-                            <Edit2 size={16}/>
-                          </button>
-                          <button 
-                            onClick={() => setDeletingSale(sale)} 
-                            className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
-                            title="سڕینەوەی وەسڵ"
-                          >
-                            <Trash2 size={16}/>
-                          </button>
+                    return (
+                      <tr key={order.id} className="hover:bg-slate-50/70 transition">
+                        <td className="p-4 font-mono font-bold text-slate-700 text-xs" dir="ltr">
+                          #{invNo}
+                        </td>
+                        <td className="p-4 font-bold text-slate-900">
+                          <div className="flex items-center gap-1.5">
+                            <User size={15} className="text-indigo-600" />
+                            <span>{order.repName}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 font-medium text-slate-800">
+                          <div className="flex items-center gap-1.5">
+                            <Store size={15} className="text-slate-400" />
+                            <span>{order.marketName}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-slate-500 text-xs font-mono" dir="ltr">
+                          {format(order.timestamp, 'yyyy/MM/dd HH:mm')}
+                        </td>
+                        <td className="p-4 font-bold text-indigo-600 font-mono" dir="ltr">
+                          {(order.totalAmount || 0).toLocaleString()} د.ع
+                        </td>
+                        <td className="p-4">
+                          {isCompleted ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
+                              <CheckCircle2 size={13} />
+                              تەسفییەکراوە ({order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'})
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 flex items-center gap-1 w-fit">
+                              <History size={13} />
+                              چاوەڕێی تەسفییەیە
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            {!isCompleted ? (
+                              <button
+                                onClick={() => setSettlingOrder(order)}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition flex items-center gap-1 text-xs shadow-2xs"
+                                title="تەسفییەکردنی ئۆردەر"
+                              >
+                                <CheckCircle2 size={14} />
+                                <span>تەسفییە</span>
+                              </button>
+                            ) : (
+                              <span className="text-xs text-emerald-600 font-bold px-2 py-1 bg-emerald-50 rounded-lg">
+                                تەواوکراوە
+                              </span>
+                            )}
+
+                            <button
+                              onClick={() => printRepOrder(order)}
+                              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
+                              title="چاپکردنی پسوڵەی ئۆردەر"
+                            >
+                              <Printer size={16} />
+                            </button>
+
+                            <button
+                              onClick={() => printStatement(order.marketName)}
+                              className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition"
+                              title="کەشف حیسابی مارکێت"
+                            >
+                              <FileText size={16} />
+                            </button>
+
+                            <button
+                              onClick={() => setDeletingOrder(order)}
+                              className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition"
+                              title="سڕینەوەی ئۆردەر"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {filteredOrders.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-12 text-slate-400">
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <ShoppingCart size={32} className="text-slate-300" />
+                          <span>هیچ ئۆردەرێک نەدۆزرایەوە</span>
                         </div>
                       </td>
                     </tr>
-                  ))}
-                  {accountedSales.length === 0 && (
-                    <tr><td colSpan={5} className="text-center py-6 text-slate-400">هیچ فرۆشتنێکی حیسابکراو نییە</td></tr>
                   )}
                 </tbody>
               </table>
@@ -510,234 +1032,462 @@ export default function AdminCashvanView() {
         </div>
       )}
 
-      {activeTab === 'transfers' && (
-        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-4 border-b border-slate-100">
-            <h3 className="font-bold text-slate-800 flex items-center gap-2">
-              <Truck className="text-indigo-600" /> مێژووی پێدانی کاڵا بە کاشڤانەکان لە کۆگاوە
-            </h3>
+      {/* ========================================================================= */}
+      {/* TAB 2: CASHVAN DIRECT SALES & SETTLEMENTS                                  */}
+      {/* ========================================================================= */}
+      {activeTab === 'cashvan_sales' && (
+        <div className="space-y-6">
+          {/* KPI Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-500 font-bold">کۆی فرۆشتنەکانی کاشڤان</div>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1">{sales.length}</div>
+              </div>
+              <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                <Truck size={24} />
+              </div>
+            </div>
+
+            <div className="bg-amber-50/70 p-5 rounded-2xl border border-amber-200 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-amber-800 font-bold">چاوەڕێی حیسابات</div>
+                <div className="text-2xl font-black text-amber-700 font-mono mt-1" dir="ltr">
+                  {cvPendingTotal.toLocaleString()} د.ع
+                </div>
+                <div className="text-[11px] text-amber-600 mt-0.5">({cvPendingSales.length} فرۆشتنی چاوەڕوانکراو)</div>
+              </div>
+              <div className="p-3 bg-amber-100 text-amber-700 rounded-xl">
+                <History size={24} />
+              </div>
+            </div>
+
+            <div className="bg-emerald-50/70 p-5 rounded-2xl border border-emerald-200 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-emerald-800 font-bold">چووەتە حیسابات (تەسفییەکراو)</div>
+                <div className="text-2xl font-black text-emerald-700 font-mono mt-1" dir="ltr">
+                  {cvAccountedTotal.toLocaleString()} د.ع
+                </div>
+                <div className="text-[11px] text-emerald-600 mt-0.5">({cvAccountedSales.length} فرۆشتنی حیسابکراو)</div>
+              </div>
+              <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
+                <CheckCircle2 size={24} />
+              </div>
+            </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-right">
-              <thead className="bg-slate-50 text-slate-500 text-xs">
-                <tr>
-                  <th className="p-4">کاشڤان</th>
-                  <th className="p-4">بەروار</th>
-                  <th className="p-4">وردەکاری</th>
-                  <th className="p-4">کۆی تێچوو</th>
-                  <th className="p-4">کردارەکان</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {transfers.map(t => (
-                  <tr key={t.id} className="hover:bg-slate-50/50 transition">
-                    <td className="p-4 font-bold text-slate-800">{t.cashvanName}</td>
-                    <td className="p-4 text-slate-600">{format(t.date, 'yyyy/MM/dd HH:mm')}</td>
-                    <td className="p-4 text-xs text-slate-500">
-                      {t.items.slice(0, 2).map(i => `${i.name} (${i.quantity})`).join(', ')}
-                      {t.items.length > 2 ? ' ...' : ''}
-                    </td>
-                    <td className="p-4 font-bold text-indigo-600" dir="ltr">{t.totalValue.toLocaleString()} د.ع</td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <button 
-                          onClick={() => printTransferReceipt(t)} 
-                          className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
-                          title="چاپکردنی وەسڵ"
-                        >
-                          <Printer size={16}/>
-                        </button>
-                        <button 
-                          onClick={() => {
-                            setEditingTransfer(t);
-                            setEditTransferValue(t.totalValue.toString());
-                          }} 
-                          className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
-                          title="دەستکاری"
-                        >
-                          <Edit2 size={16}/>
-                        </button>
-                        <button 
-                          onClick={() => setDeletingTransfer(t)} 
-                          className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
-                          title="سڕینەوە"
-                        >
-                          <Trash2 size={16}/>
-                        </button>
-                      </div>
-                    </td>
+
+          {/* Table Container & Filter Bar */}
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                {/* Cashvan Filter Dropdown */}
+                <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                  <Truck size={16} className="text-indigo-600 shrink-0" />
+                  <select
+                    value={selectedCashvanFilter}
+                    onChange={(e) => setSelectedCashvanFilter(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                  >
+                    <option value="all">سەرجەم کاشڤانەکان ({cashvans.length})</option>
+                    {cashvans.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Status Filter */}
+                <div className="flex items-center gap-1 bg-slate-200/80 p-1 rounded-xl">
+                  <button
+                    onClick={() => setCashvanStatusFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      cashvanStatusFilter === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    هەموو ({sales.length})
+                  </button>
+                  <button
+                    onClick={() => setCashvanStatusFilter('pending_accounting')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      cashvanStatusFilter === 'pending_accounting' ? 'bg-white text-amber-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    چاوەڕێی حیسابات ({cvPendingSales.length})
+                  </button>
+                  <button
+                    onClick={() => setCashvanStatusFilter('accounted')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      cashvanStatusFilter === 'accounted' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    چووەتە حیسابات ({cvAccountedSales.length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative w-full md:w-72">
+                <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                <input
+                  type="text"
+                  placeholder="گەڕان بەپێی مارکێت، کاشڤان، ژ.وەسڵ..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-3 pr-9 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            {/* Sales Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-right">
+                <thead className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-100">
+                  <tr>
+                    <th className="p-4">کاشڤان</th>
+                    <th className="p-4">مارکێت</th>
+                    <th className="p-4">بەروار و کات</th>
+                    <th className="p-4">بڕی فرۆشراو</th>
+                    <th className="p-4">دۆخی حیسابات</th>
+                    <th className="p-4 text-center">کردارەکان</th>
                   </tr>
-                ))}
-                {transfers.length === 0 && (
-                  <tr><td colSpan={5} className="text-center py-6 text-slate-400">هیچ زانیارییەک نییە</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {filteredSales.map(sale => {
+                    const isAccounted = sale.status === 'accounted';
+
+                    return (
+                      <tr key={sale.id} className="hover:bg-slate-50/70 transition">
+                        <td className="p-4 font-bold text-slate-900">
+                          <div className="flex items-center gap-1.5">
+                            <Truck size={15} className="text-blue-600" />
+                            <span>{sale.cashvanName}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 font-medium text-slate-800">
+                          <div className="flex items-center gap-1.5">
+                            <Store size={15} className="text-slate-400" />
+                            <span>{sale.marketName}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-slate-500 text-xs font-mono" dir="ltr">
+                          {format(sale.date, 'yyyy/MM/dd HH:mm')}
+                        </td>
+                        <td className="p-4 font-bold text-indigo-600 font-mono" dir="ltr">
+                          {sale.totalAmount.toLocaleString()} د.ع
+                        </td>
+                        <td className="p-4">
+                          {isAccounted ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
+                              <CheckCircle2 size={13} />
+                              چووەتە حیسابات ({sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'})
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 flex items-center gap-1 w-fit">
+                              <History size={13} />
+                              چاوەڕێی حیسابات
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            {!isAccounted ? (
+                              <button
+                                onClick={() => setSettlingSale(sale)}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition flex items-center gap-1 text-xs shadow-2xs"
+                                title="تەسفییە و حیساباتی فرۆشتن"
+                              >
+                                <CheckCircle2 size={14} />
+                                <span>تەسفییە</span>
+                              </button>
+                            ) : (
+                              <span className="text-xs text-emerald-600 font-bold px-2 py-1 bg-emerald-50 rounded-lg">
+                                حیسابکراوە
+                              </span>
+                            )}
+
+                            <button
+                              onClick={() => printStatement(sale.marketName)}
+                              className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition"
+                              title="کەشف حیسابی مارکێت"
+                            >
+                              <FileText size={16} />
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setEditingSale(sale);
+                                setEditSaleAmount(sale.totalAmount.toString());
+                              }}
+                              className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition"
+                              title="دەستکاری بڕی پارە"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+
+                            <button
+                              onClick={() => setDeletingSale(sale)}
+                              className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition"
+                              title="سڕینەوەی وەسڵ (کاڵاکان دەگەڕێنەوە ڤان)"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {filteredSales.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-slate-400">
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <Truck size={32} className="text-slate-300" />
+                          <span>هیچ فرۆشتنێکی کاشڤان نەدۆزرایەوە</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       )}
 
-      {/* Delete Sale Confirmation Modal */}
-      {deletingSale && (
+      {/* ========================================================================= */}
+      {/* TAB 3: WAREHOUSE TRANSFERS TO CASHVAN                                     */}
+      {/* ========================================================================= */}
+      {activeTab === 'transfers' && (
+        <div className="space-y-6">
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <Layers size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">مێژووی بارکردنی کاڵا بۆ کاشڤان لە کۆگاوە</h3>
+                  <div className="text-xs text-slate-500">کۆی تۆمارەکانی پێدانی کاڵا بە کاشڤانەکان</div>
+                </div>
+              </div>
+
+              {/* Cashvan Filter Dropdown */}
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                <Truck size={16} className="text-indigo-600 shrink-0" />
+                <select
+                  value={selectedCashvanFilter}
+                  onChange={(e) => setSelectedCashvanFilter(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="all">سەرجەم کاشڤانەکان ({cashvans.length})</option>
+                  {cashvans.map(c => (
+                    <option key={c.id} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-right">
+                <thead className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-100">
+                  <tr>
+                    <th className="p-4">کاشڤان</th>
+                    <th className="p-4">بەروار</th>
+                    <th className="p-4">کاڵا بارکراوەکان</th>
+                    <th className="p-4">کۆی بەها</th>
+                    <th className="p-4 text-center">کردارەکان</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {filteredTransfers.map(transfer => {
+                    return (
+                      <tr key={transfer.id} className="hover:bg-slate-50/70 transition">
+                        <td className="p-4 font-bold text-slate-900">
+                          <div className="flex items-center gap-1.5">
+                            <Truck size={15} className="text-indigo-600" />
+                            <span>{transfer.cashvanName}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-slate-500 text-xs font-mono" dir="ltr">
+                          {format(transfer.date, 'yyyy/MM/dd HH:mm')}
+                        </td>
+                        <td className="p-4">
+                          <div className="flex flex-wrap gap-1.5 max-w-md">
+                            {(transfer.items || []).map((item, idx) => (
+                              <span key={idx} className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-medium">
+                                {item.name}: <strong>{item.quantity}</strong> {item.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="p-4 font-bold text-indigo-600 font-mono" dir="ltr">
+                          {(transfer.totalValue || 0).toLocaleString()} د.ع
+                        </td>
+                        <td className="p-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => printTransferReceipt(transfer)}
+                              className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition"
+                              title="چاپکردنی پسوڵەی بارکردن"
+                            >
+                              <Printer size={16} />
+                            </button>
+                            <button
+                              onClick={() => setDeletingTransfer(transfer)}
+                              className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition"
+                              title="سڕینەوە"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {filteredTransfers.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="text-center py-12 text-slate-400">
+                        هیچ تۆمارێکی بارکردنی کاڵا نەدۆزرایەوە
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4: DAILY COMPREHENSIVE ACTIVITY STATEMENTS & RECEIPTS                */}
+      {/* ========================================================================= */}
+      {activeTab === 'daily_statement' && (
+        <div className="space-y-6">
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+            <div className="max-w-2xl mx-auto space-y-6">
+              <div className="text-center space-y-2">
+                <div className="inline-flex p-3 bg-blue-50 text-blue-600 rounded-2xl mb-1">
+                  <FileText size={32} />
+                </div>
+                <h2 className="text-lg font-black text-slate-900">چاپکردنی وەسڵی ڕۆژانەی مەندووب و کاشڤان</h2>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  ئەم وەسڵە کۆی فرۆشراوەکان (نەقد و قەرز)، قەرزە وەرگیراوەکانی مارکێتەکان، و کۆی گشتی پارەی نەقدی ڕادەستکراو دەردەخات.
+                </p>
+              </div>
+
+              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">بەرواری کارکردن *</label>
+                    <div className="relative">
+                      <Calendar className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                      <input
+                        type="date"
+                        value={dailyDate}
+                        onChange={(e) => setDailyDate(e.target.value)}
+                        className="w-full pl-3 pr-9 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">هەڵبژاردنی کەسی دیاریکراو *</label>
+                    <select
+                      value={dailySelectedPerson}
+                      onChange={(e) => setDailySelectedPerson(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="all">سەرجەم مەندووب و کاشڤانەکان</option>
+                      <optgroup label="مەندووبەکان">
+                        {reps.map(r => (
+                          <option key={r.id} value={r.name}>👤 مەندووب: {r.name}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="کاشڤانەکان">
+                        {cashvans.map(c => (
+                          <option key={c.id} value={c.name}>🚚 کاشڤان: {c.name}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    onClick={handlePrintDailyReport}
+                    className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm text-sm"
+                  >
+                    <Printer size={18} />
+                    <span>چاپکردن و دەرکردنی پسوڵەی ڕۆژانە</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: SETTLE REP ORDER                                                    */}
+      {/* ========================================================================= */}
+      {settlingOrder && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-150">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-red-50">
-              <h3 className="font-bold text-red-800 text-base flex items-center gap-2">
-                <AlertTriangle className="text-red-600" size={20} />
-                سڕینەوەی وەسڵی فرۆشتن
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
+              <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
+                <CheckCircle2 className="text-indigo-600" size={20} />
+                تەسفییە و حیساباتی ئۆردەری مەندووب
               </h3>
               <button 
-                onClick={() => setDeletingSale(null)} 
+                onClick={() => setSettlingOrder(null)} 
                 className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
                 disabled={isProcessing}
               >
                 <X size={20} />
               </button>
             </div>
+
             <div className="p-6 space-y-4">
-              <p className="text-slate-700 text-sm leading-relaxed">
-                ئایا دڵنیایت لە سڕینەوەی ئەم وەسڵە؟ کاڵاکان بە شێوەی ئۆتۆماتیکی دەگەڕێنەوە ناو کۆگای کاشڤانەکە.
-              </p>
-              
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-sm space-y-1.5">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-slate-500">کاشڤان:</span>
-                  <span className="font-bold text-slate-800">{deletingSale.cashvanName}</span>
+                  <span className="text-slate-500">مەندووب:</span>
+                  <span className="font-bold text-slate-800">{settlingOrder.repName}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">مارکێت:</span>
-                  <span className="font-bold text-slate-800">{deletingSale.marketName}</span>
+                  <span className="font-bold text-slate-800">{settlingOrder.marketName}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">بڕی پارە:</span>
-                  <span className="font-bold text-indigo-600 font-mono" dir="ltr">{deletingSale.totalAmount.toLocaleString()} د.ع</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">دۆخ:</span>
-                  <span className={`font-bold ${deletingSale.status === 'accounted' ? 'text-green-600' : 'text-amber-600'}`}>
-                    {deletingSale.status === 'accounted' ? 'چووەتە حیسابات' : 'چاوەڕێی حیسابات'}
+                  <span className="text-slate-500">کۆی بڕی پارە:</span>
+                  <span className="font-bold text-indigo-600 font-mono" dir="ltr">
+                    {(settlingOrder.totalAmount || 0).toLocaleString()} د.ع
                   </span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={confirmDeleteSale}
-                  disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
-                >
-                  <Trash2 size={18} />
-                  {isProcessing ? 'دەسڕێتەوە...' : 'بەڵێ، بسڕەوە'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeletingSale(null)}
-                  disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
-                >
-                  پاشگەزبوونەوە
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Sale Modal */}
-      {editingSale && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-blue-50">
-              <h3 className="font-bold text-blue-800 text-base flex items-center gap-2">
-                <Edit2 className="text-blue-600" size={20} />
-                دەستکاریکردنی بڕی پارەی وەسڵ
-              </h3>
-              <button 
-                onClick={() => setEditingSale(null)} 
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
-                disabled={isProcessing}
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">کۆی گشتی نوێ (د.ع):</label>
-                <input
-                  type="number"
-                  dir="ltr"
-                  value={editSaleAmount}
-                  onChange={(e) => setEditSaleAmount(e.target.value)}
-                  className="w-full p-3 border border-slate-300 rounded-xl font-bold font-mono text-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="بڕی پارە بنووسە"
-                  autoFocus
-                />
-              </div>
-
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={confirmEditSale}
-                  disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
-                >
-                  <Check size={18} />
-                  {isProcessing ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردن'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEditingSale(null)}
-                  disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
-                >
-                  پاشگەزبوونەوە
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Transfer Modal */}
-      {deletingTransfer && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-red-50">
-              <h3 className="font-bold text-red-800 text-base flex items-center gap-2">
-                <AlertTriangle className="text-red-600" size={20} />
-                سڕینەوەی پێدانی کاڵا
-              </h3>
-              <button 
-                onClick={() => setDeletingTransfer(null)} 
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
-                disabled={isProcessing}
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              <p className="text-slate-700 text-sm leading-relaxed">
-                ئایا دڵنیایت لە سڕینەوەی ئەم تۆمارەی کاڵا پێدان بە کاشڤان (<strong className="text-slate-900">{deletingTransfer.cashvanName}</strong>)؟
+              <p className="text-xs text-slate-600 text-center font-medium">
+                تکایە جۆری تەسفییەکردنی ئەم وەسڵە دیاری بکە:
               </p>
 
-              <div className="flex items-center gap-3 pt-2">
+              <div className="grid grid-cols-2 gap-3 pt-2">
                 <button
-                  type="button"
-                  onClick={confirmDeleteTransfer}
+                  onClick={() => handleSettleOrder('cash')}
                   disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                  className="py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition flex flex-col items-center justify-center gap-1 shadow-sm"
                 >
-                  <Trash2 size={18} />
-                  {isProcessing ? 'دەسڕێتەوە...' : 'بەڵێ، بسڕەوە'}
+                  <DollarSign size={20} />
+                  <span>تەسفییە بە نەقد</span>
+                  <span className="text-[10px] opacity-80">(دەچێتە قاصەی نەقد)</span>
                 </button>
+
                 <button
-                  type="button"
-                  onClick={() => setDeletingTransfer(null)}
+                  onClick={() => handleSettleOrder('debt')}
                   disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                  className="py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition flex flex-col items-center justify-center gap-1 shadow-sm"
                 >
-                  پاشگەزبوونەوە
+                  <CreditCard size={20} />
+                  <span>تەسفییە بە قەرز</span>
+                  <span className="text-[10px] opacity-80">(دەچێتە قەرزی مارکێت)</span>
                 </button>
               </div>
             </div>
@@ -745,62 +1495,9 @@ export default function AdminCashvanView() {
         </div>
       )}
 
-      {/* Edit Transfer Modal */}
-      {editingTransfer && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-blue-50">
-              <h3 className="font-bold text-blue-800 text-base flex items-center gap-2">
-                <Edit2 className="text-blue-600" size={20} />
-                دەستکاریکردنی تێچووی پێدانی کاڵا
-              </h3>
-              <button 
-                onClick={() => setEditingTransfer(null)} 
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
-                disabled={isProcessing}
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">کۆی تێچووی نوێ (د.ع):</label>
-                <input
-                  type="number"
-                  dir="ltr"
-                  value={editTransferValue}
-                  onChange={(e) => setEditTransferValue(e.target.value)}
-                  className="w-full p-3 border border-slate-300 rounded-xl font-bold font-mono text-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="بڕی پارە بنووسە"
-                  autoFocus
-                />
-              </div>
-
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={confirmEditTransfer}
-                  disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
-                >
-                  <Check size={18} />
-                  {isProcessing ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردن'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEditingTransfer(null)}
-                  disabled={isProcessing}
-                  className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
-                >
-                  پاشگەزبوونەوە
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Settle Cashvan Sale Modal */}
+      {/* ========================================================================= */}
+      {/* MODAL: SETTLE CASHVAN SALE                                                */}
+      {/* ========================================================================= */}
       {settlingSale && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
@@ -817,6 +1514,7 @@ export default function AdminCashvanView() {
                 <X size={20} />
               </button>
             </div>
+
             <div className="p-6 space-y-4">
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2 text-sm">
                 <div className="flex justify-between">
@@ -824,52 +1522,93 @@ export default function AdminCashvanView() {
                   <span className="font-bold text-slate-800">{settlingSale.cashvanName}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">مارکێت/کۆگا:</span>
+                  <span className="text-slate-500">مارکێت:</span>
                   <span className="font-bold text-slate-800">{settlingSale.marketName}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">کۆی بڕی پارە:</span>
-                  <span className="font-bold text-indigo-600 font-mono" dir="ltr">{settlingSale.totalAmount.toLocaleString()} د.ع</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">شێوازی فرۆشتن:</span>
-                  <span className={`px-2 py-0.5 rounded text-xs font-bold ${settlingSale.paymentType === 'debt' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                    {settlingSale.paymentType === 'debt' ? 'قەرز' : 'نەقد'}
+                  <span className="font-bold text-indigo-600 font-mono" dir="ltr">
+                    {(settlingSale.totalAmount || 0).toLocaleString()} د.ع
                   </span>
                 </div>
               </div>
 
-              <p className="text-xs text-slate-600 font-medium">
-                تکایە شێوازی داخڵکردنی ئەم مامەڵەیە بۆ نێو دەفتەری حیسابات و حساباتی مارکێت دیاری بکە:
+              <p className="text-xs text-slate-600 text-center font-medium">
+                تکایە جۆری تەسفییەکردنی ئەم وەسڵە دیاری بکە:
               </p>
 
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <button
-                  type="button"
-                  onClick={() => settleCashvanSale('cash')}
+                  onClick={() => handleSettleCashvanSale('cash')}
                   disabled={isProcessing}
-                  className="py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition flex flex-col items-center justify-center gap-1 shadow-sm disabled:opacity-50"
+                  className="py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition flex flex-col items-center justify-center gap-1 shadow-sm"
                 >
                   <DollarSign size={20} />
                   <span>تەسفییە بە نەقد</span>
+                  <span className="text-[10px] opacity-80">(دەچێتە قاصەی نەقد)</span>
                 </button>
+
                 <button
-                  type="button"
-                  onClick={() => settleCashvanSale('debt')}
+                  onClick={() => handleSettleCashvanSale('debt')}
                   disabled={isProcessing}
-                  className="py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition flex flex-col items-center justify-center gap-1 shadow-sm disabled:opacity-50"
+                  className="py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition flex flex-col items-center justify-center gap-1 shadow-sm"
                 >
-                  <History size={20} />
+                  <CreditCard size={20} />
                   <span>تەسفییە بە قەرز</span>
+                  <span className="text-[10px] opacity-80">(دەچێتە قەرزی مارکێت)</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-              <div className="pt-2">
+      {/* ========================================================================= */}
+      {/* MODAL: EDIT CASHVAN SALE AMOUNT                                           */}
+      {/* ========================================================================= */}
+      {editingSale && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-blue-50">
+              <h3 className="font-bold text-blue-900 text-base flex items-center gap-2">
+                <Edit2 className="text-blue-600" size={18} />
+                دەستکاری بڕی پارەی فرۆشتنی کاشڤان
+              </h3>
+              <button 
+                onClick={() => setEditingSale(null)} 
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
+                disabled={isProcessing}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">بڕی نوێی پارە (د.ع) *</label>
+                <input
+                  type="number"
+                  value={editSaleAmount}
+                  onChange={(e) => setEditSaleAmount(e.target.value)}
+                  dir="ltr"
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-mono font-bold"
+                  autoFocus
+                />
+              </div>
+
+              <div className="pt-2 flex gap-2">
                 <button
-                  type="button"
-                  onClick={() => setSettlingSale(null)}
+                  onClick={handleSaveEditSale}
                   disabled={isProcessing}
-                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition text-sm flex items-center justify-center gap-2 shadow-sm"
+                >
+                  <Check size={18} />
+                  <span>پاشەکەوتکردن</span>
+                </button>
+                <button
+                  onClick={() => setEditingSale(null)}
+                  disabled={isProcessing}
+                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-sm"
                 >
                   پاشگەزبوونەوە
                 </button>
@@ -878,6 +1617,59 @@ export default function AdminCashvanView() {
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* CONFIRM DELETE MODALS                                                     */}
+      {/* ========================================================================= */}
+      <ConfirmModal
+        isOpen={!!deletingOrder}
+        onClose={() => setDeletingOrder(null)}
+        onConfirm={confirmDeleteOrder}
+        title="سڕینەوەی ئۆردەری مەندووب"
+        message={`ئایا دڵنیایت لە سڕینەوەی ئەم ئۆردەرەی مەندووب (${deletingOrder?.repName}) بۆ (${deletingOrder?.marketName})؟`}
+        itemName={deletingOrder?.marketName}
+        details={deletingOrder ? [
+          { label: 'مەندووب', value: deletingOrder.repName },
+          { label: 'مارکێت', value: deletingOrder.marketName },
+          { label: 'بڕی پارە', value: `${(deletingOrder.totalAmount || 0).toLocaleString()} د.ع` }
+        ] : []}
+      />
+
+      <ConfirmModal
+        isOpen={!!deletingSale}
+        onClose={() => setDeletingSale(null)}
+        onConfirm={confirmDeleteCashvanSale}
+        title="سڕینەوەی وەسڵی فرۆشتنی کاشڤان"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم وەسڵە؟ کاڵاکان بە شێوەی ئۆتۆماتیکی دەگەڕێنەوە ناو ڤانی کاشڤانەکە."
+        itemName={deletingSale?.marketName}
+        details={deletingSale ? [
+          { label: 'کاشڤان', value: deletingSale.cashvanName },
+          { label: 'مارکێت', value: deletingSale.marketName },
+          { label: 'بڕی پارە', value: `${(deletingSale.totalAmount || 0).toLocaleString()} د.ع` }
+        ] : []}
+      />
+
+      <ConfirmModal
+        isOpen={!!deletingTransfer}
+        onClose={() => setDeletingTransfer(null)}
+        onConfirm={async () => {
+          if (!deletingTransfer) return;
+          try {
+            await deleteDoc(doc(db, 'cashvan_transfers', deletingTransfer.id));
+            setDeletingTransfer(null);
+          } catch (e) {
+            console.error(e);
+            alert('هەڵەیەک ڕوویدا لە سڕینەوەی بارکردن');
+          }
+        }}
+        title="سڕینەوەی تۆماری بارکردنی کاڵا"
+        message={`ئایا دڵنیایت لە سڕینەوەی ئەم تۆمارەی کاڵا بارکردن بۆ (${deletingTransfer?.cashvanName})؟`}
+        itemName={deletingTransfer?.cashvanName}
+        details={deletingTransfer ? [
+          { label: 'کاشڤان', value: deletingTransfer.cashvanName },
+          { label: 'کۆی بەها', value: `${(deletingTransfer.totalValue || 0).toLocaleString()} د.ع` }
+        ] : []}
+      />
     </div>
   );
 }

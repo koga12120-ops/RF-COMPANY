@@ -10,8 +10,17 @@ export interface GroupedStatementRow {
   amount: number;
 }
 
-export function generateStatementHtml(entityName: string, transactions: Transaction[]): string {
+export interface StatementOptions {
+  isCompany?: boolean;
+  roleTitle?: string;
+}
+
+export function generateStatementHtml(entityName: string, transactions: Transaction[], options?: StatementOptions): string {
   const sorted = [...transactions].sort((a, b) => a.date - b.date);
+
+  const isCompany = options?.isCompany ?? (options?.roleTitle === 'کۆمپانیا');
+  const pageTitle = isCompany ? `حساباتی کۆمپانیا - ${entityName}` : `کەشف حیساب - ${entityName}`;
+  const headerSubtitle = isCompany ? `حساباتی دارایی کۆمپانیا: ${entityName}` : `کەشف حیساب - ${entityName}`;
 
   let totalDebt = 0;
   let totalPaid = 0;
@@ -96,7 +105,7 @@ export function generateStatementHtml(entityName: string, transactions: Transact
   return `
     <html dir="rtl">
       <head>
-        <title>کەشف حیساب - ${entityName}</title>
+        <title>${pageTitle}</title>
         <meta charset="utf-8" />
         <style>
           body { font-family: Tahoma, 'Segoe UI', Arial, sans-serif; padding: 24px; color: #1e293b; line-height: 1.5; background: #fff; }
@@ -120,7 +129,7 @@ export function generateStatementHtml(entityName: string, transactions: Transact
       <body>
         <div class="header">
           <h2>کۆمپانیای RF</h2>
-          <h3>کەشف حیساب - ${entityName}</h3>
+          <h3>${headerSubtitle}</h3>
           <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
         </div>
         <table>
@@ -163,8 +172,8 @@ export function generateStatementHtml(entityName: string, transactions: Transact
   `;
 }
 
-export function printStatementPopup(entityName: string, transactions: Transaction[]) {
-  const html = generateStatementHtml(entityName, transactions);
+export function printStatementPopup(entityName: string, transactions: Transaction[], options?: StatementOptions) {
+  const html = generateStatementHtml(entityName, transactions, options);
   const win = window.open('', '_blank');
   if (win) {
     win.document.write(html);
@@ -302,6 +311,199 @@ export function generatePaymentReceiptHtml(data: PaymentReceiptData): string {
 
 export function printPaymentReceiptPopup(data: PaymentReceiptData) {
   const html = generatePaymentReceiptHtml(data);
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
+export interface DailyRepActivityData {
+  repName: string;
+  roleTitle: string; // 'مەندووب' or 'کاشڤان'
+  date: number;
+  sales: {
+    id: string;
+    marketName: string;
+    invoiceNo?: string;
+    amount: number;
+    paymentType: string; // 'نەقد' or 'قەرز'
+    itemsSummary?: string;
+  }[];
+  collections: {
+    id: string;
+    marketName: string;
+    invoiceNo?: string;
+    amount: number;
+    notes?: string;
+  }[];
+}
+
+export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string {
+  const totalCashSales = data.sales.filter(s => s.paymentType.includes('نەقد')).reduce((sum, s) => sum + s.amount, 0);
+  const totalDebtSales = data.sales.filter(s => s.paymentType.includes('قەرز')).reduce((sum, s) => sum + s.amount, 0);
+  const totalSalesAmount = totalCashSales + totalDebtSales;
+  const totalCollectedDebt = data.collections.reduce((sum, c) => sum + c.amount, 0);
+  const totalCashInHand = totalCashSales + totalCollectedDebt;
+
+  const salesRowsHtml = data.sales.map((s, idx) => `
+    <tr>
+      <td style="text-align:center;font-weight:bold;color:#64748b;">${idx + 1}</td>
+      <td style="font-weight:bold;color:#0f172a;">${s.marketName}</td>
+      <td dir="ltr" style="text-align:center;font-family:monospace;font-size:13px;color:#4338ca;">${s.invoiceNo ? `#${s.invoiceNo}` : '-'}</td>
+      <td style="text-align:center;">
+        <span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:bold;${s.paymentType.includes('نەقد') ? 'background:#dcfce7;color:#166534;' : 'background:#fef3c7;color:#92400e;'}">
+          ${s.paymentType}
+        </span>
+      </td>
+      <td dir="ltr" style="text-align:left;font-weight:bold;color:#0f172a;">${s.amount.toLocaleString()} د.ع</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" style="text-align:center;padding:12px;color:#94a3b8;">هیچ فرۆشتنێک لەم بەروارەدا تۆمار نەکراوە</td></tr>';
+
+  const collectionRowsHtml = data.collections.map((c, idx) => `
+    <tr>
+      <td style="text-align:center;font-weight:bold;color:#64748b;">${idx + 1}</td>
+      <td style="font-weight:bold;color:#0f172a;">${c.marketName}</td>
+      <td dir="ltr" style="text-align:center;font-family:monospace;font-size:13px;color:#059669;">${c.invoiceNo ? `#${c.invoiceNo}` : '-'}</td>
+      <td style="color:#64748b;font-size:13px;">${c.notes || 'وەرگرتنەوەی قەرز'}</td>
+      <td dir="ltr" style="text-align:left;font-weight:bold;color:#166534;">${c.amount.toLocaleString()} د.ع</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" style="text-align:center;padding:12px;color:#94a3b8;">هیچ قەرزێک لەم بەروارەدا وەرنەگیراوەتەوە</td></tr>';
+
+  return `
+    <html dir="rtl">
+      <head>
+        <title>وەسڵی ڕۆژانەی ${data.roleTitle} - ${data.repName}</title>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Tahoma, 'Segoe UI', Arial, sans-serif; padding: 24px; color: #1e293b; line-height: 1.5; background: #fff; }
+          .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #3b82f6; padding-bottom: 12px; }
+          .header h2 { margin: 0 0 4px 0; color: #1e3a8a; font-size: 24px; }
+          .header h3 { margin: 0; color: #2563eb; font-size: 17px; font-weight: bold; }
+          .header p { margin: 4px 0 0 0; font-size: 12px; color: #64748b; }
+          
+          .info-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; margin-bottom: 20px; }
+          .info-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
+          .info-row:last-child { margin-bottom: 0; }
+          .label { color: #64748b; font-weight: 500; }
+          .value { font-weight: bold; color: #0f172a; }
+
+          .section-title { font-size: 16px; font-weight: bold; color: #1e293b; margin: 18px 0 8px 0; display: flex; items-center; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+          
+          table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+          th { background: #f1f5f9; padding: 8px 12px; text-align: right; border: 1px solid #cbd5e1; font-size: 13px; color: #334155; }
+          td { padding: 8px 12px; border: 1px solid #e2e8f0; font-size: 13px; }
+          
+          .summary-box { background: #f0fdf4; border: 2px solid #86efac; border-radius: 12px; padding: 16px; margin: 24px 0; }
+          .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+          .total-highlight { border-top: 2px dashed #4ade80; padding-top: 10px; margin-top: 10px; font-size: 18px; font-weight: bold; color: #166534; }
+          
+          .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 10px; }
+          .sig-block { text-align: center; }
+          .sig-line { margin-top: 35px; border-top: 1px dashed #64748b; width: 160px; }
+          
+          @media print {
+            body { padding: 10px; }
+            @page { margin: 15mm; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2>کۆمپانیای RF</h2>
+          <h3>وەسڵی ڕۆژانەی کار و حساباتی ${data.roleTitle}</h3>
+          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
+        </div>
+
+        <div class="info-box">
+          <div class="info-row">
+            <span class="label">ناوی ${data.roleTitle}:</span>
+            <span class="value">${data.repName}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">بەرواری کار:</span>
+            <span class="value" dir="ltr">${format(data.date, 'yyyy-MM-dd')}</span>
+          </div>
+        </div>
+
+        <div class="section-title">
+          <span>📦 لیستی فرۆشتنەکانی ئەمڕۆ (${data.sales.length} وەسڵ)</span>
+          <span dir="ltr" style="font-size: 14px; color: #4338ca;">کۆی فرۆش: ${totalSalesAmount.toLocaleString()} د.ع</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40px; text-align: center;">#</th>
+              <th>ناوی مارکێت / شوێن</th>
+              <th style="width: 130px; text-align: center;">ژمارەی وەسڵ</th>
+              <th style="width: 100px; text-align: center;">جۆری پارەدان</th>
+              <th style="width: 140px; text-align: left;">بڕی پارە</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${salesRowsHtml}
+          </tbody>
+        </table>
+
+        <div class="section-title">
+          <span>💰 لیستی قەرزە وەرگیراوەکان لە مارکێتەکان (${data.collections.length} پسوڵە)</span>
+          <span dir="ltr" style="font-size: 14px; color: #166534;">کۆی قەرزی وەرگیراو: ${totalCollectedDebt.toLocaleString()} د.ع</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40px; text-align: center;">#</th>
+              <th>ناوی مارکێت / کڕیار</th>
+              <th style="width: 130px; text-align: center;">ژمارەی وەسڵ</th>
+              <th>تێبینی / وردەکاری</th>
+              <th style="width: 140px; text-align: left;">بڕی پارە</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${collectionRowsHtml}
+          </tbody>
+        </table>
+
+        <div class="summary-box">
+          <div class="summary-row">
+            <span>کۆی فرۆشتنی نەقد:</span>
+            <span dir="ltr" style="font-weight: bold; color: #166534;">${totalCashSales.toLocaleString()} د.ع</span>
+          </div>
+          <div class="summary-row">
+            <span>کۆی فرۆشتنی بە قەرز:</span>
+            <span dir="ltr" style="font-weight: bold; color: #b45309;">${totalDebtSales.toLocaleString()} د.ع</span>
+          </div>
+          <div class="summary-row">
+            <span>کۆی قەرزی وەرگیراوە لە مارکێتەکان (کاش):</span>
+            <span dir="ltr" style="font-weight: bold; color: #166534;">${totalCollectedDebt.toLocaleString()} د.ع</span>
+          </div>
+          <div class="summary-row total-highlight">
+            <span>کۆی گشتی پارەی نەقد بۆ ڕادەستکردن بە بەڕێوەبەر:</span>
+            <span dir="ltr">${totalCashInHand.toLocaleString()} د.ع</span>
+          </div>
+        </div>
+
+        <div class="signatures">
+          <div class="sig-block">
+            <div>واژووی ${data.roleTitle} (${data.repName})</div>
+            <div class="sig-line"></div>
+          </div>
+          <div class="sig-block">
+            <div>واژووی بەڕێوەبەر / وردبین</div>
+            <div class="sig-line"></div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+}
+
+export function printDailyRepReceiptPopup(data: DailyRepActivityData) {
+  const html = generateDailyRepReceiptHtml(data);
   const win = window.open('', '_blank');
   if (win) {
     win.document.write(html);

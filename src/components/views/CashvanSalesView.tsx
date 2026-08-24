@@ -1,16 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, query, where, onSnapshot, addDoc, doc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { CashvanSale, CashvanRequisition, Item } from '../../types';
-import { Search, Plus, Printer, Trash2, CheckCircle2, FileText, Edit2, AlertTriangle, X, ClipboardList, Truck, Send, Clock, UserCheck } from 'lucide-react';
-import { format } from 'date-fns';
+import { CashvanSale, CashvanRequisition, Item, Transaction } from '../../types';
+import { Search, Plus, Printer, Trash2, CheckCircle2, FileText, Edit2, AlertTriangle, X, ClipboardList, Truck, Send, Clock, UserCheck, CreditCard, Calendar, User } from 'lucide-react';
+import { format, startOfDay, endOfDay } from 'date-fns';
+import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
+import { printDailyRepReceiptPopup } from '../../lib/statementPrinter';
 
 export default function CashvanSalesView() {
   const [inventory, setInventory] = useState<any[]>([]);
   const [warehouseItems, setWarehouseItems] = useState<Item[]>([]);
   const [markets, setMarkets] = useState<any[]>([]);
-  const [cashvanList, setCashvanList] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [cart, setCart] = useState<any[]>([]);
   const [paymentType, setPaymentType] = useState<'cash' | 'debt'>('cash');
   
@@ -21,6 +23,14 @@ export default function CashvanSalesView() {
   const [myRequisitions, setMyRequisitions] = useState<CashvanRequisition[]>([]);
   const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Pay Debt Modal State
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [payTargetMarket, setPayTargetMarket] = useState('');
+
+  // Daily Rep Receipt Modal State
+  const [showDailyModal, setShowDailyModal] = useState(false);
+  const [dailyDate, setDailyDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   // Active view tab: sales vs pre-order
   const [activeTab, setActiveTab] = useState<'sales' | 'preorder' | 'history'>('sales');
@@ -46,25 +56,6 @@ export default function CashvanSalesView() {
   }, []);
 
   useEffect(() => {
-    // Load list of cashvans / reps
-    const unsubCV = onSnapshot(query(collection(db, 'cashvans')), (snap) => {
-      const list: any[] = [];
-      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
-      setCashvanList(prev => {
-        const reps = prev.filter(p => p.isRep);
-        return [...reps, ...list];
-      });
-    });
-
-    const unsubReps = onSnapshot(query(collection(db, 'reps')), (snap) => {
-      const list: any[] = [];
-      snap.forEach(d => list.push({ id: d.id, ...d.data(), isRep: true }));
-      setCashvanList(prev => {
-        const cvs = prev.filter(p => !p.isRep);
-        return [...cvs, ...list];
-      });
-    });
-
     // Load warehouse items for pre-orders
     const unsubWH = onSnapshot(query(collection(db, 'items')), (snap) => {
       const itemsData: Item[] = [];
@@ -73,8 +64,6 @@ export default function CashvanSalesView() {
     });
 
     return () => {
-      unsubCV();
-      unsubReps();
       unsubWH();
     };
   }, []);
@@ -138,13 +127,92 @@ export default function CashvanSalesView() {
       }
     );
 
+    const unsubTrans = onSnapshot(
+      query(collection(db, 'transactions')),
+      (snapshot) => {
+        const data: Transaction[] = [];
+        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as Transaction));
+        setTransactions(data);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'transactions');
+      }
+    );
+
     return () => {
       unsubInv();
       unsubMarkets();
       unsubSales();
       unsubReqs();
+      unsubTrans();
     };
   }, [activeCashvanName]);
+
+  // Compute live market debt map for quick balance lookups
+  const marketDebtMap = useMemo(() => {
+    const map = new Map<string, number>();
+    transactions.forEach(t => {
+      const entity = t.relatedEntityId?.trim();
+      if (!entity) return;
+      let key = entity;
+      for (const m of markets) {
+        if (m.name?.trim().toLowerCase() === entity.toLowerCase()) {
+          key = m.name;
+          break;
+        }
+      }
+      const cur = map.get(key) || 0;
+      if (t.type === 'debt') map.set(key, cur + (t.amount || 0));
+      else if (t.type === 'paid_debt') map.set(key, Math.max(0, cur - (t.amount || 0)));
+    });
+    return map;
+  }, [transactions, markets]);
+
+  const handlePrintDailyReceipt = (dateStr: string) => {
+    const targetDate = dateStr ? new Date(dateStr) : new Date();
+    const dayStart = startOfDay(targetDate).getTime();
+    const dayEnd = endOfDay(targetDate).getTime();
+
+    // Sales by this cashvan
+    const mySales = sales.filter(s => 
+      s.cashvanName === activeCashvanName &&
+      s.status !== 'deleted' &&
+      s.date >= dayStart && s.date <= dayEnd
+    ).map(s => ({
+      id: s.id,
+      marketName: s.marketName,
+      invoiceNo: s.id.slice(-6).toUpperCase(),
+      amount: s.totalAmount,
+      paymentType: s.paymentType === 'cash' ? 'نەقد' : 'قەرز'
+    }));
+
+    // Collections by this cashvan
+    const targetCashvan = activeCashvanName?.trim();
+    const myCollections = transactions.filter(t => {
+      const isPaid = t.type === 'paid_debt' || t.type === 'market_paid_debt';
+      const isDate = t.date >= dayStart && t.date <= dayEnd;
+      if (!isPaid || !isDate) return false;
+
+      if (!targetCashvan) return false;
+      return t.collectorName === targetCashvan ||
+             t.cashvanName === targetCashvan ||
+             (t.description && t.description.includes(targetCashvan));
+    }).map(t => ({
+      id: t.id,
+      marketName: t.relatedEntityId || 'مارکێت',
+      invoiceNo: t.invoiceNo,
+      amount: t.amount,
+      notes: t.description
+    }));
+
+    printDailyRepReceiptPopup({
+      repName: activeCashvanName || 'کاشڤان',
+      roleTitle: 'کاشڤان',
+      date: targetDate.getTime(),
+      sales: mySales,
+      collections: myCollections
+    });
+  };
 
   const calcPrice = (item: any, unit: string, marketName: string) => {
     if (!item) return 0;
@@ -502,24 +570,8 @@ export default function CashvanSalesView() {
           </div>
         </div>
 
-        {/* Change / Verify Profile */}
-        <div className="flex items-center gap-2 w-full md:w-auto flex-wrap">
-          {cashvanList.length > 0 && (
-            <select
-              className="px-3 py-1.5 border border-indigo-200 bg-indigo-50/40 rounded-xl text-xs font-bold text-slate-800 outline-none"
-              value={activeCashvanName}
-              onChange={(e) => setActiveCashvanName(e.target.value)}
-            >
-              {cashvanList.map(c => (
-                <option key={c.id || c.name} value={c.name}>
-                  🚚 {c.name} {c.isRep ? '(مەندووب)' : '(کاشڤان)'}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Navigation Buttons */}
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-2xs">
+        {/* Navigation Buttons */}
+        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-2xs flex-wrap">
             <button
               onClick={() => setActiveTab('sales')}
               className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'sales' ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-300' : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'}`}
@@ -551,9 +603,27 @@ export default function CashvanSalesView() {
               <FileText size={16} />
               <span>مێژووی فرۆشتن</span>
             </button>
+            <button
+              onClick={() => {
+                setPayTargetMarket(selectedMarket || '');
+                setIsPayModalOpen(true);
+              }}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition flex items-center gap-1.5"
+              title="وەرگرتنەوەی قەرزی مارکێت"
+            >
+              <CreditCard size={15} />
+              <span>وەرگرتنەوەی قەرز</span>
+            </button>
+            <button
+              onClick={() => setShowDailyModal(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition flex items-center gap-1.5"
+              title="چاپکردنی وەسڵی ڕۆژانەی کاشڤان"
+            >
+              <Printer size={15} />
+              <span>وەسڵی ڕۆژانە</span>
+            </button>
           </div>
         </div>
-      </div>
 
       {/* TAB 1: Direct Sales to Markets */}
       {activeTab === 'sales' && (
@@ -633,6 +703,30 @@ export default function CashvanSalesView() {
                 <datalist id="cashvan-markets">
                   {markets.map(m => <option key={m.id} value={m.name} />)}
                 </datalist>
+
+                {selectedMarket && (
+                  <div className="mt-2 p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-500 text-[11px]">بڕی قەرزی ئێستا:</span>
+                      <span className={`font-bold font-mono ${(marketDebtMap.get(selectedMarket) || 0) > 0 ? 'text-red-600' : 'text-emerald-600'}`} dir="ltr">
+                        {(marketDebtMap.get(selectedMarket) || 0).toLocaleString()} د.ع
+                      </span>
+                    </div>
+                    {(marketDebtMap.get(selectedMarket) || 0) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayTargetMarket(selectedMarket);
+                          setIsPayModalOpen(true);
+                        }}
+                        className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-[11px] transition flex items-center gap-1 shadow-2xs"
+                      >
+                        <CreditCard size={12} />
+                        <span>وەرگرتنەوە</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-4 items-center bg-slate-50 p-2 rounded-xl">
@@ -955,6 +1049,71 @@ export default function CashvanSalesView() {
                   className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
                 >
                   پاشگەزبوونەوە
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pay / Collect Debt Modal */}
+      <PayCompanyDebtModal
+        isOpen={isPayModalOpen}
+        onClose={() => setIsPayModalOpen(false)}
+        defaultEntityName={payTargetMarket}
+        mode="market"
+        collectorName={activeCashvanName}
+      />
+
+      {/* Daily Cashvan Activity Receipt Modal */}
+      {showDailyModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div className="flex items-center gap-2">
+                <FileText size={18} className="text-blue-600" />
+                <h3 className="font-bold text-slate-800 text-sm">چاپکردنی وەسڵی ڕۆژانەی کاشڤان</h3>
+              </div>
+              <button onClick={() => setShowDailyModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1">
+                  <Calendar size={14} className="text-indigo-600" />
+                  بەرواری ڕۆژ دیاری بکە:
+                </label>
+                <input
+                  type="date"
+                  value={dailyDate}
+                  onChange={(e) => setDailyDate(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-bold text-slate-800"
+                />
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-600 leading-relaxed">
+                ئەم وەسڵە کۆی فرۆشراوەکانی کاشڤان (<strong className="text-slate-900">{activeCashvanName}</strong>) بە شێوازی نەقد و قەرز و هەروەها بڕی قەرزە وەرگیراوەکانی لەو بەروارەدا دەردەخات.
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handlePrintDailyReceipt(dailyDate);
+                    setShowDailyModal(false);
+                  }}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition"
+                >
+                  <Printer size={16} />
+                  <span>چاپکردنی وەسڵ</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDailyModal(false)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition"
+                >
+                  داخستن
                 </button>
               </div>
             </div>

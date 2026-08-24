@@ -11,8 +11,13 @@ interface PayCompanyDebtModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialCompany?: string;
+  initialEntityName?: string;
+  defaultEntityName?: string;
   initialDebt?: Transaction | null;
   type?: 'company_debt' | 'debt';
+  mode?: 'market' | 'company';
+  isCompany?: boolean;
+  collectorName?: string;
   targetName?: string;
   onSuccess?: () => void;
 }
@@ -32,17 +37,27 @@ export default function PayCompanyDebtModal({
   isOpen,
   onClose,
   initialCompany = '',
+  initialEntityName = '',
+  defaultEntityName = '',
   initialDebt = null,
-  type = 'company_debt',
-  targetName = 'کۆمپانیا',
+  type,
+  mode,
+  isCompany: isCompanyProp,
+  collectorName,
+  targetName,
   onSuccess
 }: PayCompanyDebtModalProps) {
-  const isCompany = type === 'company_debt';
+  const isCompany = isCompanyProp !== undefined 
+    ? isCompanyProp 
+    : (mode === 'market' ? false : (type ? type === 'company_debt' : true));
+  const actualDebtType = isCompany ? 'company_debt' : 'debt';
   const paidType = isCompany ? 'company_paid_debt' : 'paid_debt';
   const entityCollection = isCompany ? 'companies' : 'markets';
+  const displayTargetName = targetName || (isCompany ? 'کۆمپانیا' : 'مارکێت');
+  const startingEntity = initialCompany || initialEntityName || defaultEntityName || '';
 
   const [entities, setEntities] = useState<any[]>([]);
-  const [selectedEntity, setSelectedEntity] = useState<string>(initialCompany);
+  const [selectedEntity, setSelectedEntity] = useState<string>(startingEntity);
   const [rawDebts, setRawDebts] = useState<Transaction[]>([]);
   const [rawPaidDebts, setRawPaidDebts] = useState<Transaction[]>([]);
   const [loadingDebts, setLoadingDebts] = useState(false);
@@ -54,6 +69,8 @@ export default function PayCompanyDebtModal({
   const [invoiceNoInput, setInvoiceNoInput] = useState<string>('');
   const [noteInput, setNoteInput] = useState<string>('');
   const [payDate, setPayDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [collectorInput, setCollectorInput] = useState<string>(collectorName || '');
+  const [repsAndCashvans, setRepsAndCashvans] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -86,18 +103,47 @@ export default function PayCompanyDebtModal({
     return () => unsub();
   }, [isOpen, entityCollection]);
 
+  // 1.5 Fetch reps and cashvans for collector suggestions
+  useEffect(() => {
+    if (!isOpen) return;
+    const unsubReps = onSnapshot(query(collection(db, 'sales_reps')), (snap) => {
+      const names: string[] = [];
+      snap.forEach(d => {
+        const data = d.data();
+        if (data.name) names.push(data.name);
+      });
+      setRepsAndCashvans(prev => Array.from(new Set([...prev, ...names])));
+    });
+
+    const unsubCashvans = onSnapshot(query(collection(db, 'cashvans')), (snap) => {
+      const names: string[] = [];
+      snap.forEach(d => {
+        const data = d.data();
+        if (data.name) names.push(data.name);
+      });
+      setRepsAndCashvans(prev => Array.from(new Set([...prev, ...names])));
+    });
+
+    return () => {
+      unsubReps();
+      unsubCashvans();
+    };
+  }, [isOpen]);
+
   // 2. Initialize selection when opening
   useEffect(() => {
     if (isOpen) {
       setPaymentSuccessData(null);
+      setCollectorInput(collectorName || '');
+      const initTarget = initialCompany || initialEntityName || defaultEntityName || '';
       if (initialDebt) {
         setSelectedEntity(initialDebt.relatedEntityId || '');
         const invKey = initialDebt.invoiceNo ? `inv_${initialDebt.invoiceNo.trim()}` : `id_${initialDebt.id}`;
         setSelectedInvoiceKey(invKey);
         setInvoiceNoInput(initialDebt.invoiceNo || '');
         setPayMode('by_invoice');
-      } else if (initialCompany) {
-        setSelectedEntity(initialCompany);
+      } else if (initTarget) {
+        setSelectedEntity(initTarget);
         setSelectedInvoiceKey('');
         setPayAmount('');
         setInvoiceNoInput('');
@@ -111,7 +157,7 @@ export default function PayCompanyDebtModal({
       setPayDate(format(new Date(), 'yyyy-MM-dd'));
       setErrorMessage('');
     }
-  }, [isOpen, initialCompany, initialDebt]);
+  }, [isOpen, initialCompany, initialEntityName, defaultEntityName, initialDebt, collectorName]);
 
   // 3. Listen to both Debts and Paid Debts for selected entity
   useEffect(() => {
@@ -124,7 +170,7 @@ export default function PayCompanyDebtModal({
 
     const qDebts = query(
       collection(db, 'transactions'),
-      where('type', '==', type),
+      where('type', '==', actualDebtType),
       where('relatedEntityId', '==', selectedEntity)
     );
 
@@ -166,7 +212,7 @@ export default function PayCompanyDebtModal({
       unsubDebts();
       unsubPaid();
     };
-  }, [isOpen, selectedEntity, type, paidType]);
+  }, [isOpen, selectedEntity, actualDebtType, paidType]);
 
   // Group debts by Invoice No
   const groupedInvoices: GroupedInvoiceDebt[] = useMemo(() => {
@@ -293,7 +339,7 @@ export default function PayCompanyDebtModal({
       let remainingDebt = 0;
 
       if (payMode === 'by_invoice' && activeInvoice) {
-        origDebt = activeInvoice.originalDebt;
+        origDebt = activeInvoice.remainingDebt;
         remainingDebt = Math.max(0, activeInvoice.remainingDebt - numAmount);
       } else {
         origDebt = totalEntityRemaining;
@@ -301,7 +347,11 @@ export default function PayCompanyDebtModal({
       }
 
       // Add a clean payment transaction without corrupting/modifying the original debt amount
-      const autoDesc = noteInput.trim() || (invNo ? `دانەوەی قەرزی وەسڵی #${invNo}` : `دانەوەی قەرزی ${targetName}: ${selectedEntity}`);
+      const collectorStr = collectorInput.trim();
+      let autoDesc = noteInput.trim() || (invNo ? `دانەوەی قەرزی وەسڵی #${invNo}` : `دانەوەی قەرزی ${targetName}: ${selectedEntity}`);
+      if (collectorStr && !autoDesc.includes(collectorStr)) {
+        autoDesc += ` (وەرگیراوە لەلایەن: ${collectorStr})`;
+      }
       
       const docData: any = {
         type: paidType,
@@ -312,6 +362,9 @@ export default function PayCompanyDebtModal({
       };
       if (invNo) {
         docData.invoiceNo = invNo;
+      }
+      if (collectorStr) {
+        docData.collectorName = collectorStr;
       }
       
       await addDoc(collection(db, 'transactions'), docData);
@@ -698,7 +751,7 @@ export default function PayCompanyDebtModal({
               </div>
             </div>
 
-            {/* 5. Additional Details (Invoice No, Date, Notes) */}
+            {/* 5. Additional Details (Invoice No, Date, Collector, Notes) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">
@@ -725,6 +778,35 @@ export default function PayCompanyDebtModal({
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-green-500 focus:bg-white outline-none"
                 />
               </div>
+              {!isCompany && (
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-600 mb-1">
+                    وەرگیراوە لەلایەن (مەندووب / کاشڤان / ئیدارە):
+                  </label>
+                  {collectorName ? (
+                    <div className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-slate-700">
+                      {collectorInput || collectorName}
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="ناوی مەندووب، کاشڤان یان بەڕێوەبەر هەڵبژێرە..."
+                        value={collectorInput}
+                        onChange={(e) => setCollectorInput(e.target.value)}
+                        list="collector-list-suggestions"
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-green-500 focus:bg-white outline-none"
+                      />
+                      <datalist id="collector-list-suggestions">
+                        <option value="بەڕێوەبەر" />
+                        {repsAndCashvans.map(name => (
+                          <option key={name} value={name} />
+                        ))}
+                      </datalist>
+                    </>
+                  )}
+                </div>
+              )}
               <div className="sm:col-span-2">
                 <label className="block text-xs font-bold text-slate-600 mb-1">
                   تێبینی / وردەکاری (ئارەزوومەندانە):
