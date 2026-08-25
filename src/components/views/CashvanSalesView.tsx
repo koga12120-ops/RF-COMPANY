@@ -318,7 +318,6 @@ export default function CashvanSalesView() {
     let totalItemsCount = 0;
     const itemsHtml = ret.items.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const itemTotal = (item.price || 0) * (item.quantity || 0);
       totalItemsCount += item.quantity || 0;
       return `
         <tr>
@@ -326,8 +325,6 @@ export default function CashvanSalesView() {
           <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${item.quantity}</td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-family: monospace;" dir="ltr">${(item.price || 0).toLocaleString()}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-family: monospace;" dir="ltr">${itemTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
@@ -380,8 +377,6 @@ export default function CashvanSalesView() {
                 <th>ناوی کاڵای گەڕاوە</th>
                 <th style="text-align: center; width: 110px;">بڕی گەڕاوە</th>
                 <th style="text-align: center; width: 90px;">یەکە</th>
-                <th style="text-align: center; width: 120px;">نرخی تاک (د.ع)</th>
-                <th style="text-align: center; width: 130px;">کۆی گشتی (د.ع)</th>
               </tr>
             </thead>
             <tbody>
@@ -390,8 +385,8 @@ export default function CashvanSalesView() {
           </table>
 
           <div class="summary-box">
-            <span>کۆی گشتی بڕ و بەهای کاڵا گەڕاوەکان:</span>
-            <span dir="ltr" style="color: #be123c;">${totalItemsCount} دانە | ${ret.totalValue.toLocaleString()} د.ع</span>
+            <span>کۆی گشتی بڕی کاڵا گەڕاوەکان:</span>
+            <span dir="ltr" style="color: #be123c;">${totalItemsCount} دانە</span>
           </div>
 
           ${ret.notes ? `
@@ -813,7 +808,6 @@ export default function CashvanSalesView() {
                   <th className="p-3">ژمارەی پسوڵە</th>
                   <th className="p-3">بەروار و کات</th>
                   <th className="p-3">ژمارەی کاڵا گەڕاوەکان</th>
-                  <th className="p-3">کۆی گشتی بەهای پارە</th>
                   <th className="p-3">تێبینی</th>
                   <th className="p-3 text-center">کردارەکان</th>
                 </tr>
@@ -829,9 +823,6 @@ export default function CashvanSalesView() {
                     </td>
                     <td className="p-3 font-bold text-slate-800">
                       {ret.items.reduce((s, i) => s + (i.quantity || 0), 0)} {ret.items[0]?.unit === 'packet' ? 'پاکەت' : 'کارتۆن'} ({ret.items.length} جۆر)
-                    </td>
-                    <td className="p-3 font-mono font-bold text-rose-700" dir="ltr">
-                      {(ret.totalValue || 0).toLocaleString()} د.ع
                     </td>
                     <td className="p-3 text-slate-500 truncate max-w-xs">
                       {ret.notes || '-'}
@@ -1287,9 +1278,6 @@ export default function CashvanSalesView() {
               <div>
                 <h5 className="text-xs font-bold text-slate-700 mb-2 flex items-center justify-between">
                   <span>کاڵاکانی ناو وەسڵی گەڕاندنەوە ({editReturnItems.length})</span>
-                  <span className="text-amber-800 font-bold">
-                    کۆی گشتی: {editReturnItems.reduce((acc, it) => acc + (it.price * it.quantity), 0).toLocaleString()} د.ع
-                  </span>
                 </h5>
                 <div className="border border-slate-200 rounded-xl overflow-hidden">
                   <table className="w-full text-right text-xs">
@@ -1298,8 +1286,6 @@ export default function CashvanSalesView() {
                         <th className="p-2.5">ناوی کاڵا</th>
                         <th className="p-2.5 text-center">یەکە</th>
                         <th className="p-2.5 text-center w-28">بڕی گەڕاوە</th>
-                        <th className="p-2.5 text-center">نرخی تاک</th>
-                        <th className="p-2.5 text-center">کۆ</th>
                         <th className="p-2.5 text-center">سڕینەوە</th>
                       </tr>
                     </thead>
@@ -1336,12 +1322,6 @@ export default function CashvanSalesView() {
                                 +
                               </button>
                             </div>
-                          </td>
-                          <td className="p-2.5 text-center font-mono" dir="ltr">
-                            {(it.price || 0).toLocaleString()}
-                          </td>
-                          <td className="p-2.5 text-center font-bold text-amber-700 font-mono" dir="ltr">
-                            {((it.price || 0) * it.quantity).toLocaleString()}
                           </td>
                           <td className="p-2.5 text-center">
                             <button

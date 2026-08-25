@@ -40,6 +40,9 @@ export default function OrdersView({ role }: { role: Role }) {
   // Active user / rep name
   const [repName, setRepName] = useState('');
 
+  // Main Tabs
+  const [activeMainTab, setActiveMainTab] = useState<'schedule' | 'info'>('schedule');
+
   // Forms State (Opened from the Schedule Card's 3-line Menu)
   const [activeFormMode, setActiveFormMode] = useState<'none' | 'order' | 'cashvan'>('none');
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
@@ -876,16 +879,44 @@ export default function OrdersView({ role }: { role: Role }) {
 
   return (
     <div className="space-y-6">
-      {/* 1. Daily Market Schedule with the 3-Options Dropdown Menu */}
-      <MarketDailyScheduleCard
-        role={role}
-        activeRepName={repName}
-        activeCashvanName={repName}
-        onSelectForOrder={handleSelectMarketForOrder}
-        onSelectForCashvan={handleSelectMarketForCashvan}
-        onSelectForDebtPay={handleSelectMarketForDebtPay}
-        marketDebtMap={marketDebtMap}
-      />
+      {/* Top Tabs */}
+      <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+        <button
+          onClick={() => setActiveMainTab('schedule')}
+          className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+            activeMainTab === 'schedule'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'
+          }`}
+        >
+          <Calendar size={15} />
+          <span>خشتەی سەردان</span>
+        </button>
+        <button
+          onClick={() => setActiveMainTab('info')}
+          className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+            activeMainTab === 'info'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'
+          }`}
+        >
+          <FileText size={15} />
+          <span>زانیاریەکان</span>
+        </button>
+      </div>
+
+      {activeMainTab === 'schedule' && (
+        <>
+          {/* 1. Daily Market Schedule with the 3-Options Dropdown Menu */}
+          <MarketDailyScheduleCard
+            role={role}
+            activeRepName={repName}
+            activeCashvanName={repName}
+            onSelectForOrder={handleSelectMarketForOrder}
+            onSelectForCashvan={handleSelectMarketForCashvan}
+            onSelectForDebtPay={handleSelectMarketForDebtPay}
+            marketDebtMap={marketDebtMap}
+          />
 
       {/* 2. DYNAMIC FORM SECTION (Opened strictly when clicked from Schedule Menu) */}
       {activeFormMode !== 'none' && (
@@ -1324,8 +1355,11 @@ export default function OrdersView({ role }: { role: Role }) {
           )}
         </div>
       )}
+      </>
+      )}
 
       {/* 3. BOTTOM SECTION: MY DAILY ACTIVITIES & HISTORY (FILTER BY DATE: TODAY, YESTERDAY, CUSTOM) */}
+      {activeMainTab === 'info' && (
       <section className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-3">
           {/* Quick Date Filters */}
@@ -1605,6 +1639,7 @@ export default function OrdersView({ role }: { role: Role }) {
           )}
         </div>
       </section>
+      )}
 
       {/* Delete Order Confirm Modal */}
       <ConfirmModal

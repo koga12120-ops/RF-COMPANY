@@ -186,15 +186,11 @@ export default function WarehouseCashvanView() {
 
   const printTransferReceipt = (transfer: CashvanTransfer) => {
     let totalUnits = 0;
-    let totalGrossAmount = 0;
 
     const itemsHtml = transfer.items.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
       const qty = item.quantity || 0;
-      const price = item.price || 0;
-      const rowTotal = qty * price;
       totalUnits += qty;
-      totalGrossAmount += rowTotal;
 
       return `
         <tr>
@@ -202,13 +198,9 @@ export default function WarehouseCashvanView() {
           <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${qty}</td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-family: monospace;" dir="ltr">${price > 0 ? price.toLocaleString() + ' د.ع' : '-'}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-family: monospace;" dir="ltr">${rowTotal > 0 ? rowTotal.toLocaleString() + ' د.ع' : '-'}</td>
         </tr>
       `;
     }).join('');
-
-    const finalTotalValue = totalGrossAmount > 0 ? totalGrossAmount : (transfer.totalValue || 0);
 
     const html = `
       <!DOCTYPE html>
@@ -229,7 +221,6 @@ export default function WarehouseCashvanView() {
             th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
             .total-box { margin-top: 15px; padding: 16px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 10px; font-size: 15px; }
             .total-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-            .total-row:last-child { margin-bottom: 0; padding-top: 8px; border-top: 1px dashed #cbd5e1; }
             .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; }
             .sig-line { border-top: 1px dashed #94a3b8; margin-top: 40px; padding-top: 8px; font-weight: bold; }
             @media print {
@@ -259,8 +250,6 @@ export default function WarehouseCashvanView() {
                 <th>ناوی کاڵا</th>
                 <th style="text-align: center; width: 90px;">بڕی بارکراو</th>
                 <th style="text-align: center; width: 80px;">یەکە</th>
-                <th style="text-align: center; width: 110px;">نرخی تاک</th>
-                <th style="text-align: center; width: 130px;">کۆی گشتی بڕی پارە</th>
               </tr>
             </thead>
             <tbody>
@@ -272,10 +261,6 @@ export default function WarehouseCashvanView() {
             <div class="total-row">
               <span style="font-weight: bold; color: #334155;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
               <span dir="ltr" style="color: #4338ca; font-size: 17px; font-weight: bold;">${totalUnits} دانە / کارتۆن</span>
-            </div>
-            <div class="total-row">
-              <span style="font-weight: 900; color: #0f172a; font-size: 16px;">کۆی گشتی بڕی پارەی بارکراو:</span>
-              <span dir="ltr" style="color: #15803d; font-size: 20px; font-weight: 900; font-family: monospace;">${finalTotalValue.toLocaleString()} د.ع</span>
             </div>
           </div>
 
