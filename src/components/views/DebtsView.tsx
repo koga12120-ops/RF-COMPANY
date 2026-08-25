@@ -36,33 +36,35 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
   const paidType = type === 'debt' ? 'paid_debt' : 'company_paid_debt';
 
   useEffect(() => {
-    // 1. Listen to Debts
-    const q = query(collection(db, 'transactions'), where('type', '==', type));
+    const isCompany = type.includes('company');
+    // 1. Listen to Transactions and separate Debts and Paid Debts accurately
+    const q = query(collection(db, 'transactions'));
     const unsubscribeDebts = onSnapshot(
       q,
       (snapshot) => {
         const debtsData: Transaction[] = [];
-        snapshot.forEach((doc) => {
-          debtsData.push({ id: doc.id, ...doc.data() } as Transaction);
-        });
-        setDebts(debtsData.sort((a, b) => b.date - a.date));
-        setLoading(false);
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'transactions');
-      }
-    );
-
-    // 2. Listen to Paid Debts for accurate cross-calculation
-    const qPaid = query(collection(db, 'transactions'), where('type', '==', paidType));
-    const unsubscribePaid = onSnapshot(
-      qPaid,
-      (snapshot) => {
         const paidData: Transaction[] = [];
+
         snapshot.forEach((doc) => {
-          paidData.push({ id: doc.id, ...doc.data() } as Transaction);
+          const d = { id: doc.id, ...doc.data() } as Transaction;
+          if (isCompany) {
+            if (d.type === 'company_debt') {
+              debtsData.push(d);
+            } else if (d.type === 'company_paid_debt') {
+              paidData.push(d);
+            }
+          } else {
+            if (d.type === 'debt' || d.type === 'market_debt') {
+              debtsData.push(d);
+            } else if (d.type === 'paid_debt' || d.type === 'market_paid_debt') {
+              paidData.push(d);
+            }
+          }
         });
+
+        setDebts(debtsData.sort((a, b) => b.date - a.date));
         setPaidDebts(paidData.sort((a, b) => b.date - a.date));
+        setLoading(false);
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, 'transactions');
@@ -85,10 +87,9 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
 
     return () => {
       unsubscribeDebts();
-      unsubscribePaid();
       unsubSuggestions();
     };
-  }, [type, paidType]);
+  }, [type]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

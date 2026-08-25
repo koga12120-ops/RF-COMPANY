@@ -259,13 +259,13 @@ export default function LedgerView() {
     }
   };
 
-  const calculateTotal = (data: Transaction[], filterType: Transaction['type'][]) => {
+  const calculateTotal = (data: Transaction[], filterType: string[]) => {
     return data
       .filter(tr => filterType.includes(tr.type))
-      .reduce((acc, curr) => acc + curr.amount, 0);
+      .reduce((acc, curr) => acc + (curr.amount || 0), 0);
   };
 
-  const totalIncome = calculateTotal(fTrans, ['income', 'cash', 'paid_debt']);
+  const totalIncome = calculateTotal(fTrans, ['income', 'cash', 'cash_sale', 'cash_in', 'paid_debt', 'market_paid_debt']);
   const manualExpenses = calculateTotal(fTrans, ['expense']);
   const returnProfitsLost = fTrans.filter(tr => tr.type === 'return_expense').reduce((acc, tr) => acc + (tr.profitReversal || 0), 0);
 
@@ -292,12 +292,12 @@ export default function LedgerView() {
   // 5. کۆی قەرزەکانم (ئەوانەی لە کۆمپانیاکان بەقەرز هێنراون)
   const totalCompanyDebt = calculateTotal(fTrans, ['company_debt']);
   const totalCompanyPaid = calculateTotal(fTrans, ['company_paid_debt']);
-  const remainingCompanyDebt = totalCompanyDebt - totalCompanyPaid;
+  const remainingCompanyDebt = Math.max(0, totalCompanyDebt - totalCompanyPaid);
 
   // 6. کۆی بە قەرز براوەکانم (ئەو مارکێت و کۆگایانەی بە قەرز شتیان بردووە)
-  const totalMarketDebt = calculateTotal(fTrans, ['debt']);
-  const totalMarketPaid = calculateTotal(fTrans, ['paid_debt']);
-  const remainingMarketDebt = totalMarketDebt - totalMarketPaid;
+  const totalMarketDebt = calculateTotal(fTrans, ['debt', 'market_debt']);
+  const totalMarketPaid = calculateTotal(fTrans, ['paid_debt', 'market_paid_debt']);
+  const remainingMarketDebt = Math.max(0, totalMarketDebt - totalMarketPaid);
 
   // 7. قازانجی سافی
   const netProfit = totalIncome - calculateTotal(fTrans, ['expense', 'company_cash', 'company_paid_debt', 'return_expense']);

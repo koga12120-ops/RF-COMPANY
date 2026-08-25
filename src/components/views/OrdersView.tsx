@@ -1,65 +1,97 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { collection, getDocs, where, addDoc, updateDoc, doc, onSnapshot, query, orderBy, deleteDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { Order, Item, Role, Market, Transaction } from '../../types';
-import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, UserCheck, Calendar, FileText, CheckCircle2 } from 'lucide-react';
-import { format, startOfDay, endOfDay } from 'date-fns';
+import { Order, Item, Role, Market, Transaction, CashvanSale } from '../../types';
+import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, Calendar, FileText, CheckCircle2, Truck, Send, ArrowRight } from 'lucide-react';
+import { format, startOfDay, endOfDay, subDays, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
-import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
+import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
+import MarketDailyScheduleCard from '../common/MarketDailyScheduleCard';
 import { printDailyRepReceiptPopup } from '../../lib/statementPrinter';
+
+interface ActivityItem {
+  id: string;
+  type: 'order' | 'cashvan_sale' | 'debt_collection';
+  marketName: string;
+  repName: string;
+  amount: number;
+  paymentType?: 'cash' | 'debt';
+  status?: string;
+  timestamp: number;
+  items?: { name: string; quantity: number; unit?: string; price?: number }[];
+  rawOrder?: Order;
+  rawSale?: CashvanSale;
+  rawTransaction?: Transaction;
+}
 
 export default function OrdersView({ role }: { role: Role }) {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [cashvanSales, setCashvanSales] = useState<CashvanSale[]>([]);
+  const [vanInventory, setVanInventory] = useState<any[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [reps, setReps] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
+  const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
 
-  // Pay Debt Modal state for Mandoub
-  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
-  const [payTargetMarket, setPayTargetMarket] = useState('');
-
-  // Daily receipt filter state
-  const [dailyReceiptDate, setDailyReceiptDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [showDailyReceiptModal, setShowDailyReceiptModal] = useState(false);
-
-  // New Order State
-  const [showNewOrder, setShowNewOrder] = useState(false);
-  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  // Active user / rep name
   const [repName, setRepName] = useState('');
-  const [marketName, setMarketName] = useState('');
-  const [location, setLocation] = useState('');
-  const [selectedItems, setSelectedItems] = useState<{ item: Item; quantity: number; unit: 'carton' | 'packet' }[]>([]);
-  
-  // Search & Filters
-  const [searchTerm, setSearchTerm] = useState('');
+
+  // Forms State (Opened from the Schedule Card's 3-line Menu)
+  const [activeFormMode, setActiveFormMode] = useState<'none' | 'order' | 'cashvan'>('none');
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+
+  // Order Form State (تەڵەبییە)
+  const [orderMarketName, setOrderMarketName] = useState('');
+  const [orderLocation, setOrderLocation] = useState('');
+  const [orderPaymentType, setOrderPaymentType] = useState<'cash' | 'debt'>('debt');
+  const [orderSelectedItems, setOrderSelectedItems] = useState<{ item: Item; quantity: number; unit: 'carton' | 'packet' }[]>([]);
+  const [orderItemSearch, setOrderItemSearch] = useState('');
+
+  // Cashvan Direct Sale Form State (کاشڤان ڕاستەوخۆ)
+  const [vanMarketName, setVanMarketName] = useState('');
+  const [vanPaymentType, setVanPaymentType] = useState<'cash' | 'debt'>('cash');
+  const [vanCart, setVanCart] = useState<any[]>([]);
+  const [vanItemSearch, setVanItemSearch] = useState('');
+
+  // Simple Debt Pay Modal state
+  const [isSimpleDebtModalOpen, setIsSimpleDebtModalOpen] = useState(false);
+  const [debtTargetMarket, setDebtTargetMarket] = useState('');
+  const [debtTargetMarketObj, setDebtTargetMarketObj] = useState<Market | null>(null);
+  const [debtTargetAmount, setDebtTargetAmount] = useState(0);
+
+  // Date Filtering State for the bottom Activity History
+  const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'custom' | 'all'>('today');
+  const [customDate, setCustomDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [activityTypeFilter, setActivityTypeFilter] = useState<'all' | 'order' | 'cashvan_sale' | 'debt_collection'>('all');
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
+
+  // Admin Settlement state
   const [settlingOrder, setSettlingOrder] = useState<Order | null>(null);
 
-  // Filtered orders: for sales_rep, strictly their own orders so they never see or manage other reps' orders
-  const displayedOrders = useMemo(() => {
-    if (role === 'sales_rep') {
-      const activeRep = repName?.trim();
-      return orders.filter(o => o.repName === activeRep);
-    }
-    return orders;
-  }, [orders, role, repName]);
+  const formSectionRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-fill rep name for sales_rep and sync live with database
+  // Auto-fill rep name and sync live with users collection
   useEffect(() => {
-    if (!auth.currentUser || role !== 'sales_rep') return;
-    const unsubUser = onSnapshot(doc(db, 'users', auth.currentUser.uid), (docSnap) => {
-      if (docSnap.exists() && docSnap.data().name) {
-        setRepName(docSnap.data().name);
-      } else if (auth.currentUser?.displayName) {
-        setRepName(auth.currentUser.displayName);
-      }
-    });
+    if (!auth.currentUser) return;
+    const unsubUser = onSnapshot(
+      doc(db, 'users', auth.currentUser.uid),
+      (docSnap) => {
+        if (docSnap.exists() && docSnap.data().name) {
+          setRepName(docSnap.data().name);
+        } else if (auth.currentUser?.displayName) {
+          setRepName(auth.currentUser.displayName);
+        }
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'users')
+    );
     return () => unsubUser();
-  }, [role]);
+  }, []);
 
+  // Listeners for Firestore Collections
   useEffect(() => {
     const qOrders = query(collection(db, 'orders'), orderBy('timestamp', 'desc'));
     const unsubOrders = onSnapshot(
@@ -71,9 +103,20 @@ export default function OrdersView({ role }: { role: Role }) {
         });
         setOrders(ordersData.filter(o => o.status !== 'deleted'));
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'orders');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'orders')
+    );
+
+    const qSales = query(collection(db, 'cashvan_sales'), orderBy('date', 'desc'));
+    const unsubSales = onSnapshot(
+      qSales,
+      (snapshot) => {
+        const salesData: CashvanSale[] = [];
+        snapshot.forEach((doc) => {
+          salesData.push({ id: doc.id, ...doc.data() } as CashvanSale);
+        });
+        setCashvanSales(salesData.filter(s => s.status !== 'deleted'));
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'cashvan_sales')
     );
 
     const qItems = query(collection(db, 'items'));
@@ -86,9 +129,7 @@ export default function OrdersView({ role }: { role: Role }) {
         });
         setItems(itemsData);
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'items');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'items')
     );
 
     const qMarkets = query(collection(db, 'markets'));
@@ -102,9 +143,7 @@ export default function OrdersView({ role }: { role: Role }) {
         setMarkets(marketsData);
         setLoading(false);
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'markets');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'markets')
     );
 
     const qReps = query(collection(db, 'reps'));
@@ -118,9 +157,7 @@ export default function OrdersView({ role }: { role: Role }) {
           return [...cvs, ...repsData];
         });
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'reps');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'reps')
     );
 
     const qCVs = query(collection(db, 'cashvans'));
@@ -134,12 +171,10 @@ export default function OrdersView({ role }: { role: Role }) {
           return [...directReps, ...cvData];
         });
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'cashvans');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'cashvans')
     );
 
-    const qTrans = query(collection(db, 'transactions'));
+    const qTrans = query(collection(db, 'transactions'), orderBy('date', 'desc'));
     const unsubTrans = onSnapshot(
       qTrans,
       (snapshot) => {
@@ -147,13 +182,12 @@ export default function OrdersView({ role }: { role: Role }) {
         snapshot.forEach(doc => transData.push({ id: doc.id, ...doc.data() } as Transaction));
         setTransactions(transData);
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'transactions');
-      }
+      (error) => handleFirestoreError(error, OperationType.GET, 'transactions')
     );
 
     return () => {
       unsubOrders();
+      unsubSales();
       unsubItems();
       unsubMarkets();
       unsubReps();
@@ -162,79 +196,72 @@ export default function OrdersView({ role }: { role: Role }) {
     };
   }, []);
 
-  // Compute live market debt map for quick balance lookups
+  // Listen to cashvan_inventory for the current active rep / cashvan
+  useEffect(() => {
+    if (!repName) return;
+    const qInv = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', repName));
+    const unsubInv = onSnapshot(
+      qInv,
+      (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(doc => {
+          const invData = doc.data();
+          if ((invData.quantity || 0) > 0) {
+            data.push({ id: doc.id, ...invData });
+          }
+        });
+        setVanInventory(data);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'cashvan_inventory')
+    );
+    return () => unsubInv();
+  }, [repName]);
+
+  // Compute live market debt map
   const marketDebtMap = useMemo(() => {
     const map = new Map<string, number>();
+    const debtsMap = new Map<string, number>();
+    const paidsMap = new Map<string, number>();
+
     transactions.forEach(t => {
       const entity = t.relatedEntityId?.trim();
       if (!entity) return;
       let key = entity;
       for (const m of markets) {
-        if (m.name.trim().toLowerCase() === entity.toLowerCase()) {
+        if (m.name?.trim().toLowerCase() === entity.toLowerCase()) {
           key = m.name;
           break;
         }
       }
-      const cur = map.get(key) || 0;
-      if (t.type === 'debt') map.set(key, cur + (t.amount || 0));
-      else if (t.type === 'paid_debt') map.set(key, Math.max(0, cur - (t.amount || 0)));
+      const amt = t.amount || 0;
+      if (t.type === 'debt' || t.type === 'market_debt') {
+        debtsMap.set(key, (debtsMap.get(key) || 0) + amt);
+      } else if (t.type === 'paid_debt' || t.type === 'market_paid_debt') {
+        paidsMap.set(key, (paidsMap.get(key) || 0) + amt);
+      }
     });
+
+    debtsMap.forEach((totalDebt, key) => {
+      const totalPaid = paidsMap.get(key) || 0;
+      map.set(key, Math.max(0, totalDebt - totalPaid));
+    });
+
+    markets.forEach(m => {
+      if (!map.has(m.name)) {
+        const totalDebt = debtsMap.get(m.name) || 0;
+        const totalPaid = paidsMap.get(m.name) || 0;
+        map.set(m.name, Math.max(0, totalDebt - totalPaid));
+      }
+    });
+
     return map;
   }, [transactions, markets]);
 
-  const handlePrintDailyReceipt = (dateStr: string) => {
-    const targetDate = dateStr ? new Date(dateStr) : new Date();
-    const dayStart = startOfDay(targetDate).getTime();
-    const dayEnd = endOfDay(targetDate).getTime();
-
-    // Sales by this rep or all reps if admin
-    const repSales = orders.filter(o => 
-      (role === 'sales_rep' ? (o.repName === repName) : (repName ? o.repName === repName : true)) &&
-      o.status !== 'deleted' &&
-      o.timestamp >= dayStart && o.timestamp <= dayEnd
-    ).map(o => ({
-      id: o.id,
-      marketName: o.marketName,
-      invoiceNo: o.id.slice(-6).toUpperCase(),
-      amount: o.totalAmount,
-      paymentType: o.paymentMethod === 'cash' ? 'نەقد' : 'قەرز'
-    }));
-
-    // Collections
-    const targetRep = repName?.trim();
-    const repCollections = transactions.filter(t => {
-      const isPaid = t.type === 'paid_debt' || t.type === 'market_paid_debt';
-      const isDate = t.date >= dayStart && t.date <= dayEnd;
-      if (!isPaid || !isDate) return false;
-
-      // If repName is not specified and user is admin, allow all
-      if (!targetRep && role === 'admin') return true;
-
-      // Otherwise, MUST match this specific rep
-      if (!targetRep) return false;
-      return t.collectorName === targetRep ||
-             t.repName === targetRep ||
-             (t.description && t.description.includes(targetRep));
-    }).map(t => ({
-      id: t.id,
-      marketName: t.relatedEntityId || 'مارکێت',
-      invoiceNo: t.invoiceNo,
-      amount: t.amount,
-      notes: t.description
-    }));
-
-    printDailyRepReceiptPopup({
-      repName: repName || 'مەندووب',
-      roleTitle: 'مەندووب',
-      date: targetDate.getTime(),
-      sales: repSales,
-      collections: repCollections
-    });
-  };
-
-  const calcPrice = (item: Item, unit: 'carton' | 'packet') => {
+  // Price calculations
+  const calcPrice = (item: any, unit: 'carton' | 'packet', currentMarketName?: string) => {
     if (!item) return 0;
-    const isWholesale = markets.find(m => m.name === marketName)?.type === 'warehouse';
+    const targetM = currentMarketName || orderMarketName || vanMarketName;
+    const isWholesale = markets.find(m => m.name === targetM)?.type === 'warehouse';
 
     const cartonPrice = Number(item.cartonSellingPrice) || Number(item.cartonPrice) || Number(item.sellingPrice) || Number(item.price) || Number(item.pieceSellingPrice) || 0;
     const packetPrice = Number(item.packetSellingPrice) || Number(item.packetPrice) || Number(item.pieceSellingPrice) || Number(item.sellingPrice) || Number(item.price) || 0;
@@ -250,15 +277,44 @@ export default function OrdersView({ role }: { role: Role }) {
     }
   };
 
+  // --- Handlers for Menu Triggers on Schedule Cards ---
+  const handleSelectMarketForOrder = (market: Market) => {
+    setOrderMarketName(market.name);
+    setOrderLocation(market.location || '');
+    setOrderSelectedItems([]);
+    setEditingOrderId(null);
+    setActiveFormMode('order');
+    setTimeout(() => {
+      formSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
+  const handleSelectMarketForCashvan = (market: Market) => {
+    setVanMarketName(market.name);
+    setVanCart([]);
+    setActiveFormMode('cashvan');
+    setTimeout(() => {
+      formSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
+  const handleSelectMarketForDebtPay = (market: Market, debt: number) => {
+    setDebtTargetMarket(market.name);
+    setDebtTargetMarketObj(market);
+    setDebtTargetAmount(debt);
+    setIsSimpleDebtModalOpen(true);
+  };
+
+  // --- ORDER FORM HANDLERS ---
   const handleAddItemToOrder = (item: Item) => {
-    const exists = selectedItems.find(si => si.item.id === item.id);
+    const exists = orderSelectedItems.find(si => si.item.id === item.id);
     if (exists) {
       const newQty = exists.quantity + 1;
       if (newQty > (exists.item.quantity || 0)) {
         alert('بڕی داواکراو لە کۆگا بەردەست نییە');
         return;
       }
-      setSelectedItems(selectedItems.map(si => 
+      setOrderSelectedItems(orderSelectedItems.map(si => 
         si.item.id === item.id ? { ...si, quantity: newQty } : si
       ));
     } else {
@@ -267,34 +323,23 @@ export default function OrdersView({ role }: { role: Role }) {
         return;
       }
       const unit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
-      setSelectedItems([...selectedItems, { item, quantity: 1, unit }]);
+      setOrderSelectedItems([...orderSelectedItems, { item, quantity: 1, unit }]);
     }
   };
 
-  const handleUpdateItemQuantity = (id: string, qty: number, unit?: 'carton' | 'packet') => {
+  const handleUpdateOrderItemQty = (id: string, qty: number, unit?: 'carton' | 'packet') => {
     if (qty <= 0) {
-      setSelectedItems(selectedItems.filter(si => si.item.id !== id));
+      setOrderSelectedItems(orderSelectedItems.filter(si => si.item.id !== id));
       return;
     }
-    
-    const itemObj = selectedItems.find(si => si.item.id === id);
-    if (itemObj) {
-      if (qty > (itemObj.item.quantity || 0)) {
-        alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${itemObj.item.quantity} بەردەستە.`);
-        return;
-      }
+    const itemObj = orderSelectedItems.find(si => si.item.id === id);
+    if (itemObj && qty > (itemObj.item.quantity || 0)) {
+      alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${itemObj.item.quantity} بەردەستە.`);
+      return;
     }
-
-    setSelectedItems(selectedItems.map(si => 
+    setOrderSelectedItems(orderSelectedItems.map(si => 
       si.item.id === id ? { ...si, quantity: qty, unit: unit || si.unit } : si
     ));
-  };
-
-  const handleQuantityDelta = (id: string, delta: number) => {
-    const item = selectedItems.find(si => si.item.id === id);
-    if (item) {
-      handleUpdateItemQuantity(id, item.quantity + delta, item.unit);
-    }
   };
 
   const submitOrder = async (e: React.FormEvent) => {
@@ -303,21 +348,21 @@ export default function OrdersView({ role }: { role: Role }) {
       alert('تکایە ناوی مەندووب دیاری بکە');
       return;
     }
-    if (!marketName.trim()) {
+    if (!orderMarketName.trim()) {
       alert('تکایە ناوی مارکێت دیاری بکە');
       return;
     }
-    if (selectedItems.length === 0) {
-      alert('هیچ کاڵایەک هەڵنەبژێردراوە');
+    if (orderSelectedItems.length === 0) {
+      alert('هیچ کاڵایەک بۆ داواکارییەکە هەڵنەبژێردراوە');
       return;
     }
 
-    const totalAmount = selectedItems.reduce((acc, curr) => {
-      const price = calcPrice(curr.item, curr.unit);
+    const totalAmount = orderSelectedItems.reduce((acc, curr) => {
+      const price = calcPrice(curr.item, curr.unit, orderMarketName);
       return acc + (price * curr.quantity);
     }, 0);
 
-    const totalCost = selectedItems.reduce((acc, curr) => {
+    const totalCost = orderSelectedItems.reduce((acc, curr) => {
       const cost = curr.unit === 'packet'
         ? (curr.item.packetCostPrice || curr.item.costPrice || 0)
         : (curr.item.cartonCostPrice || curr.item.costPrice || 0);
@@ -326,29 +371,20 @@ export default function OrdersView({ role }: { role: Role }) {
 
     const totalProfit = totalAmount - totalCost;
 
-    const orderItems = selectedItems.map(si => ({
+    const orderItems = orderSelectedItems.map(si => ({
       itemId: si.item.id,
       name: si.item.name,
-      price: calcPrice(si.item, si.unit),
+      price: calcPrice(si.item, si.unit, orderMarketName),
       quantity: si.quantity,
       unit: si.unit
     }));
 
     try {
-      if (repName && !reps.find(r => r.name === repName.trim())) {
-        await addDoc(collection(db, 'reps'), { 
-          name: repName.trim(), 
-          phone: '', 
-          totalSales: 0, 
-          totalProfit: 0, 
-          createdAt: Date.now() 
-        });
-      }
-      if (marketName && !markets.find(m => m.name === marketName.trim())) {
+      if (orderMarketName && !markets.find(m => m.name === orderMarketName.trim())) {
         await addDoc(collection(db, 'markets'), { 
-          name: marketName.trim(), 
+          name: orderMarketName.trim(), 
           phone: '', 
-          location: location.trim() || '', 
+          location: orderLocation.trim() || '', 
           type: 'market', 
           createdAt: Date.now() 
         });
@@ -357,733 +393,1255 @@ export default function OrdersView({ role }: { role: Role }) {
       if (editingOrderId) {
         await updateDoc(doc(db, 'orders', editingOrderId), {
           repName: repName.trim(),
-          marketName: marketName.trim(),
-          location: location.trim(),
+          marketName: orderMarketName.trim(),
+          location: orderLocation.trim(),
           totalAmount,
           totalProfit,
           items: orderItems,
           status: 'pending',
+          paymentStatus: orderPaymentType,
           timestamp: Date.now()
         });
         setEditingOrderId(null);
       } else {
         await addDoc(collection(db, 'orders'), {
           repName: repName.trim(),
-          marketName: marketName.trim(),
-          location: location.trim(),
+          marketName: orderMarketName.trim(),
+          location: orderLocation.trim(),
           totalAmount,
           totalProfit,
           items: orderItems,
           status: 'pending',
+          paymentStatus: orderPaymentType,
           timestamp: Date.now()
         });
       }
       
-      setShowNewOrder(false);
-      if (role !== 'sales_rep') setRepName('');
-      setMarketName('');
-      setLocation('');
-      setSelectedItems([]);
-      alert('داواکارییەکە بە سەرکەوتوویی تۆمارکرا');
+      setActiveFormMode('none');
+      setOrderMarketName('');
+      setOrderLocation('');
+      setOrderSelectedItems([]);
+      alert('داواکارییەکە بە سەرکەوتوویی نێردرا بۆ کۆگا');
     } catch (error) {
       console.error(error);
-      alert('هەڵەیەک ڕوویدا لە تۆمارکردنی داواکاری');
+      alert('هەڵەیەک ڕوویدا لە ناردنی داواکاری');
     }
   };
 
-  const updateOrderStatus = async (order: Order, status: Order['status']) => {
-    try {
-      if (status === 'completed' && order.status !== 'completed') {
-        for (const item of (order.items || [])) {
-          const itemRef = doc(db, 'items', item.itemId);
-          const itemSnap = await getDoc(itemRef);
-          if (itemSnap.exists()) {
-            const data = itemSnap.data();
-            const currentQty = data.quantity || 0;
-            const newQty = Math.max(0, currentQty - item.quantity);
-            await updateDoc(itemRef, { quantity: newQty });
-          }
+  // --- CASHVAN SALE HANDLERS ---
+  const addToVanCart = (item: any) => {
+    setVanCart(prev => {
+      const existing = prev.find(p => p.id === item.id);
+      if (existing) {
+        if (existing.cartQty >= item.quantity) {
+          alert('بڕی زیاتر لەناو ڤاندا بەردەست نییە');
+          return prev;
         }
+        return prev.map(p => p.id === item.id ? { ...p, cartQty: p.cartQty + 1 } : p);
       }
-      await updateDoc(doc(db, 'orders', order.id), { status });
-    } catch (error) {
-      console.error(error);
-    }
+      if (item.quantity < 1) {
+        alert('بڕی بەردەست لەناو ڤان نەماوە');
+        return prev;
+      }
+      const unit = item.unit || (item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton');
+      return [...prev, { ...item, cartQty: 1, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
+    });
   };
 
-  const settleOrder = async (type: 'cash' | 'debt') => {
-    if (!settlingOrder) return;
-    try {
-      await addDoc(collection(db, 'transactions'), {
-        type,
-        amount: settlingOrder.totalAmount,
-        date: Date.now(),
-        description: type === 'cash' ? `نەقدی ئۆردەری مارکێتی ${settlingOrder.marketName}` : `قەرزی ئۆردەری مارکێتی ${settlingOrder.marketName}`,
-        relatedEntityId: settlingOrder.marketName
-      });
-
-      if (settlingOrder.status !== 'completed') {
-        await updateOrderStatus(settlingOrder, 'completed');
-      }
-      await updateDoc(doc(db, 'orders', settlingOrder.id), { 
-        status: 'completed',
-        paymentStatus: type
-      });
+  const updateVanCartQty = (id: string, qty: number, unit?: 'carton' | 'packet') => {
+    const item = vanInventory.find(i => i.id === id);
+    if (!item) return;
+    
+    setVanCart(prev => {
+      const cartItem = prev.find(p => p.id === id);
+      if (!cartItem) return prev;
       
-      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', settlingOrder.repName)));
-      if (!repSnap.empty) {
-        const repDoc = repSnap.docs[0];
-        await updateDoc(doc(db, 'reps', repDoc.id), {
-          totalSales: (repDoc.data().totalSales || 0) + settlingOrder.totalAmount,
-          totalProfit: (repDoc.data().totalProfit || 0) + (settlingOrder.totalProfit || 0)
+      const newUnit = unit || cartItem.unit || 'carton';
+      if (qty > item.quantity) {
+        alert(`تەنها ${item.quantity} لەناو ڤاندا بەردەستە`);
+        return prev;
+      }
+      if (qty < 1) {
+        return prev.filter(p => p.id !== id);
+      }
+      
+      const price = calcPrice(item, newUnit, vanMarketName);
+      return prev.map(p => p.id === id ? { ...p, cartQty: qty, unit: newUnit, finalPrice: price } : p);
+    });
+  };
+
+  const submitCashvanSale = async () => {
+    if (!vanMarketName || vanCart.length === 0) {
+      alert('تکایە مارکێت و لانیکەم یەک کاڵا دیاری بکە');
+      return;
+    }
+
+    try {
+      if (vanMarketName && !markets.find(m => m.name === vanMarketName)) {
+        await addDoc(collection(db, 'markets'), { 
+          name: vanMarketName, 
+          location: '', 
+          phone: '', 
+          type: 'market', 
+          createdAt: Date.now() 
         });
       }
-
-      setSettlingOrder(null);
-      alert('حیساباتی ئۆردەر بە سەرکەوتوویی تۆمارکرا');
-    } catch (error) {
-      console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی تۆمارکردنی حیسابات');
-    }
-  };
-
-  const handleEditOrder = (order: Order) => {
-    setRepName(order.repName);
-    setMarketName(order.marketName);
-    setLocation(order.location);
-    const mappedItems = (order.items || []).map(oi => {
-      const fullItem = items.find(i => i.id === oi.itemId) || {
-        id: oi.itemId,
-        name: oi.name,
-        quantity: 9999,
-        costPrice: 0,
-        sellingPrice: oi.price,
-        wholesalePrice: 0,
-        barcode: ''
-      } as unknown as Item;
       
-      return {
-        item: fullItem,
-        quantity: oi.quantity,
-        unit: (oi.unit === 'packet' ? 'packet' : 'carton') as 'carton' | 'packet'
+      const totalAmount = vanCart.reduce((acc, curr) => acc + (curr.finalPrice * curr.cartQty), 0);
+      const totalCost = vanCart.reduce((acc, curr) => { 
+        const cost = curr.unit === "packet" ? (curr.packetCostPrice || curr.costPrice || 0) : (curr.cartonCostPrice || curr.costPrice || 0); 
+        return acc + (cost * curr.cartQty); 
+      }, 0);
+      const totalProfit = totalAmount - totalCost;
+      
+      const saleData: Omit<CashvanSale, 'id'> = {
+        cashvanName: repName || 'کاشڤان',
+        marketName: vanMarketName,
+        items: vanCart.map(c => ({
+          itemId: c.itemId || c.id,
+          name: c.name,
+          quantity: c.cartQty,
+          price: c.finalPrice,
+          unit: c.unit || 'carton',
+          barcode: c.barcode || '-'
+        })),
+        totalAmount,
+        totalProfit,
+        date: Date.now(),
+        status: 'pending_accounting',
+        paymentType: vanPaymentType
       };
-    });
-    setSelectedItems(mappedItems);
-    setEditingOrderId(order.id);
-    setShowNewOrder(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
 
-  const confirmDeleteOrder = async () => {
-    if (!deletingOrder) return;
-    try {
-      const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'نەزانراو';
-      await updateDoc(doc(db, 'orders', deletingOrder.id), { status: 'deleted', deletedBy: userName });
-      setDeletingOrder(null);
-    } catch (error) {
-      console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی ئۆردەر');
+      const docRef = await addDoc(collection(db, 'cashvan_sales'), saleData);
+
+      // Deduct from isolated cashvan_inventory
+      for (const cartItem of vanCart) {
+        const itemRef = doc(db, 'cashvan_inventory', cartItem.id);
+        const itemSnap = await getDoc(itemRef);
+        if (itemSnap.exists()) {
+          const currentQty = itemSnap.data().quantity || 0;
+          const newQty = Math.max(0, currentQty - cartItem.cartQty);
+          await updateDoc(itemRef, { quantity: newQty });
+        }
+      }
+
+      // Add transaction for debt or cash if needed
+      await addDoc(collection(db, 'transactions'), {
+        type: vanPaymentType === 'cash' ? 'cash' : 'debt',
+        invoiceNo: docRef.id,
+        amount: totalAmount,
+        date: Date.now(),
+        description: vanPaymentType === 'cash' ? `فرۆشتنی نەقدی کاشڤان بۆ ${vanMarketName}` : `فرۆشتنی قەرزی کاشڤان بۆ ${vanMarketName}`,
+        relatedEntityId: vanMarketName,
+        cashvanName: repName || 'کاشڤان'
+      });
+
+      setVanCart([]);
+      setActiveFormMode('none');
+      printCashvanReceipt({ ...saleData, id: docRef.id }, docRef.id.slice(-6));
+      alert('فرۆشتنی کاشڤان بە سەرکەوتوویی تۆمارکرا');
+    } catch (e: any) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا: ' + e.message);
     }
   };
 
-  const printOrder = async (order: Order, invoiceId: string) => {
+  // --- PRINTING UTILITIES ---
+  const printCashvanReceipt = async (sale: any, invoiceId: string) => {
+    const printWindow = window.open('', '', 'width=380,height=600');
+    if (!printWindow) return;
+
+    let oldDebt = 0;
+    try {
+      const q = query(
+        collection(db, 'transactions'),
+        where('relatedEntityId', '==', sale.marketName)
+      );
+      const snapshot = await getDocs(q);
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.date && data.date < (sale.date || Date.now())) {
+          if (data.type === 'debt' || data.type === 'market_debt') {
+            oldDebt += data.amount || 0;
+          } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
+            oldDebt -= data.amount || 0;
+          }
+        }
+      });
+      oldDebt = Math.max(0, oldDebt);
+    } catch (e) {
+      console.error(e);
+    }
+
+    const itemsHtml = (sale.items || []).map((item: any) => {
+      const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const itemTotal = (item.price || 0) * (item.quantity || 0);
+      return `
+        <tr>
+          <td style="text-align: right; font-weight: bold;">${item.name}</td>
+          <td style="text-align: center;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center;" dir="ltr">${(item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold;" dir="ltr">${itemTotal.toLocaleString()}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl">
+        <head>
+          <meta charset="utf-8">
+          <title>پسوڵەی فرۆشتن #${invoiceId}</title>
+          <style>
+            @media print { @page { margin: 4mm; } body { margin: 0; font-family: monospace; font-size: 12px; } }
+            body { font-family: monospace; font-size: 12px; direction: rtl; text-align: right; padding: 10px; color: #000; }
+            .center { text-align: center; }
+            .bold { font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+            th, td { padding: 4px 2px; border-bottom: 1px dashed #999; }
+            .summary { margin-top: 10px; border-top: 2px solid #000; padding-top: 6px; }
+          </style>
+        </head>
+        <body>
+          <div class="center">
+            <h2 style="margin: 0; font-size: 16px;">پسوڵەی فرۆشتنی کاشڤان</h2>
+            <div style="font-size: 11px; margin-top: 2px;">کاشڤان: ${sale.cashvanName}</div>
+          </div>
+          <hr style="border-top: 1px dashed #000; margin: 8px 0;" />
+          <div><strong>مارکێت:</strong> ${sale.marketName}</div>
+          <div><strong>شێوازی پارەدان:</strong> ${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}</div>
+          <div><strong>بەروار:</strong> <span dir="ltr">${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}</span></div>
+          <table>
+            <thead>
+              <tr>
+                <th style="text-align: right;">کاڵا</th>
+                <th style="text-align: center;">بڕ</th>
+                <th style="text-align: center;">نرخ</th>
+                <th style="text-align: left;">کۆ</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+          <div class="summary">
+            <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight: bold;">
+              <span>کۆی ئەم پسوڵەیە:</span>
+              <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
+            </div>
+            ${sale.paymentType === 'debt' ? `
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px;">
+                <span>قەرزی پێشوو:</span>
+                <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin-top: 4px; border-top: 1px dashed #000; padding-top: 4px;">
+                <span>کۆی گشتی قەرز:</span>
+                <span dir="ltr">${(oldDebt + (sale.totalAmount || 0)).toLocaleString()} د.ع</span>
+              </div>
+            ` : ''}
+          </div>
+          <div class="center" style="margin-top: 15px; font-size: 10px;">سوپاس بۆ سەردانەکەت</div>
+          <script>
+            window.onload = function() { window.print(); window.close(); }
+          </script>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  const printOrderReceipt = async (order: Order, invoiceId: string) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
     
     let oldDebt = 0;
     try {
-      const q = query(collection(db, 'transactions'), where('type', '==', 'debt'), where('relatedEntityId', '==', order.marketName));
+      const q = query(
+        collection(db, 'transactions'),
+        where('relatedEntityId', '==', order.marketName)
+      );
       const snapshot = await getDocs(q);
       snapshot.forEach(doc => {
         const data = doc.data();
-        if (!data.date || data.date < order.timestamp) {
-          oldDebt += data.amount || 0;
+        if (data.date && data.date < order.timestamp) {
+          if (data.type === 'debt' || data.type === 'market_debt') {
+            oldDebt += data.amount || 0;
+          } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
+            oldDebt -= data.amount || 0;
+          }
         }
       });
+      oldDebt = Math.max(0, oldDebt);
     } catch (e) {
-      console.error('Error fetching old debt', e);
+      console.error(e);
     }
-    
-    const marketObj = markets.find(m => m.name === order.marketName);
-    const marketPhone = marketObj?.phone || '-';
 
-    const printContent = `
-      <div dir="rtl" style="font-family: sans-serif; padding: 20px;">
-        <div style="display: flex; align-items: flex-start; margin-bottom: 20px;">
-          <div style="text-align: right; width: 250px;">
-            <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="width: 80px; height: 80px; object-fit: contain; margin-bottom: 5px;" onerror="this.style.display='none'" />
-            <h2 style="margin: 0; color: #333; font-size: 16px;">وەسڵی کۆگا</h2>
-            <p style="margin: 2px 0; font-size: 12px;">ناونیشان: هەولێر-ڕێگای کەرکوک</p>
-            <p style="margin: 2px 0; font-size: 12px;">مۆبایل: 07506144894</p>
-          </div>
-          <div style="text-align: center; flex: 1; padding-top: 20px;">
-            <h1 style="margin: 0; color: #1e293b; font-size: 52px; font-weight: 900; letter-spacing: 2px; white-space: nowrap;">TAM TAM</h1>
-          </div>
-        </div>
-        
-        <hr style="border: 0; border-top: 2px solid #1e293b; margin: 15px 0;" />
-        
-        <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 14px;">
-          <div style="text-align: right; flex: 1;">
-            <p style="margin: 5px 0;"><strong>بۆ:</strong> ${order.marketName}</p>
-            <p style="margin: 5px 0;"><strong>ژمارەی مۆبایل:</strong> ${marketPhone}</p>
-            <p style="margin: 5px 0;"><strong>ناونیشان:</strong> ${order.location}</p>
-            <p style="margin: 5px 0;"><strong>مەندووب:</strong> ${order.repName}</p>
-          </div>
-          <div style="text-align: left; flex: 1;">
-            <p style="margin: 5px 0;"><strong>ژ.وەسڵ:</strong> ${invoiceId.padStart(6, '0')}</p>
-            <p style="margin: 5px 0;"><strong>بەروار:</strong> ${format(order.timestamp, 'yyyy/MM/dd')}</p>
-            <p style="margin: 5px 0;"><strong>کات:</strong> ${format(order.timestamp, 'HH:mm')}</p>
-          </div>
-        </div>
-        
-        <hr style="border: 0; border-top: 2px solid #1e293b; margin: 15px 0;" />
-        
-        <table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 14px;">
-          <thead>
-            <tr style="background-color: #f3f4f6;">
-              <th style="padding: 8px; border: 1px solid #ccc;">ژ</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">کۆدی کاڵا</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">ناوی کاڵا</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">بڕ و یەکە</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">نرخ</th>
-              <th style="padding: 8px; border: 1px solid #ccc;">کۆی گشتی</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${(order.items || []).map((item, index) => {
-              const globalItem = items.find(i => i.id === item.itemId);
-              const barcode = globalItem?.barcode || '-';
-              const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-              return `
-                <tr>
-                  <td style="padding: 8px; border: 1px solid #ccc;">${index + 1}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc; font-family: monospace;">${barcode}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${item.name}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc;">${item.quantity} ${unitLabel}</td>
-                  <td style="padding: 8px; border: 1px solid #ccc;" dir="ltr">${item.price.toLocaleString()} د.ع</td>
-                  <td style="padding: 8px; border: 1px solid #ccc; font-weight: bold;" dir="ltr">${(item.price * item.quantity).toLocaleString()} د.ع</td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-          <tfoot>
-            <tr>
-              <th colspan="5" style="padding: 10px; border: 1px solid #ccc; text-align: left; font-size: 16px;">کۆی گشتی:</th>
-              <th style="padding: 10px; border: 1px solid #ccc; font-size: 16px; color: #4338ca;" dir="ltr">${order.totalAmount.toLocaleString()} د.ع</th>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    `;
+    const itemsHtml = (order.items || []).map((item, idx) => {
+      const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const itemTotal = (item.price || 0) * (item.quantity || 0);
+      return `
+        <tr>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 6px;">${idx + 1}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; font-weight: bold;">${item.name}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 6px;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 6px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 6px; font-weight: bold;" dir="ltr">${itemTotal.toLocaleString()} د.ع</td>
+        </tr>
+      `;
+    }).join('');
 
-    printWindow.document.write(`
-      <html>
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl">
         <head>
-          <title>Print Order</title>
+          <meta charset="utf-8">
+          <title>وەسڵی داواکاری #${invoiceId}</title>
+          <style>
+            body { font-family: system-ui, sans-serif; direction: rtl; text-align: right; padding: 20px; color: #1e293b; }
+            .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 15px; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th { background: #f8fafc; padding: 8px; border: 1px solid #cbd5e1; text-align: right; font-size: 13px; }
+            td { padding: 8px; border: 1px solid #e2e8f0; font-size: 13px; }
+            .total-box { text-align: left; font-size: 16px; font-weight: bold; margin-top: 15px; background: #f1f5f9; padding: 12px; border-radius: 8px; }
+            @media print { body { padding: 0; } }
+          </style>
         </head>
-        <body onload="window.print();window.close()">
-          ${printContent}
+        <body>
+          <div class="header">
+            <h1 style="margin: 0; font-size: 20px;">وەسڵی داواکاری (تەڵەبیە)</h1>
+            <div style="font-size: 12px; color: #64748b; margin-top: 5px;">ژمارەی وەسڵ: #${invoiceId} | مەندووب: ${order.repName}</div>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 13px;">
+            <div><strong>مارکێت:</strong> ${order.marketName}</div>
+            <div><strong>شێوازی پارەدان:</strong> ${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}</div>
+            <div><strong>بەروار:</strong> <span dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span></div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 40px; text-align: center;">#</th>
+                <th>ناوی کاڵا</th>
+                <th style="width: 100px; text-align: center;">بڕ</th>
+                <th style="width: 120px; text-align: left;">نرخی تاک</th>
+                <th style="width: 140px; text-align: left;">کۆی گشتی</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+          <div class="total-box">
+            <span>کۆی گشتی: </span>
+            <span dir="ltr" style="color: #4f46e5;">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
+          </div>
+          <script>
+            window.onload = function() { window.print(); }
+          </script>
         </body>
       </html>
-    `);
+    `;
+    printWindow.document.write(html);
     printWindow.document.close();
-    updateOrderStatus(order, 'printed');
   };
 
-  const filteredItems = items.filter(item => {
-    const nameMatch = item.name ? item.name.includes(searchTerm) : false;
-    const barcodeMatch = item.barcode ? item.barcode.includes(searchTerm) : false;
-    return nameMatch || barcodeMatch;
-  });
+  // --- UNIFIED ACTIVITIES FOR BOTTOM HISTORY ---
+  const allActivities = useMemo<ActivityItem[]>(() => {
+    const list: ActivityItem[] = [];
+    const activeRep = repName?.trim();
+
+    // 1. Orders
+    orders.forEach(o => {
+      if (role === 'sales_rep' && activeRep && o.repName !== activeRep) return;
+      list.push({
+        id: o.id,
+        type: 'order',
+        marketName: o.marketName,
+        repName: o.repName,
+        amount: o.totalAmount,
+        paymentType: o.paymentStatus || 'debt',
+        status: o.status,
+        timestamp: o.timestamp,
+        items: (o.items || []).map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit === 'packet' ? 'پاکەت' : 'کارتۆن', price: i.price })),
+        rawOrder: o
+      });
+    });
+
+    // 2. Cashvan Sales
+    cashvanSales.forEach(s => {
+      if (role === 'sales_rep' && activeRep && s.cashvanName !== activeRep) return;
+      list.push({
+        id: s.id,
+        type: 'cashvan_sale',
+        marketName: s.marketName,
+        repName: s.cashvanName,
+        amount: s.totalAmount,
+        paymentType: s.paymentType || 'cash',
+        status: s.status,
+        timestamp: s.date,
+        items: (s.items || []).map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit === 'packet' ? 'پاکەت' : 'کارتۆن', price: i.price })),
+        rawSale: s
+      });
+    });
+
+    // 3. Debt Collections (Paid debts)
+    transactions.forEach(t => {
+      const isPaid = t.type === 'paid_debt' || t.type === 'market_paid_debt';
+      if (!isPaid) return;
+      if (role === 'sales_rep' && activeRep) {
+        const matchesRep = t.collectorName === activeRep || t.repName === activeRep || (t.description && t.description.includes(activeRep));
+        if (!matchesRep) return;
+      }
+      list.push({
+        id: t.id,
+        type: 'debt_collection',
+        marketName: t.relatedEntityId || 'مارکێت',
+        repName: t.collectorName || t.repName || 'مەندووب',
+        amount: t.amount,
+        paymentType: 'cash',
+        timestamp: t.date,
+        rawTransaction: t
+      });
+    });
+
+    return list.sort((a, b) => b.timestamp - a.timestamp);
+  }, [orders, cashvanSales, transactions, repName, role]);
+
+  // Filter activities by Date & Type
+  const filteredActivities = useMemo(() => {
+    const today = new Date();
+    const yesterday = subDays(today, 1);
+
+    return allActivities.filter(act => {
+      // Date filter
+      if (dateFilter === 'today') {
+        if (!isSameDay(new Date(act.timestamp), today)) return false;
+      } else if (dateFilter === 'yesterday') {
+        if (!isSameDay(new Date(act.timestamp), yesterday)) return false;
+      } else if (dateFilter === 'custom') {
+        if (!customDate) return true;
+        const target = new Date(customDate);
+        if (!isSameDay(new Date(act.timestamp), target)) return false;
+      }
+
+      // Type filter
+      if (activityTypeFilter !== 'all' && act.type !== activityTypeFilter) {
+        return false;
+      }
+
+      // Search filter
+      if (historySearchTerm.trim()) {
+        const term = historySearchTerm.toLowerCase();
+        const mMatch = act.marketName?.toLowerCase().includes(term);
+        const rMatch = act.repName?.toLowerCase().includes(term);
+        if (!mMatch && !rMatch) return false;
+      }
+
+      return true;
+    });
+  }, [allActivities, dateFilter, customDate, activityTypeFilter, historySearchTerm]);
+
+  // Statistics for selected activities
+  const stats = useMemo(() => {
+    let orderCount = 0;
+    let orderTotal = 0;
+    let vanSaleCount = 0;
+    let vanSaleTotal = 0;
+    let debtCollectCount = 0;
+    let debtCollectTotal = 0;
+
+    filteredActivities.forEach(a => {
+      if (a.type === 'order') {
+        orderCount++;
+        orderTotal += (a.amount || 0);
+      } else if (a.type === 'cashvan_sale') {
+        vanSaleCount++;
+        vanSaleTotal += (a.amount || 0);
+      } else if (a.type === 'debt_collection') {
+        debtCollectCount++;
+        debtCollectTotal += (a.amount || 0);
+      }
+    });
+
+    return {
+      orderCount,
+      orderTotal,
+      vanSaleCount,
+      vanSaleTotal,
+      debtCollectCount,
+      debtCollectTotal,
+      grandTotal: orderTotal + vanSaleTotal + debtCollectTotal
+    };
+  }, [filteredActivities]);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-        <div>
-          <h2 className="text-xl font-bold text-slate-800">
-            {role === 'admin' ? 'تەسفییەکردن و ئۆردەرەکان' : role === 'cashvan' ? 'کاشڤان و ئۆردەرەکان' : 'بەشی داواکاری و ئۆردەرەکان'}
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {role === 'warehouse' ? 'کارمەندی کۆگا دەتوانێت بە ناوی هەر مەندووبێکەوە تەڵەبیە تۆمار بکات' : 'تۆمارکردن و بەڕێوەبردنی تەڵەبیەی مارکێتەکان'}
-          </p>
-        </div>
+      {/* 1. Daily Market Schedule with the 3-Options Dropdown Menu */}
+      <MarketDailyScheduleCard
+        role={role}
+        activeRepName={repName}
+        activeCashvanName={repName}
+        onSelectForOrder={handleSelectMarketForOrder}
+        onSelectForCashvan={handleSelectMarketForCashvan}
+        onSelectForDebtPay={handleSelectMarketForDebtPay}
+        marketDebtMap={marketDebtMap}
+      />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setShowDailyReceiptModal(true)}
-            className="px-3.5 py-2.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl transition flex items-center gap-1.5 font-bold text-xs shadow-xs"
-            title="وەسڵی ڕۆژانەی فرۆشتن و قەرزی وەرگیراو"
-          >
-            <FileText size={15} />
-            <span>وەسڵی ڕۆژانەی کارەکان</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setPayTargetMarket('');
-              setIsPayModalOpen(true);
-            }}
-            className="px-3.5 py-2.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl transition flex items-center gap-1.5 font-bold text-xs shadow-xs"
-            title="وەرگرتنەوەی پارەی قەرز لە مارکێت"
-          >
-            <CreditCard size={15} />
-            <span>وەرگرتنەوەی قەرز</span>
-          </button>
-
-          <button
-            onClick={() => setShowNewOrder(!showNewOrder)}
-            className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition flex items-center gap-2 font-bold text-xs shadow-sm"
-          >
-            <Plus size={16} />
-            <span>{showNewOrder ? 'داخستنی فۆڕم' : 'تۆمارکردنی ئۆردەری نوێ'}</span>
-          </button>
-        </div>
-      </div>
-
-      {showNewOrder && (
-        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6">
-          <h3 className="text-base font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">
-            <ShoppingCart className="text-indigo-600" size={18} />
-            {editingOrderId ? 'دەستکاریکردنی داواکاری' : 'فۆڕمی تۆمارکردنی داواکاری نوێ'}
-          </h3>
-          
-          <form onSubmit={submitOrder} className="space-y-5">
-            <div className={`grid grid-cols-1 ${role === 'sales_rep' ? 'md:grid-cols-2' : 'md:grid-cols-3'} gap-4`}>
-              {/* Rep selector: Editable/Selectable ONLY for Warehouse & Admin */}
-              {role !== 'sales_rep' && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1 flex items-center gap-1">
-                    <User size={14} className="text-indigo-600" />
-                    ناوی مەندووب * {role === 'warehouse' && <span className="text-[10px] text-indigo-600">(هەڵبژاردنی مەندووب لە سیستەم)</span>}
-                  </label>
-                  <div>
-                    <input
-                      type="text"
-                      list="reps-list"
-                      required
-                      placeholder="ناوی مەندووب بنووسە یان هەڵبژێرە..."
-                      className="w-full px-3 py-2 border border-indigo-300 bg-indigo-50/20 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-bold text-slate-800"
-                      value={repName}
-                      onChange={(e) => setRepName(e.target.value)}
-                    />
-                    <datalist id="reps-list">
-                      {reps.map(r => (
-                        <option key={r.id || r.name} value={r.name}>
-                          {r.name} {r.isCashvan ? '(کاشڤان)' : '(مەندووب)'}
-                        </option>
-                      ))}
-                    </datalist>
+      {/* 2. DYNAMIC FORM SECTION (Opened strictly when clicked from Schedule Menu) */}
+      {activeFormMode !== 'none' && (
+        <div ref={formSectionRef} className="animate-in fade-in zoom-in-95 duration-200">
+          {/* OPTION 1 FORM: Order / Pre-order (تەڵەبییە) */}
+          {activeFormMode === 'order' && (
+            <section className="bg-white p-6 rounded-2xl shadow-sm border-2 border-indigo-200 mb-6">
+              <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                  <div className="p-2 bg-indigo-100 text-indigo-700 rounded-xl">
+                    <ShoppingCart size={18} />
                   </div>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">ناوی مارکێت / شوێن *</label>
-                <input
-                  type="text"
-                  list="order-markets"
-                  required
-                  placeholder="ناوی مارکێت بنووسە یان هەڵبژێرە..."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
-                  value={marketName}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setMarketName(val);
-                    const existing = markets.find(m => m.name === val);
-                    if (existing) setLocation(existing.location);
-                  }}
-                />
-                <datalist id="order-markets">
-                  {markets.map(m => <option key={m.id} value={m.name} />)}
-                </datalist>
-
-                {marketName && marketDebtMap.has(marketName) && (
-                  <div className="mt-1.5 flex items-center justify-between bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-xl text-xs">
-                    <div className="flex items-center gap-1.5 text-amber-900 font-medium">
-                      <CreditCard size={13} className="text-amber-600" />
-                      <span>قەرزی پێشوو:</span>
-                      <strong className="font-mono font-bold text-amber-700" dir="ltr">
-                        {(marketDebtMap.get(marketName) || 0).toLocaleString()} د.ع
-                      </strong>
-                    </div>
-                    {(marketDebtMap.get(marketName) || 0) > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPayTargetMarket(marketName);
-                          setIsPayModalOpen(true);
-                        }}
-                        className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-[10px] transition shadow-2xs"
-                      >
-                        وەرگرتنەوەی قەرز
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">ناونیشان / گەڕەک</label>
-                <input
-                  type="text"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="ناونیشان..."
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Items Selection */}
-              <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50">
-                <div className="mb-3 relative">
-                  <input
-                    type="text"
-                    placeholder="گەڕان بۆ کاڵا لە کۆگا..."
-                    className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-                </div>
-                <div className="h-64 overflow-y-auto space-y-2 pr-1">
-                  {filteredItems.map(item => {
-                    const defaultUnit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
-                    const unitPrice = calcPrice(item, defaultUnit);
-                    return (
-                      <div key={item.id} className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-200/80 shadow-xs">
-                        <div>
-                          <div className="font-bold text-slate-800 text-xs">{item.name}</div>
-                          <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
-                            <span>بەردەست: <strong className="text-indigo-600">{item.quantity || 0} {defaultUnit === 'packet' ? 'پاکەت' : 'کارتۆن'}</strong></span>
-                            <span className="text-slate-300">•</span>
-                            <span>نرخ: <strong className="text-emerald-600 font-mono font-bold" dir="ltr">{unitPrice.toLocaleString()} د.ع</strong></span>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleAddItemToOrder(item)}
-                          disabled={(item.quantity || 0) <= 0}
-                          className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg disabled:opacity-40 transition text-xs font-bold flex items-center gap-1"
-                        >
-                          <Plus size={14} />
-                          زیادکردن
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Selected Items */}
-              <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50 flex flex-col justify-between">
-                <div>
-                  <h4 className="font-bold text-slate-800 mb-3 text-xs flex items-center gap-2">
-                    <ShoppingCart size={14} className="text-indigo-600" />
-                    کاڵا هەڵبژێردراوەکانی داواکاری ({selectedItems.length})
-                  </h4>
-                  <div className="h-48 overflow-y-auto space-y-2 pr-1">
-                    {selectedItems.map((si) => (
-                      <div key={si.item.id} className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-200/80 text-xs">
-                        <div className="font-bold text-slate-800 flex-1 truncate pr-2">{si.item.name}</div>
-                        <div className="flex items-center gap-2">
-                          <select 
-                            className="px-2 py-1 border border-slate-300 rounded-lg text-xs bg-slate-50 font-bold"
-                            value={si.unit}
-                            onChange={(e) => handleUpdateItemQuantity(si.item.id, si.quantity, e.target.value as 'carton' | 'packet')}
-                          >
-                            <option value="carton">کارتۆن</option>
-                            <option value="packet">پاکەت</option>
-                          </select>
-
-                          <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden">
-                            <button type="button" onClick={() => handleQuantityDelta(si.item.id, -1)} className="px-2 py-0.5 text-xs font-bold">-</button>
-                            <span className="w-8 text-center font-mono font-bold text-xs">{si.quantity}</span>
-                            <button type="button" onClick={() => handleQuantityDelta(si.item.id, 1)} className="px-2 py-0.5 text-xs font-bold">+</button>
-                          </div>
-
-                          <span className="font-bold min-w-[70px] text-left text-indigo-700 font-mono text-xs" dir="ltr">
-                            {(si.quantity * calcPrice(si.item, si.unit)).toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                    {selectedItems.length === 0 && (
-                      <div className="text-center text-slate-400 py-12 text-xs">هیچ کاڵایەک هەڵنەبژێردراوە</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-3 pt-3 border-t border-slate-200 flex justify-between items-center">
-                  <div className="font-bold text-slate-800 text-xs">کۆی گشتی داواکاری:</div>
-                  <div className="font-bold text-base text-indigo-600 font-mono" dir="ltr">
-                    {selectedItems.reduce((acc, curr) => acc + (curr.quantity * calcPrice(curr.item, curr.unit)), 0).toLocaleString()} د.ع
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 pt-2">
-              {editingOrderId && (
+                  <span>فۆڕمی داواکاری (تەڵەبییە) بۆ: <strong className="text-indigo-600 font-bold">{orderMarketName || 'مارکێت'}</strong></span>
+                </h3>
                 <button
                   type="button"
-                  onClick={() => {
-                    setEditingOrderId(null);
-                    setShowNewOrder(false);
-                    setSelectedItems([]);
-                  }}
-                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+                  onClick={() => setActiveFormMode('none')}
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition"
+                  title="داخستن"
                 >
-                  پاشگەزبوونەوە
+                  <X size={20} />
                 </button>
-              )}
-              <button
-                type="submit"
-                className="px-8 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition font-bold text-xs shadow-sm"
-              >
-                {editingOrderId ? 'پاشەکەوتکردنی گۆڕانکاری' : 'ناردنی داواکاری بۆ کۆگا'}
-              </button>
-            </div>
-          </form>
-        </section>
+              </div>
+
+              <form onSubmit={submitOrder} className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">ناوی مارکێت *</label>
+                    <input
+                      type="text"
+                      list="order-markets"
+                      required
+                      placeholder="ناوی مارکێت بنووسە..."
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-bold text-slate-800 bg-slate-50"
+                      value={orderMarketName}
+                      onChange={(e) => setOrderMarketName(e.target.value)}
+                    />
+                    <datalist id="order-markets">
+                      {markets.map(m => <option key={m.id} value={m.name} />)}
+                    </datalist>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">شێوازی پارەدان *</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setOrderPaymentType('debt')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                          orderPaymentType === 'debt'
+                            ? 'bg-amber-600 text-white shadow-xs'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        <CreditCard size={14} />
+                        <span>بە قەرز</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOrderPaymentType('cash')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                          orderPaymentType === 'cash'
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        <DollarSign size={14} />
+                        <span>بە نەقد</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">شوێن / تێبینی</label>
+                    <input
+                      type="text"
+                      placeholder="ناونیشان یان تێبینی بنووسە..."
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs text-slate-800"
+                      value={orderLocation}
+                      onChange={(e) => setOrderLocation(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* Items Selector for Order */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
+                  <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                    <div className="flex justify-between items-center mb-3">
+                      <h4 className="text-xs font-bold text-slate-700">کاڵاکانی بەردەست لە کۆگا</h4>
+                      <div className="relative w-48">
+                        <input
+                          type="text"
+                          placeholder="گەڕان بۆ کاڵا..."
+                          className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-lg text-xs outline-none bg-white"
+                          value={orderItemSearch}
+                          onChange={(e) => setOrderItemSearch(e.target.value)}
+                        />
+                        <Search className="absolute right-2.5 top-2 text-slate-400" size={13} />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                      {items
+                        .filter(i => (i.quantity || 0) > 0 && i.name.toLowerCase().includes(orderItemSearch.toLowerCase()))
+                        .map(item => (
+                          <div
+                            key={item.id}
+                            onClick={() => handleAddItemToOrder(item)}
+                            className="p-2.5 bg-white border border-slate-200 hover:border-indigo-400 rounded-xl cursor-pointer transition flex justify-between items-center group shadow-2xs"
+                          >
+                            <div>
+                              <div className="font-bold text-xs text-slate-800 group-hover:text-indigo-600">{item.name}</div>
+                              <div className="text-[10px] text-slate-400">بەردەست: {item.quantity} | {item.barcode}</div>
+                            </div>
+                            <div className="text-left">
+                              <span className="text-xs font-bold font-mono text-indigo-700" dir="ltr">
+                                {calcPrice(item, 'carton', orderMarketName).toLocaleString()} د.ع
+                              </span>
+                              <div className="text-[10px] text-slate-500 font-bold">بۆ کارتۆن</div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+
+                  {/* Selected items list */}
+                  <div className="border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-700 mb-3 flex items-center justify-between">
+                        <span>کاڵا هەڵبژێردراوەکانی داواکاری</span>
+                        <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full text-[10px] font-bold">
+                          {orderSelectedItems.length} کاڵا
+                        </span>
+                      </h4>
+
+                      <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                        {orderSelectedItems.map(si => (
+                          <div key={si.item.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="font-bold text-xs text-slate-800 truncate">{si.item.name}</div>
+                              <div className="text-[11px] text-slate-500 font-mono" dir="ltr">
+                                {calcPrice(si.item, si.unit, orderMarketName).toLocaleString()} د.ع
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {/* Unit switch */}
+                              {si.item.packetSellingPrice && si.item.cartonSellingPrice && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateOrderItemQty(si.item.id, si.quantity, si.unit === 'carton' ? 'packet' : 'carton')}
+                                  className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-indigo-600 hover:bg-indigo-50"
+                                >
+                                  {si.unit === 'carton' ? 'کارتۆن' : 'پاکەت'}
+                                </button>
+                              )}
+
+                              <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateOrderItemQty(si.item.id, si.quantity - 1, si.unit)}
+                                  className="w-6 h-6 flex items-center justify-center font-bold text-slate-600 hover:bg-slate-100 rounded text-xs"
+                                >
+                                  -
+                                </button>
+                                <span className="w-8 text-center text-xs font-bold font-mono">{si.quantity}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateOrderItemQty(si.item.id, si.quantity + 1, si.unit)}
+                                  className="w-6 h-6 flex items-center justify-center font-bold text-slate-600 hover:bg-slate-100 rounded text-xs"
+                                >
+                                  +
+                                </button>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateOrderItemQty(si.item.id, 0)}
+                                className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+
+                        {orderSelectedItems.length === 0 && (
+                          <div className="text-center py-10 text-slate-400 text-xs">
+                            تکایە لە لای ڕاستەوە کاڵا زیاد بکە بۆ داواکاری
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-200 flex justify-between items-center">
+                      <div>
+                        <div className="text-[11px] text-slate-500">کۆی گشتی داواکاری:</div>
+                        <div className="text-base font-bold font-mono text-indigo-600" dir="ltr">
+                          {orderSelectedItems.reduce((acc, curr) => acc + (curr.quantity * calcPrice(curr.item, curr.unit, orderMarketName)), 0).toLocaleString()} د.ع
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveFormMode('none')}
+                          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+                        >
+                          پاشگەزبوونەوە
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5"
+                        >
+                          <Send size={14} />
+                          <span>ناردنی داواکاری بۆ کۆگا</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </section>
+          )}
+
+          {/* OPTION 2 FORM: Direct Cashvan Sale (کاشڤان ڕاستەوخۆ) */}
+          {activeFormMode === 'cashvan' && (
+            <section className="bg-white p-6 rounded-2xl shadow-sm border-2 border-amber-200 mb-6">
+              <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                  <div className="p-2 bg-amber-100 text-amber-800 rounded-xl">
+                    <Truck size={18} />
+                  </div>
+                  <span>فرۆشتنی ڕاستەوخۆ لە ڤان بۆ: <strong className="text-amber-900 font-bold">{vanMarketName || 'مارکێت'}</strong></span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setActiveFormMode('none')}
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition"
+                  title="داخستن"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">ناوی مارکێت *</label>
+                  <input
+                    type="text"
+                    list="van-markets"
+                    required
+                    placeholder="ناوی مارکێت..."
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-amber-500 text-xs font-bold text-slate-800 bg-slate-50"
+                    value={vanMarketName}
+                    onChange={(e) => setVanMarketName(e.target.value)}
+                  />
+                  <datalist id="van-markets">
+                    {markets.map(m => <option key={m.id} value={m.name} />)}
+                  </datalist>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">شێوازی پارەدان *</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setVanPaymentType('cash')}
+                      className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                        vanPaymentType === 'cash'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <DollarSign size={14} />
+                      <span>بە نەقد</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVanPaymentType('debt')}
+                      className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                        vanPaymentType === 'debt'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <CreditCard size={14} />
+                      <span>بە قەرز</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-amber-50/50 border border-amber-100 rounded-xl flex items-center justify-between">
+                  <div className="text-xs text-amber-900 font-bold">قەرزی ئێستای ئەم مارکێتە:</div>
+                  <div className="text-sm font-bold font-mono text-amber-800" dir="ltr">
+                    {(marketDebtMap.get(vanMarketName) || 0).toLocaleString()} د.ع
+                  </div>
+                </div>
+              </div>
+
+              {/* Items Selector from Van Inventory */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
+                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-xs font-bold text-slate-700">کاڵاکانی بەردەست لەناو ڤان ({repName})</h4>
+                    <div className="relative w-48">
+                      <input
+                        type="text"
+                        placeholder="گەڕان لەناو ڤاندا..."
+                        className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-lg text-xs outline-none bg-white"
+                        value={vanItemSearch}
+                        onChange={(e) => setVanItemSearch(e.target.value)}
+                      />
+                      <Search className="absolute right-2.5 top-2 text-slate-400" size={13} />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                    {vanInventory
+                      .filter(i => (i.quantity || 0) > 0 && i.name.toLowerCase().includes(vanItemSearch.toLowerCase()))
+                      .map(item => {
+                        const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+                        const price = calcPrice(item, item.unit || 'carton', vanMarketName);
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => addToVanCart(item)}
+                            className="p-2.5 bg-white border border-slate-200 hover:border-amber-400 rounded-xl cursor-pointer transition flex justify-between items-center group shadow-2xs"
+                          >
+                            <div>
+                              <div className="font-bold text-xs text-slate-800 group-hover:text-amber-800">{item.name}</div>
+                              <div className="text-[10px] text-slate-400">بەردەست لە ڤان: <strong>{item.quantity} {unitLabel}</strong></div>
+                            </div>
+                            <div className="text-left">
+                              <span className="text-xs font-bold font-mono text-emerald-700" dir="ltr">
+                                {price.toLocaleString()} د.ع
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    {vanInventory.length === 0 && (
+                      <div className="text-center py-10 text-slate-400 text-xs">
+                        هیچ کاڵایەک لەناو ڤاندا بار نەکراوە یان بەردەست نییە
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Van Cart & Checkout */}
+                <div className="border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-700 mb-3 flex items-center justify-between">
+                      <span>کاڵاکانی وەسڵی فرۆشتن</span>
+                      <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full text-[10px] font-bold">
+                        {vanCart.length} کاڵا
+                      </span>
+                    </h4>
+
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {vanCart.map(c => (
+                        <div key={c.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-bold text-xs text-slate-800 truncate">{c.name}</div>
+                            <div className="text-[11px] text-slate-500 font-mono" dir="ltr">
+                              {c.finalPrice?.toLocaleString()} د.ع
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(c.id, c.cartQty - 1, c.unit)}
+                              className="w-6 h-6 flex items-center justify-center font-bold text-slate-600 hover:bg-slate-100 rounded text-xs"
+                            >
+                              -
+                            </button>
+                            <span className="w-8 text-center text-xs font-bold font-mono">{c.cartQty}</span>
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(c.id, c.cartQty + 1, c.unit)}
+                              className="w-6 h-6 flex items-center justify-center font-bold text-slate-600 hover:bg-slate-100 rounded text-xs"
+                            >
+                              +
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => updateVanCartQty(c.id, 0)}
+                            className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+
+                      {vanCart.length === 0 && (
+                        <div className="text-center py-10 text-slate-400 text-xs">
+                          تکایە کاڵا دیاری بکە لە لیستی بەردەستی ناو ڤان
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-slate-200 flex justify-between items-center">
+                    <div>
+                      <div className="text-[11px] text-slate-500">کۆی گشتی فرۆشتن:</div>
+                      <div className="text-base font-bold font-mono text-emerald-700" dir="ltr">
+                        {vanCart.reduce((acc, curr) => acc + (curr.cartQty * curr.finalPrice), 0).toLocaleString()} د.ع
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setActiveFormMode('none')}
+                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+                      >
+                        پاشگەزبوونەوە
+                      </button>
+                      <button
+                        type="button"
+                        onClick={submitCashvanSale}
+                        className="px-6 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5"
+                      >
+                        <Printer size={14} />
+                        <span>تۆمارکردن و چاپکردنی وەسڵ</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+        </div>
       )}
 
-      {/* Orders List */}
-      <div className="space-y-4">
-        {loading ? (
-          <div className="text-center py-10 text-slate-500 text-xs">خەریکی هێنانە...</div>
-        ) : displayedOrders.length === 0 ? (
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-500 text-xs">
-            هیچ داواکارییەک نییە
+      {/* 3. BOTTOM SECTION: MY DAILY ACTIVITIES & HISTORY (FILTER BY DATE: TODAY, YESTERDAY, CUSTOM) */}
+      <section className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-3">
+          {/* Quick Date Filters */}
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 text-xs">
+            <button
+              type="button"
+              onClick={() => setDateFilter('today')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                dateFilter === 'today'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              ئەمڕۆ
+            </button>
+            <button
+              type="button"
+              onClick={() => setDateFilter('yesterday')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                dateFilter === 'yesterday'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              دوێنێ
+            </button>
+            <button
+              type="button"
+              onClick={() => setDateFilter('custom')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                dateFilter === 'custom'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              دیاریکردنی بەروار
+            </button>
+            <button
+              type="button"
+              onClick={() => setDateFilter('all')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                dateFilter === 'all'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              هەمووی
+            </button>
+
+            {dateFilter === 'custom' && (
+              <input
+                type="date"
+                value={customDate}
+                onChange={(e) => setCustomDate(e.target.value)}
+                className="px-2.5 py-1 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+              />
+            )}
           </div>
-        ) : (
-          displayedOrders.map((order, index) => (
-            <div key={order.id} className={`p-4 rounded-2xl shadow-sm border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${order.status === 'pending' ? 'bg-amber-50/40 border-amber-200' : order.status === 'printed' ? 'bg-indigo-50/40 border-indigo-200' : 'bg-green-50/40 border-green-200'}`}>
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-2">
-                  <h3 className="font-bold text-sm text-slate-800">{order.marketName}</h3>
-                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                    order.status === 'pending' ? 'bg-amber-100 text-amber-800' :
-                    order.status === 'printed' ? 'bg-indigo-100 text-indigo-800' :
-                    'bg-green-100 text-green-800'
-                  }`}>
-                    {order.status === 'pending' ? 'چاوەڕێ' : order.status === 'printed' ? 'چاپکراو' : 'تەواوکراو'}
-                  </span>
-                </div>
-                <div className="text-xs text-slate-600 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
-                  <div><strong>مەندووب:</strong> {order.repName}</div>
-                  <div><strong>شوێن:</strong> {order.location || '-'}</div>
-                  <div><strong>بەروار:</strong> <span dir="ltr" className="font-mono">{format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span></div>
-                  <div><strong>ژمارەی کاڵا:</strong> {(order.items || []).reduce((acc, curr) => acc + curr.quantity, 0)} {order.items?.[0]?.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</div>
-                </div>
-              </div>
+        </div>
 
-              <div className="flex items-center gap-4 border-t lg:border-t-0 lg:border-r border-slate-200 pt-3 lg:pt-0 lg:pr-4 justify-between lg:justify-end">
-                <div className="text-left">
-                  <div className="text-[11px] text-slate-500">کۆی گشتی</div>
-                  <div className="font-bold text-sm text-slate-900 font-mono" dir="ltr">{order.totalAmount.toLocaleString()} د.ع</div>
-                </div>
-                
-                <div className="flex gap-2 items-center">
-                  {(role === 'admin' || role === 'warehouse') && (
-                    <button
-                      onClick={() => printOrder(order, String(displayedOrders.length - index).padStart(6, '0'))}
-                      className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
-                      title="چاپکردنی وەسڵ"
-                    >
-                      <Printer size={16} />
-                    </button>
-                  )}
-                  {role === 'warehouse' && order.status !== 'completed' && (
-                    <button
-                      onClick={() => updateOrderStatus(order, 'completed')}
-                      className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition"
-                      title="تەواوکردن"
-                    >
-                      <CheckCircle size={16} />
-                    </button>
-                  )}
-                  {role === 'admin' && (!order.paymentStatus) && (
-                    <button
-                      onClick={() => setSettlingOrder(order)}
-                      className="px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-xs font-bold"
-                    >
-                      تەسفیەکردن
-                    </button>
-                  )}
-                  {order.paymentStatus === 'cash' && (
-                    <span className="px-2.5 py-1 bg-green-100 text-green-800 rounded-lg text-xs font-bold">نەقدە</span>
-                  )}
-                  {order.paymentStatus === 'debt' && (
-                    <span className="px-2.5 py-1 bg-amber-100 text-amber-800 rounded-lg text-xs font-bold">قەرزە</span>
-                  )}
-                  <button
-                    onClick={() => handleEditOrder(order)}
-                    className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
-                    title="دەستکاری"
-                  >
-                    <Edit2 size={16} />
-                  </button>
-                  <button
-                    onClick={() => setDeletingOrder(order)}
-                    className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
-                    title="سڕینەوە"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </div>
+        {/* Activity Type Filters & Search */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setActivityTypeFilter('all')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition border ${
+                activityTypeFilter === 'all'
+                  ? 'bg-slate-800 text-white border-slate-800'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              هەموو کارەکان ({filteredActivities.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivityTypeFilter('order')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition border flex items-center gap-1.5 ${
+                activityTypeFilter === 'order'
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-indigo-700 border-slate-200 hover:bg-indigo-50'
+              }`}
+            >
+              <ShoppingCart size={13} />
+              <span>تەڵەبییەکان ({stats.orderCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivityTypeFilter('cashvan_sale')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition border flex items-center gap-1.5 ${
+                activityTypeFilter === 'cashvan_sale'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-white text-amber-800 border-slate-200 hover:bg-amber-50'
+              }`}
+            >
+              <Truck size={13} />
+              <span>فرۆشتنی کاشڤان ({stats.vanSaleCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivityTypeFilter('debt_collection')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition border flex items-center gap-1.5 ${
+                activityTypeFilter === 'debt_collection'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white text-emerald-800 border-slate-200 hover:bg-emerald-50'
+              }`}
+            >
+              <CreditCard size={13} />
+              <span>قەرزی وەرگیراو ({stats.debtCollectCount})</span>
+            </button>
+          </div>
+
+          <div className="relative w-full sm:w-60">
+            <input
+              type="text"
+              placeholder="گەڕان لە مێژوودا..."
+              className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-xl text-xs outline-none"
+              value={historySearchTerm}
+              onChange={(e) => setHistorySearchTerm(e.target.value)}
+            />
+            <Search className="absolute right-2.5 top-2 text-slate-400" size={14} />
+          </div>
+        </div>
+
+        {/* Daily Summary Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl">
+            <div className="text-[11px] text-indigo-700 font-bold flex items-center gap-1">
+              <ShoppingCart size={13} />
+              <span>کۆی تەڵەبیەکان</span>
             </div>
-          ))
-        )}
-      </div>
+            <div className="text-sm font-black text-indigo-950 font-mono mt-1" dir="ltr">
+              {stats.orderTotal.toLocaleString()} د.ع
+            </div>
+            <div className="text-[10px] text-indigo-600 mt-0.5">{stats.orderCount} داواکاری</div>
+          </div>
 
-      {/* Delete Confirmation Modal */}
+          <div className="p-3 bg-amber-50/60 border border-amber-100 rounded-xl">
+            <div className="text-[11px] text-amber-800 font-bold flex items-center gap-1">
+              <Truck size={13} />
+              <span>فرۆشتنی کاشڤان</span>
+            </div>
+            <div className="text-sm font-black text-amber-950 font-mono mt-1" dir="ltr">
+              {stats.vanSaleTotal.toLocaleString()} د.ع
+            </div>
+            <div className="text-[10px] text-amber-700 mt-0.5">{stats.vanSaleCount} فرۆشتن</div>
+          </div>
+
+          <div className="p-3 bg-emerald-50/60 border border-emerald-100 rounded-xl">
+            <div className="text-[11px] text-emerald-800 font-bold flex items-center gap-1">
+              <CreditCard size={13} />
+              <span>قەرزی وەرگیراو</span>
+            </div>
+            <div className="text-sm font-black text-emerald-950 font-mono mt-1" dir="ltr">
+              {stats.debtCollectTotal.toLocaleString()} د.ع
+            </div>
+            <div className="text-[10px] text-emerald-700 mt-0.5">{stats.debtCollectCount} وەرگرتن</div>
+          </div>
+
+          <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl">
+            <div className="text-[11px] text-slate-700 font-bold flex items-center gap-1">
+              <DollarSign size={13} />
+              <span>کۆی گشتی بەها</span>
+            </div>
+            <div className="text-sm font-black text-slate-900 font-mono mt-1" dir="ltr">
+              {stats.grandTotal.toLocaleString()} د.ع
+            </div>
+            <div className="text-[10px] text-slate-500 mt-0.5">{filteredActivities.length} کۆی چالاکی</div>
+          </div>
+        </div>
+
+        {/* Activities List */}
+        <div className="space-y-2.5 pt-2">
+          {loading ? (
+            <div className="text-center py-12 text-slate-400 text-xs">خەریکی هێنانە...</div>
+          ) : filteredActivities.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 text-xs bg-slate-50 rounded-xl border border-slate-200">
+              هیچ چالاکییەک لەم بەروارەدا تۆمار نەکراوە
+            </div>
+          ) : (
+            filteredActivities.map((act) => {
+              const isOrder = act.type === 'order';
+              const isSale = act.type === 'cashvan_sale';
+              const isDebtPay = act.type === 'debt_collection';
+
+              return (
+                <div
+                  key={`${act.type}-${act.id}`}
+                  className="p-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl shadow-2xs transition flex flex-col md:flex-row md:items-center justify-between gap-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`p-2.5 rounded-xl shrink-0 ${
+                      isOrder ? 'bg-indigo-100 text-indigo-700' :
+                      isSale ? 'bg-amber-100 text-amber-800' :
+                      'bg-emerald-100 text-emerald-700'
+                    }`}>
+                      {isOrder ? <ShoppingCart size={16} /> : isSale ? <Truck size={16} /> : <CreditCard size={16} />}
+                    </div>
+
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-xs text-slate-900">{act.marketName}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          isOrder ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' :
+                          isSale ? 'bg-amber-50 text-amber-800 border border-amber-200' :
+                          'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                        }`}>
+                          {isOrder ? 'تەڵەبییە' : isSale ? 'کاشڤان' : 'قەرزی وەرگیراو'}
+                        </span>
+                        {act.paymentType && (
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            act.paymentType === 'cash' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {act.paymentType === 'cash' ? 'نەقد' : 'قەرز'}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-3">
+                        <span>مەندووب: <strong>{act.repName}</strong></span>
+                        <span>کات: <span dir="ltr" className="font-mono">{format(act.timestamp, 'yyyy/MM/dd - HH:mm')}</span></span>
+                        {act.items && act.items.length > 0 && (
+                          <span className="text-slate-600">
+                            کاڵاکان: {act.items.map(i => `${i.name} (${i.quantity} ${i.unit || ''})`).join('، ')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between md:justify-end gap-3 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+                    <div className="text-left">
+                      <div className="text-[10px] text-slate-400">بڕی پارە</div>
+                      <div className="text-xs font-black font-mono text-slate-900" dir="ltr">
+                        {(act.amount || 0).toLocaleString()} د.ع
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {isOrder && act.rawOrder && (
+                        <button
+                          type="button"
+                          onClick={() => printOrderReceipt(act.rawOrder!, act.rawOrder!.id.slice(-6))}
+                          className="p-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg transition"
+                          title="چاپکردنی وەسڵ"
+                        >
+                          <Printer size={15} />
+                        </button>
+                      )}
+
+                      {isSale && act.rawSale && (
+                        <button
+                          type="button"
+                          onClick={() => printCashvanReceipt(act.rawSale!, act.rawSale!.id.slice(-6))}
+                          className="p-1.5 bg-amber-50 text-amber-800 hover:bg-amber-100 rounded-lg transition"
+                          title="چاپکردنی وەسڵ"
+                        >
+                          <Printer size={15} />
+                        </button>
+                      )}
+
+                      {isOrder && act.rawOrder && (
+                        <button
+                          type="button"
+                          onClick={() => setDeletingOrder(act.rawOrder!)}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition"
+                          title="سڕینەوە"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </section>
+
+      {/* Delete Order Confirm Modal */}
       <ConfirmModal
         isOpen={!!deletingOrder}
         onClose={() => setDeletingOrder(null)}
-        onConfirm={confirmDeleteOrder}
-        title="سڕینەوەی ئۆردەر"
-        message="ئایا دڵنیایت لە سڕینەوەی ئەم ئۆردەرە؟"
+        onConfirm={async () => {
+          if (!deletingOrder) return;
+          try {
+            await updateDoc(doc(db, 'orders', deletingOrder.id), { status: 'deleted' });
+            setDeletingOrder(null);
+          } catch (e) {
+            console.error(e);
+          }
+        }}
+        title="سڕینەوەی داواکاری"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم داواکارییە؟"
         details={deletingOrder ? [
-          { label: 'ناوی مارکێت', value: deletingOrder.marketName || '-' },
-          { label: 'کۆی گشتی', value: `${(deletingOrder.totalAmount || 0).toLocaleString()} د.ع` },
-          { label: 'مەندووب', value: deletingOrder.repName || '-' }
+          { label: 'مارکێت', value: deletingOrder.marketName || '-' },
+          { label: 'کۆی گشتی', value: `${(deletingOrder.totalAmount || 0).toLocaleString()} د.ع` }
         ] : []}
       />
 
-      {/* Settlement Modal */}
-      {settlingOrder && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="font-bold text-slate-800 text-sm">تەسفیەکردنی ئۆردەر لە حیساباتدا</h3>
-              <button onClick={() => setSettlingOrder(null)} className="text-slate-400 hover:text-slate-600">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="p-6">
-              <p className="text-slate-600 mb-5 text-center text-xs leading-relaxed">
-                ئایا دەتەوێت ئۆردەری مارکێتی <strong className="text-slate-800">{settlingOrder.marketName}</strong> بە چی شێوازێک تۆمار بکەیت؟
-              </p>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  onClick={() => settleOrder('cash')}
-                  className="flex flex-col items-center gap-2 p-4 border-2 border-emerald-100 rounded-xl hover:bg-emerald-50 hover:border-emerald-300 transition group"
-                >
-                  <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
-                    <DollarSign size={20} />
-                  </div>
-                  <span className="font-bold text-emerald-800 text-xs">بە نەقد</span>
-                </button>
-                
-                <button
-                  onClick={() => settleOrder('debt')}
-                  className="flex flex-col items-center gap-2 p-4 border-2 border-amber-100 rounded-xl hover:bg-amber-50 hover:border-amber-300 transition group"
-                >
-                  <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center">
-                    <CreditCard size={20} />
-                  </div>
-                  <span className="font-bold text-amber-800 text-xs">بە قەرز</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Pay Debt Modal for Mandoub */}
-      <PayCompanyDebtModal
-        isOpen={isPayModalOpen}
+      {/* Simple Market Debt Payment Modal for Rep / Staff */}
+      <SimpleMarketDebtPayModal
+        isOpen={isSimpleDebtModalOpen}
         onClose={() => {
-          setIsPayModalOpen(false);
-          setPayTargetMarket('');
+          setIsSimpleDebtModalOpen(false);
+          setDebtTargetMarket('');
+          setDebtTargetMarketObj(null);
+          setDebtTargetAmount(0);
         }}
-        isCompany={false}
-        initialEntityName={payTargetMarket}
-        collectorName={repName || (role === 'sales_rep' ? 'مەندووب' : '')}
+        marketName={debtTargetMarket}
+        market={debtTargetMarketObj}
+        currentDebt={debtTargetAmount || (marketDebtMap.get(debtTargetMarket) || 0)}
+        collectorName={repName || (role === 'sales_rep' ? 'مەندووب' : 'کارمەند')}
+        repId={auth.currentUser?.uid}
       />
-
-      {/* Daily Rep Activity Receipt Modal */}
-      {showDailyReceiptModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <div className="flex items-center gap-2">
-                <FileText size={18} className="text-blue-600" />
-                <h3 className="font-bold text-slate-800 text-sm">چاپکردنی وەسڵی ڕۆژانەی مەندووب</h3>
-              </div>
-              <button onClick={() => setShowDailyReceiptModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1">
-                  <Calendar size={14} className="text-indigo-600" />
-                  بەرواری ڕۆژ دیاری بکە:
-                </label>
-                <input
-                  type="date"
-                  value={dailyReceiptDate}
-                  onChange={(e) => setDailyReceiptDate(e.target.value)}
-                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-bold text-slate-800"
-                />
-              </div>
-
-              {role !== 'sales_rep' && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1">
-                    <User size={14} className="text-indigo-600" />
-                    مەندووب (ئارەزوومەندانە):
-                  </label>
-                  <input
-                    type="text"
-                    list="daily-reps-list"
-                    value={repName}
-                    onChange={(e) => setRepName(e.target.value)}
-                    placeholder="هەموو مەندووبەکان یان ناوی دیاریکراو..."
-                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs text-slate-800"
-                  />
-                  <datalist id="daily-reps-list">
-                    {reps.map(r => (
-                      <option key={r.id || r.name} value={r.name} />
-                    ))}
-                  </datalist>
-                </div>
-              )}
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-600 leading-relaxed">
-                ئەم وەسڵە هەموو فرۆشراوەکان (نەقد و قەرز) لەگەڵ سەرجەم ئەو قەرزانەی لەم بەروارەدا وەرگیراونەتەوە لەخۆدەگرێت.
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    handlePrintDailyReceipt(dailyReceiptDate);
-                    setShowDailyReceiptModal(false);
-                  }}
-                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition"
-                >
-                  <Printer size={16} />
-                  <span>چاپکردنی وەسڵ</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowDailyReceiptModal(false)}
-                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition"
-                >
-                  داخستن
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

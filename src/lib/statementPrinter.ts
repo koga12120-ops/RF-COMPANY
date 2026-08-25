@@ -511,3 +511,184 @@ export function printDailyRepReceiptPopup(data: DailyRepActivityData) {
   }
 }
 
+export interface MarketDebtReceiptData {
+  marketName: string;
+  amount: number;
+  collectorName: string;
+  date: number;
+  receiptNo?: string;
+  notes?: string;
+  previousDebt?: number;
+  remainingDebt?: number;
+  costAmount?: number;
+  profitAmount?: number;
+}
+
+export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): string {
+  return `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ckb">
+      <head>
+        <meta charset="utf-8" />
+        <title>وەسڵی وەرگرتنی پارەی قەرز - ${data.marketName}</title>
+        <style>
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 24px;
+            color: #1e293b;
+            background: #ffffff;
+            font-size: 14px;
+            max-width: 480px;
+            margin: 0 auto;
+          }
+          .receipt-box {
+            border: 2px solid #0f172a;
+            border-radius: 12px;
+            padding: 20px;
+          }
+          .header {
+            text-align: center;
+            border-bottom: 2px dashed #94a3b8;
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+          }
+          .header h2 { font-size: 20px; font-weight: 900; color: #0f172a; margin-bottom: 4px; }
+          .header h3 { font-size: 15px; font-weight: 700; color: #166534; margin-bottom: 4px; }
+          .header p { font-size: 12px; color: #64748b; }
+          
+          .info-table { width: 100%; margin-bottom: 16px; border-collapse: collapse; }
+          .info-table td { padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+          .info-table .label { color: #64748b; font-weight: bold; width: 40%; }
+          .info-table .val { font-weight: bold; color: #0f172a; text-align: left; }
+          
+          .amount-box {
+            background: #f0fdf4;
+            border: 2px solid #86efac;
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+            margin: 16px 0;
+          }
+          .amount-box .title { font-size: 12px; color: #166534; font-weight: bold; margin-bottom: 4px; }
+          .amount-box .amount-val { font-size: 24px; font-weight: 900; color: #15803d; font-family: monospace; }
+          
+          .debt-breakdown {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 16px;
+            font-size: 13px;
+          }
+          .debt-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+          .debt-row:last-child { margin-bottom: 0; padding-top: 4px; border-top: 1px dashed #cbd5e1; font-weight: bold; }
+          
+          .signatures { display: flex; justify-content: space-between; margin-top: 30px; padding-top: 10px; }
+          .sig-block { text-align: center; font-size: 12px; }
+          .sig-line { margin-top: 30px; border-top: 1px dashed #64748b; width: 140px; }
+          
+          @media print {
+            body { padding: 5px; }
+            @page { margin: 10mm; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="receipt-box">
+          <div class="header">
+            <h2>کۆمپانیای RF</h2>
+            <h3>وەسڵی وەرگرتنەوەی پارەی قەرز (پسوڵە)</h3>
+            <p>بەروار: <span dir="ltr">${format(data.date, 'yyyy-MM-dd HH:mm')}</span></p>
+          </div>
+
+          <table class="info-table">
+            <tr>
+              <td class="label">ناوی مارکێت / کڕیار:</td>
+              <td class="val">${data.marketName}</td>
+            </tr>
+            <tr>
+              <td class="label">وەرگیراوە لەلایەن:</td>
+              <td class="val">${data.collectorName}</td>
+            </tr>
+            ${data.receiptNo ? `
+            <tr>
+              <td class="label">ژمارەی وەسڵ / دەفتەر:</td>
+              <td class="val" dir="ltr"><span style="font-family: monospace;">#${data.receiptNo}</span></td>
+            </tr>
+            ` : ''}
+            ${data.notes ? `
+            <tr>
+              <td class="label">تێبینی:</td>
+              <td class="val">${data.notes}</td>
+            </tr>
+            ` : ''}
+          </table>
+
+          <div class="amount-box">
+            <div class="title">بڕی پارەی وەرگیراو (واسڵکراو)</div>
+            <div class="amount-val" dir="ltr">${data.amount.toLocaleString()} د.ع</div>
+          </div>
+
+          ${(data.costAmount !== undefined || data.profitAmount !== undefined) ? `
+          <div style="display:flex;justify-content:space-between;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;margin:10px 0;font-size:12px;">
+            <div>
+              <span style="color:#64748b;">تێچوو (سەرمایە): </span>
+              <strong dir="ltr" style="color:#334155;">${(data.costAmount || 0).toLocaleString()} د.ع</strong>
+            </div>
+            <div>
+              <span style="color:#64748b;">قازانج: </span>
+              <strong dir="ltr" style="color:#166534;">+${(data.profitAmount || 0).toLocaleString()} د.ع</strong>
+            </div>
+          </div>
+          ` : ''}
+
+          ${data.previousDebt !== undefined ? `
+          <div class="debt-breakdown">
+            <div class="debt-row">
+              <span style="color:#64748b;">قەرزی پێشوو:</span>
+              <span dir="ltr" style="font-family:monospace;font-weight:bold;color:#b45309;">${data.previousDebt.toLocaleString()} د.ع</span>
+            </div>
+            <div class="debt-row">
+              <span style="color:#64748b;">بڕی واسڵکراو:</span>
+              <span dir="ltr" style="font-family:monospace;font-weight:bold;color:#15803d;">-${data.amount.toLocaleString()} د.ع</span>
+            </div>
+            <div class="debt-row">
+              <span>قەرزی ماوە پاش دانەوە:</span>
+              <span dir="ltr" style="font-family:monospace;color:${(data.remainingDebt ?? 0) > 0 ? '#b91c1c' : '#15803d'};">
+                ${(data.remainingDebt ?? 0).toLocaleString()} د.ع
+              </span>
+            </div>
+          </div>
+          ` : ''}
+
+          <div class="signatures">
+            <div class="sig-block">
+              <div>واژووی کڕیار / مارکێت</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-block">
+              <div>واژووی وەرگر (${data.collectorName})</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+}
+
+export function printMarketDebtReceiptPopup(data: MarketDebtReceiptData) {
+  const html = generateMarketDebtReceiptHtml(data);
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
+

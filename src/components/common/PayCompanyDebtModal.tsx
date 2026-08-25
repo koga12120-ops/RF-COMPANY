@@ -106,23 +106,35 @@ export default function PayCompanyDebtModal({
   // 1.5 Fetch reps and cashvans for collector suggestions
   useEffect(() => {
     if (!isOpen) return;
-    const unsubReps = onSnapshot(query(collection(db, 'sales_reps')), (snap) => {
-      const names: string[] = [];
-      snap.forEach(d => {
-        const data = d.data();
-        if (data.name) names.push(data.name);
-      });
-      setRepsAndCashvans(prev => Array.from(new Set([...prev, ...names])));
-    });
+    const unsubReps = onSnapshot(
+      query(collection(db, 'reps')),
+      (snap) => {
+        const names: string[] = [];
+        snap.forEach(d => {
+          const data = d.data();
+          if (data.name) names.push(data.name);
+        });
+        setRepsAndCashvans(prev => Array.from(new Set([...prev, ...names])));
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.GET, 'reps');
+      }
+    );
 
-    const unsubCashvans = onSnapshot(query(collection(db, 'cashvans')), (snap) => {
-      const names: string[] = [];
-      snap.forEach(d => {
-        const data = d.data();
-        if (data.name) names.push(data.name);
-      });
-      setRepsAndCashvans(prev => Array.from(new Set([...prev, ...names])));
-    });
+    const unsubCashvans = onSnapshot(
+      query(collection(db, 'cashvans')),
+      (snap) => {
+        const names: string[] = [];
+        snap.forEach(d => {
+          const data = d.data();
+          if (data.name) names.push(data.name);
+        });
+        setRepsAndCashvans(prev => Array.from(new Set([...prev, ...names])));
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.GET, 'cashvans');
+      }
+    );
 
     return () => {
       unsubReps();
@@ -799,8 +811,8 @@ export default function PayCompanyDebtModal({
                       />
                       <datalist id="collector-list-suggestions">
                         <option value="بەڕێوەبەر" />
-                        {repsAndCashvans.map(name => (
-                          <option key={name} value={name} />
+                        {repsAndCashvans.map((name, i) => (
+                          <option key={`col-sug-${name}-${i}`} value={name} />
                         ))}
                       </datalist>
                     </>

@@ -254,17 +254,36 @@ export default function AdminCashvanView() {
     if (!settlingOrder) return;
     setIsProcessing(true);
     try {
-      // 1. Record in transactions ledger
-      await addDoc(collection(db, 'transactions'), {
-        type: type === 'cash' ? 'cash_in' : 'debt',
-        invoiceNo: settlingOrder.invoiceId || settlingOrder.id,
-        amount: settlingOrder.totalAmount,
-        date: Date.now(),
-        description: type === 'cash' 
-          ? `نەقدی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})` 
-          : `قەرزی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})`,
-        relatedEntityId: settlingOrder.marketName
-      });
+      const invoiceKey = settlingOrder.invoiceId || settlingOrder.id;
+      // 1. Check if transaction already exists for this order to avoid duplicate accounting
+      const qExisting = query(
+        collection(db, 'transactions'),
+        where('invoiceNo', '==', invoiceKey)
+      );
+      const existingSnap = await getDocs(qExisting);
+
+      if (!existingSnap.empty) {
+        const transDoc = existingSnap.docs[0];
+        await updateDoc(doc(db, 'transactions', transDoc.id), {
+          type: type === 'cash' ? 'cash' : 'debt',
+          amount: settlingOrder.totalAmount,
+          description: type === 'cash' 
+            ? `نەقدی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})` 
+            : `قەرزی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})`,
+          relatedEntityId: settlingOrder.marketName
+        });
+      } else {
+        await addDoc(collection(db, 'transactions'), {
+          type: type === 'cash' ? 'cash' : 'debt',
+          invoiceNo: invoiceKey,
+          amount: settlingOrder.totalAmount,
+          date: Date.now(),
+          description: type === 'cash' 
+            ? `نەقدی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})` 
+            : `قەرزی ئۆردەری مەندووب (${settlingOrder.repName}) بۆ (${settlingOrder.marketName})`,
+          relatedEntityId: settlingOrder.marketName
+        });
+      }
 
       // 2. Update order document
       await updateDoc(doc(db, 'orders', settlingOrder.id), { 
@@ -296,17 +315,36 @@ export default function AdminCashvanView() {
     if (!settlingSale) return;
     setIsProcessing(true);
     try {
-      // 1. Record transaction in ledger
-      await addDoc(collection(db, 'transactions'), {
-        type: type === 'cash' ? 'cash_in' : 'debt',
-        invoiceNo: settlingSale.invoiceNo || settlingSale.id,
-        amount: settlingSale.totalAmount,
-        date: Date.now(),
-        description: type === 'cash' 
-          ? `نەقدی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})` 
-          : `قەرزی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})`,
-        relatedEntityId: settlingSale.marketName
-      });
+      const invoiceKey = settlingSale.invoiceNo || settlingSale.id;
+      // 1. Check if transaction already exists for this sale to avoid duplicates
+      const qExisting = query(
+        collection(db, 'transactions'),
+        where('invoiceNo', '==', invoiceKey)
+      );
+      const existingSnap = await getDocs(qExisting);
+
+      if (!existingSnap.empty) {
+        const transDoc = existingSnap.docs[0];
+        await updateDoc(doc(db, 'transactions', transDoc.id), {
+          type: type === 'cash' ? 'cash' : 'debt',
+          amount: settlingSale.totalAmount,
+          description: type === 'cash' 
+            ? `نەقدی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})` 
+            : `قەرزی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})`,
+          relatedEntityId: settlingSale.marketName
+        });
+      } else {
+        await addDoc(collection(db, 'transactions'), {
+          type: type === 'cash' ? 'cash' : 'debt',
+          invoiceNo: invoiceKey,
+          amount: settlingSale.totalAmount,
+          date: Date.now(),
+          description: type === 'cash' 
+            ? `نەقدی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})` 
+            : `قەرزی فرۆشتنی کاشڤان (${settlingSale.cashvanName}) بۆ (${settlingSale.marketName})`,
+          relatedEntityId: settlingSale.marketName
+        });
+      }
 
       // 2. Update sale status
       await updateDoc(doc(db, 'cashvan_sales', settlingSale.id), {
@@ -343,6 +381,18 @@ export default function AdminCashvanView() {
         deletedBy: userName,
         deletedAt: Date.now()
       });
+
+      // Also clean up any associated transaction in ledger so debt/sales aren't inflated
+      const invoiceKey = deletingOrder.invoiceId || deletingOrder.id;
+      const qExisting = query(
+        collection(db, 'transactions'),
+        where('invoiceNo', '==', invoiceKey)
+      );
+      const existingSnap = await getDocs(qExisting);
+      existingSnap.forEach(async (tDoc) => {
+        await deleteDoc(doc(db, 'transactions', tDoc.id));
+      });
+
       setDeletingOrder(null);
     } catch (error) {
       console.error(error);
@@ -388,6 +438,17 @@ export default function AdminCashvanView() {
         status: 'deleted',
         deletedAt: Date.now(),
         deletedBy: auth.currentUser?.displayName || 'بەڕێوەبەر'
+      });
+
+      // Also remove associated transaction from ledger
+      const invoiceKey = deletingSale.invoiceNo || deletingSale.id;
+      const qExisting = query(
+        collection(db, 'transactions'),
+        where('invoiceNo', '==', invoiceKey)
+      );
+      const existingSnap = await getDocs(qExisting);
+      existingSnap.forEach(async (tDoc) => {
+        await deleteDoc(doc(db, 'transactions', tDoc.id));
       });
 
       setDeletingSale(null);
@@ -570,27 +631,38 @@ export default function AdminCashvanView() {
 
   // --- Print Transfer Receipt (Stock to Cashvan) ---
   const printTransferReceipt = (transfer: CashvanTransfer) => {
+    let totalUnits = 0;
+    let totalGrossAmount = 0;
+
     const itemsHtml = (transfer.items || []).map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const total = (item.quantity * item.price);
+      const qty = item.quantity || 0;
+      const price = item.price || 0;
+      const rowTotal = qty * price;
+      totalUnits += qty;
+      totalGrossAmount += rowTotal;
+
       return `
         <tr>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
           <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${qty}</td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">${total.toLocaleString()} د.ع</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-family: monospace;" dir="ltr">${price > 0 ? price.toLocaleString() + ' د.ع' : '-'}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-family: monospace;" dir="ltr">${rowTotal > 0 ? rowTotal.toLocaleString() + ' د.ع' : '-'}</td>
         </tr>
       `;
     }).join('');
 
+    const finalTotalValue = totalGrossAmount > 0 ? totalGrossAmount : (transfer.totalValue || 0);
+
     const html = `
-      <html dir="rtl">
+      <html dir="rtl" lang="ckb">
         <head>
           <title>پسوڵەی بارکردن بۆ کاشڤان - ${transfer.cashvanName}</title>
           <meta charset="utf-8" />
           <style>
+            @page { size: A4; margin: 15mm; }
             body { font-family: Tahoma, Arial, sans-serif; padding: 24px; color: #1e293b; }
             .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #4f46e5; padding-bottom: 12px; }
             .header h2 { margin: 0; color: #3730a3; font-size: 20px; }
@@ -599,7 +671,9 @@ export default function AdminCashvanView() {
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
             th { background: #f1f5f9; padding: 10px; border: 1px solid #cbd5e1; text-align: right; font-size: 13px; }
             td { padding: 10px; border: 1px solid #e2e8f0; font-size: 13px; }
-            .total-box { text-align: left; font-size: 16px; font-weight: bold; margin-top: 15px; }
+            .total-box { font-size: 15px; margin-top: 15px; background: #f8fafc; padding: 14px; border-radius: 8px; border: 2px solid #cbd5e1; }
+            .total-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+            .total-row:last-child { margin-bottom: 0; padding-top: 8px; border-top: 1px dashed #cbd5e1; }
             .signatures { display: flex; justify-content: space-between; margin-top: 45px; }
             .sig-line { margin-top: 35px; border-top: 1px dashed #64748b; width: 160px; }
             @media print {
@@ -621,10 +695,10 @@ export default function AdminCashvanView() {
               <tr>
                 <th style="width: 40px; text-align: center;">#</th>
                 <th>ناوی کاڵا</th>
-                <th style="width: 70px; text-align: center;">یەکە</th>
-                <th style="width: 70px; text-align: center;">بڕ</th>
-                <th style="width: 110px; text-align: left;">نرخی تاک</th>
-                <th style="width: 130px; text-align: left;">کۆی گشتی</th>
+                <th style="width: 90px; text-align: center;">بڕی بارکراو</th>
+                <th style="width: 80px; text-align: center;">یەکە</th>
+                <th style="width: 110px; text-align: center;">نرخی تاک</th>
+                <th style="width: 130px; text-align: center;">کۆی گشتی بڕی پارە</th>
               </tr>
             </thead>
             <tbody>
@@ -632,8 +706,14 @@ export default function AdminCashvanView() {
             </tbody>
           </table>
           <div class="total-box">
-            <span>کۆی گشتی بەهای بارکراو: </span>
-            <span dir="ltr" style="color: #4f46e5;">${(transfer.totalValue || 0).toLocaleString()} د.ع</span>
+            <div class="total-row">
+              <span style="font-weight: bold; color: #334155;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
+              <span dir="ltr" style="color: #4f46e5; font-size: 17px; font-weight: bold;">${totalUnits} دانە / کارتۆن</span>
+            </div>
+            <div class="total-row">
+              <span style="font-weight: 900; color: #0f172a; font-size: 16px;">کۆی گشتی بڕی پارەی بارکراو:</span>
+              <span dir="ltr" style="color: #15803d; font-size: 20px; font-weight: 900; font-family: monospace;">${finalTotalValue.toLocaleString()} د.ع</span>
+            </div>
           </div>
           <div class="signatures">
             <div style="text-align: center;">
@@ -867,7 +947,7 @@ export default function AdminCashvanView() {
                   >
                     <option value="all">سەرجەم مەندووبەکان ({reps.length})</option>
                     {reps.map(r => (
-                      <option key={r.id} value={r.name}>{r.name}</option>
+                      <option key={`rep-filter-${r.id}`} value={r.name}>{r.name}</option>
                     ))}
                   </select>
                 </div>
@@ -1090,7 +1170,7 @@ export default function AdminCashvanView() {
                   >
                     <option value="all">سەرجەم کاشڤانەکان ({cashvans.length})</option>
                     {cashvans.map(c => (
-                      <option key={c.id} value={c.name}>{c.name}</option>
+                      <option key={`cv-filter-${c.id}`} value={c.name}>{c.name}</option>
                     ))}
                   </select>
                 </div>
@@ -1280,7 +1360,7 @@ export default function AdminCashvanView() {
                 >
                   <option value="all">سەرجەم کاشڤانەکان ({cashvans.length})</option>
                   {cashvans.map(c => (
-                    <option key={c.id} value={c.name}>{c.name}</option>
+                    <option key={`transfer-cv-${c.id}`} value={c.name}>{c.name}</option>
                   ))}
                 </select>
               </div>
@@ -1400,12 +1480,12 @@ export default function AdminCashvanView() {
                       <option value="all">سەرجەم مەندووب و کاشڤانەکان</option>
                       <optgroup label="مەندووبەکان">
                         {reps.map(r => (
-                          <option key={r.id} value={r.name}>👤 مەندووب: {r.name}</option>
+                          <option key={`daily-rep-${r.id}`} value={r.name}>👤 مەندووب: {r.name}</option>
                         ))}
                       </optgroup>
                       <optgroup label="کاشڤانەکان">
                         {cashvans.map(c => (
-                          <option key={c.id} value={c.name}>🚚 کاشڤان: {c.name}</option>
+                          <option key={`daily-cv-${c.id}`} value={c.name}>🚚 کاشڤان: {c.name}</option>
                         ))}
                       </optgroup>
                     </select>

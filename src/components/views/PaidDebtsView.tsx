@@ -21,13 +21,23 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const q = query(collection(db, 'transactions'), where('type', '==', type));
+    const isCompany = type.includes('company');
+    const q = query(collection(db, 'transactions'));
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         const debtsData: Transaction[] = [];
         snapshot.forEach((doc) => {
-          debtsData.push({ id: doc.id, ...doc.data() } as Transaction);
+          const d = { id: doc.id, ...doc.data() } as Transaction;
+          if (isCompany) {
+            if (d.type === 'company_paid_debt') {
+              debtsData.push(d);
+            }
+          } else {
+            if (d.type === 'paid_debt' || d.type === 'market_paid_debt') {
+              debtsData.push(d);
+            }
+          }
         });
         setPaidDebts(debtsData.sort((a, b) => b.date - a.date));
         setLoading(false);

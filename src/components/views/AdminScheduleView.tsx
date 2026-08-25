@@ -175,10 +175,10 @@ export default function AdminScheduleView() {
                     </select>
 
                     <div className="space-y-2">
-                      {(schedule[day.id] || []).map(marketId => {
+                      {(schedule[day.id] || []).map((marketId, idx) => {
                         const market = markets.find(m => m.id === marketId);
                         return (
-                          <div key={marketId} className="flex justify-between items-center bg-white p-2 border border-slate-200 rounded-lg shadow-sm">
+                          <div key={`${marketId}-${idx}`} className="flex justify-between items-center bg-white p-2 border border-slate-200 rounded-lg shadow-sm">
                             <span className="text-sm font-medium truncate pr-2">{market?.name || 'نەزانراو'}</span>
                             <button
                               onClick={() => handleRemoveMarket(day.id, marketId)}

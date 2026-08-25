@@ -127,14 +127,13 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
     { id: 'inventory', label: 'داخڵکردن و کۆگا', icon: Package },
     { id: 'stock_history', label: 'مێژووی هاتنی کاڵا', icon: History },
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
-    { id: 'orders', label: 'ئۆردەرەکانی پێشەکی', icon: ShoppingCart },
-    { id: 'warehouse_cashvan', label: 'پێدان بە مەندووب (بۆ نەقدە)', icon: Truck },
+    { id: 'orders', label: 'داواکاریەکانی مەندووب', icon: ShoppingCart },
+    { id: 'warehouse_cashvan', label: 'پێدان بە کاشڤان', icon: Truck },
   ];
 
   const repMenu = [
-    { id: 'orders', label: 'تەڵەبیە', icon: ShoppingCart },
-    { id: 'cashvan_sales', label: 'کاشڤان', icon: Truck },
-    { id: 'rep_schedule', label: 'خشتەی سەردانەکان', icon: Store },
+    { id: 'orders', label: 'خشتەی سەردان و کارەکان', icon: Store },
+    { id: 'cashvan_sales', label: 'کۆگای ڤان و داواکاری لە کۆگا', icon: Truck },
   ];
 
   const menu = role === 'admin' ? adminMenu : role === 'warehouse' ? warehouseMenu : repMenu;

@@ -133,33 +133,35 @@ export default function MarketsView() {
     });
 
     orders.forEach(o => {
-      if (o.marketName && o.status !== 'deleted') {
-        const current = map.get(o.marketName) || { totalOrders: 0, totalCashvan: 0, totalSales: 0, totalDebt: 0, totalPaid: 0, balance: 0 };
+      const name = o.marketName?.trim();
+      if (name && o.status !== 'deleted') {
+        const current = map.get(name) || { totalOrders: 0, totalCashvan: 0, totalSales: 0, totalDebt: 0, totalPaid: 0, balance: 0 };
         current.totalOrders += (o.totalAmount || 0);
         current.totalSales += (o.totalAmount || 0);
-        map.set(o.marketName, current);
+        map.set(name, current);
       }
     });
 
     cashvanSales.forEach(c => {
-      if (c.marketName && c.status !== 'deleted') {
-        const current = map.get(c.marketName) || { totalOrders: 0, totalCashvan: 0, totalSales: 0, totalDebt: 0, totalPaid: 0, balance: 0 };
+      const name = c.marketName?.trim();
+      if (name && c.status !== 'deleted') {
+        const current = map.get(name) || { totalOrders: 0, totalCashvan: 0, totalSales: 0, totalDebt: 0, totalPaid: 0, balance: 0 };
         current.totalCashvan += (c.totalAmount || 0);
         current.totalSales += (c.totalAmount || 0);
-        map.set(c.marketName, current);
+        map.set(name, current);
       }
     });
 
     transactions.forEach(t => {
-      const entity = t.relatedEntityId;
+      const entity = t.relatedEntityId?.trim();
       if (entity) {
         const current = map.get(entity) || { totalOrders: 0, totalCashvan: 0, totalSales: 0, totalDebt: 0, totalPaid: 0, balance: 0 };
-        if (t.type === 'debt') {
+        if (t.type === 'debt' || t.type === 'market_debt') {
           current.totalDebt += (t.amount || 0);
-        } else if (t.type === 'paid_debt') {
+        } else if (t.type === 'paid_debt' || t.type === 'market_paid_debt') {
           current.totalPaid += (t.amount || 0);
         }
-        current.balance = current.totalDebt - current.totalPaid;
+        current.balance = Math.max(0, current.totalDebt - current.totalPaid);
         map.set(entity, current);
       }
     });

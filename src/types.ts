@@ -177,3 +177,26 @@ export interface CashvanSale {
   status: 'pending_accounting' | 'accounted' | 'deleted';
   date: number;
 }
+
+export interface CashvanReturnItem {
+  itemId: string;
+  name: string;
+  quantity: number;
+  unit?: 'carton' | 'packet';
+  price: number;
+  barcode?: string;
+}
+
+export interface CashvanReturn {
+  id: string;
+  returnNo?: string;
+  cashvanName: string;
+  cashvanId?: string;
+  items: CashvanReturnItem[];
+  totalValue: number;
+  date: number;
+  notes?: string;
+  receivedBy?: string;
+  lastEditedAt?: number;
+}
+

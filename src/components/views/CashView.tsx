@@ -27,13 +27,23 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
   const [suggestions, setSuggestions] = useState<any[]>([]);
 
   useEffect(() => {
-    const q = query(collection(db, 'transactions'), where('type', '==', type));
+    const isCompany = type.includes('company');
+    const q = query(collection(db, 'transactions'));
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         const salesData: Transaction[] = [];
         snapshot.forEach((doc) => {
-          salesData.push({ id: doc.id, ...doc.data() } as Transaction);
+          const d = { id: doc.id, ...doc.data() } as Transaction;
+          if (isCompany) {
+            if (d.type === 'company_cash') {
+              salesData.push(d);
+            }
+          } else {
+            if (d.type === 'cash') {
+              salesData.push(d);
+            }
+          }
         });
         
         setCashSales(salesData.sort((a, b) => b.date - a.date));
