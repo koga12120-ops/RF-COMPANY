@@ -201,7 +201,8 @@ export default function AdminCashvanView() {
           : order.status === 'completed';
       const matchSearch = (order.marketName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (order.repName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          (order.invoiceId || '').includes(searchTerm);
+                          (order.invoiceId || '').includes(searchTerm) ||
+                          (order.invoiceNo || '').includes(searchTerm);
       return matchRep && matchStatus && matchSearch;
     });
   }, [orders, selectedRepFilter, repStatusFilter, searchTerm]);
@@ -218,7 +219,8 @@ export default function AdminCashvanView() {
           : sale.status === 'accounted';
       const matchSearch = (sale.marketName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (sale.cashvanName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          (sale.invoiceNo || '').includes(searchTerm);
+                          (sale.invoiceNo || '').includes(searchTerm) ||
+                          (sale.invoiceId || '').includes(searchTerm);
       return matchCV && matchStatus && matchSearch;
     });
   }, [sales, selectedCashvanFilter, cashvanStatusFilter, searchTerm]);
@@ -510,7 +512,7 @@ export default function AdminCashvanView() {
     
     const marketObj = markets.find(m => m.name === order.marketName);
     const marketPhone = marketObj?.phone || '-';
-    const invoiceNum = (order.invoiceId || order.id || '0').slice(-6);
+    const invoiceNum = order.invoiceId || order.invoiceNo || (order.id || '0').slice(-6);
 
     const itemsHtml = (order.items || []).map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
@@ -609,6 +611,155 @@ export default function AdminCashvanView() {
       <html>
         <head>
           <title>وەسڵی ئۆردەر - #${invoiceNum}</title>
+          <style>
+            @media print {
+              body { margin: 0; padding: 0; }
+              @page { margin: 10mm; }
+            }
+          </style>
+        </head>
+        <body>
+          ${printContent}
+          <script>
+            window.onload = () => {
+              window.print();
+            }
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // --- Print Cashvan Sale Voucher ---
+  const printCashvanSale = async (sale: CashvanSale) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+    
+    let oldDebt = 0;
+    try {
+      const q = query(
+        collection(db, 'transactions'), 
+        where('relatedEntityId', '==', sale.marketName)
+      );
+      const snapshot = await getDocs(q);
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        if (data.date && data.date < sale.date) {
+          if (data.type === 'debt' || data.type === 'market_debt') {
+            oldDebt += data.amount || 0;
+          } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
+            oldDebt -= data.amount || 0;
+          }
+        }
+      });
+    } catch (e) {
+      console.error('Error fetching old debt', e);
+    }
+    
+    const marketObj = markets.find(m => m.name === sale.marketName);
+    const marketPhone = marketObj?.phone || '-';
+    const invoiceNum = sale.invoiceNo || sale.invoiceId || (sale.id || '0').slice(-6);
+
+    const itemsHtml = (sale.items || []).map((item, idx) => {
+      const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const total = (item.quantity * item.price);
+      return `
+        <tr>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">${total.toLocaleString()} د.ع</td>
+        </tr>
+      `;
+    }).join('');
+
+    const newTotalDebt = oldDebt + sale.totalAmount;
+
+    const printContent = `
+      <div dir="rtl" style="font-family: sans-serif; padding: 20px;">
+        <div style="display: flex; align-items: flex-start; margin-bottom: 20px;">
+          <div style="text-align: right; width: 250px;">
+            <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="width: 80px; height: 80px; object-fit: contain; margin-bottom: 5px;" onerror="this.style.display='none'" />
+            <h2 style="margin: 0; color: #333; font-size: 16px;">وەسڵی فرۆشتنی کاشڤان</h2>
+            <p style="margin: 2px 0; font-size: 12px;">ناونیشان: هەولێر-ڕێگای کەرکوک</p>
+            <p style="margin: 2px 0; font-size: 12px;">مۆبایل: 07506144894</p>
+          </div>
+          <div style="text-align: center; flex: 1; padding-top: 20px;">
+            <h1 style="margin: 0; color: #1e293b; font-size: 52px; font-weight: 900; letter-spacing: 2px; white-space: nowrap;">TAM TAM</h1>
+          </div>
+        </div>
+        
+        <hr style="border: 0; border-top: 2px solid #1e293b; margin: 15px 0;" />
+        
+        <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 14px;">
+          <div style="text-align: right; flex: 1;">
+            <p style="margin: 5px 0;"><strong>بۆ:</strong> ${sale.marketName}</p>
+            <p style="margin: 5px 0;"><strong>ژمارەی مۆبایل:</strong> ${marketPhone}</p>
+            <p style="margin: 5px 0;"><strong>کاشڤان:</strong> ${sale.cashvanName}</p>
+            <p style="margin: 5px 0;"><strong>شێوازی پارەدان:</strong> ${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}</p>
+          </div>
+          <div style="text-align: left; flex: 1;">
+            <p style="margin: 5px 0;"><strong>ژ.وەسڵ:</strong> #${invoiceNum}</p>
+            <p style="margin: 5px 0;"><strong>بەروار:</strong> ${format(sale.date, 'yyyy/MM/dd')}</p>
+            <p style="margin: 5px 0;"><strong>کات:</strong> ${format(sale.date, 'HH:mm')}</p>
+          </div>
+        </div>
+        
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
+          <thead>
+            <tr style="background-color: #f1f5f9;">
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 40px;">#</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; text-align: right;">ناوی کاڵا</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">یەکە</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">بڕ</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 110px; text-align: left;">نرخ</th>
+              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 130px; text-align: left;">کۆی گشتی</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsHtml}
+          </tbody>
+        </table>
+        
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 30px;">
+          <div style="width: 320px; font-size: 14px;">
+            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
+              <span>کۆی ئەم وەسڵە:</span>
+              <strong dir="ltr">${sale.totalAmount.toLocaleString()} د.ع</strong>
+            </div>
+            ${sale.paymentType === 'debt' ? `
+              <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
+                <span>قەرزی پێشوو:</span>
+                <strong dir="ltr" style="color: #d97706;">${oldDebt.toLocaleString()} د.ع</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 16px; border-bottom: 2px solid #1e293b; background: #f8fafc;">
+                <span>کۆی گشتی ماوە:</span>
+                <strong dir="ltr" style="color: #dc2626;">${newTotalDebt.toLocaleString()} د.ع</strong>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; margin-top: 50px; font-size: 14px; text-align: center;">
+          <div>
+            <p style="margin-bottom: 40px;">واژووی کاشڤان</p>
+            <p>.......................................</p>
+          </div>
+          <div>
+            <p style="margin-bottom: 40px;">واژووی وەرگر (مارکێت)</p>
+            <p>.......................................</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>وەسڵی کاشڤان - #${invoiceNum}</title>
           <style>
             @media print {
               body { margin: 0; padding: 0; }
@@ -1222,6 +1373,7 @@ export default function AdminCashvanView() {
               <table className="w-full text-right">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-100">
                   <tr>
+                    <th className="p-4">ژ.وەسڵ</th>
                     <th className="p-4">کاشڤان</th>
                     <th className="p-4">مارکێت</th>
                     <th className="p-4">بەروار و کات</th>
@@ -1233,9 +1385,13 @@ export default function AdminCashvanView() {
                 <tbody className="divide-y divide-slate-100 text-sm">
                   {filteredSales.map(sale => {
                     const isAccounted = sale.status === 'accounted';
+                    const invNo = sale.invoiceNo || sale.invoiceId || sale.id.slice(-6);
 
                     return (
                       <tr key={sale.id} className="hover:bg-slate-50/70 transition">
+                        <td className="p-4 font-mono font-bold text-slate-700 text-xs" dir="ltr">
+                          #{invNo}
+                        </td>
                         <td className="p-4 font-bold text-slate-900">
                           <div className="flex items-center gap-1.5">
                             <Truck size={15} className="text-blue-600" />
@@ -1285,6 +1441,14 @@ export default function AdminCashvanView() {
                             )}
 
                             <button
+                              onClick={() => printCashvanSale(sale)}
+                              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
+                              title="چاپکردنی پسوڵەی کاشڤان"
+                            >
+                              <Printer size={16} />
+                            </button>
+
+                            <button
                               onClick={() => printStatement(sale.marketName)}
                               className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition"
                               title="کەشف حیسابی مارکێت"
@@ -1318,7 +1482,7 @@ export default function AdminCashvanView() {
 
                   {filteredSales.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="text-center py-12 text-slate-400">
+                      <td colSpan={7} className="text-center py-12 text-slate-400">
                         <div className="flex flex-col items-center justify-center gap-2">
                           <Truck size={32} className="text-slate-300" />
                           <span>هیچ فرۆشتنێکی کاشڤان نەدۆزرایەوە</span>

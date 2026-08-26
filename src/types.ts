@@ -98,6 +98,7 @@ export interface OrderItem {
 export interface Order {
   id: string;
   invoiceId?: string;
+  invoiceNo?: string; // ژمارەی ڕیزبەندی وەسڵ (00001, 00002...)
   repName: string;
   marketName: string;
   location: string;
@@ -107,6 +108,8 @@ export interface Order {
   status: 'pending' | 'printed' | 'completed' | 'deleted';
   paymentStatus?: 'cash' | 'debt';
   timestamp: number;
+  deletedBy?: string;
+  deletedAt?: number;
 }
 
 export interface Company {
@@ -161,6 +164,8 @@ export interface CashvanTransfer {
 
 export interface CashvanSale {
   id: string;
+  invoiceNo?: string; // ژمارەی ڕیزبەندی وەسڵ (00001, 00002...)
+  invoiceId?: string;
   paymentType?: 'cash' | 'debt';
   cashvanName: string;
   marketName: string;
@@ -176,6 +181,8 @@ export interface CashvanSale {
   totalProfit?: number;
   status: 'pending_accounting' | 'accounted' | 'deleted';
   date: number;
+  deletedBy?: string;
+  deletedAt?: number;
 }
 
 export interface CashvanReturnItem {

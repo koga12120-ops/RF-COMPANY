@@ -254,7 +254,7 @@ export default function MarketsView() {
     printStatementPopup(marketName, marketTrans);
   };
 
-  const printSingleInvoice = (title: string, entityName: string, amount: number, date: number, personName: string, items?: any[]) => {
+  const printSingleInvoice = (title: string, entityName: string, amount: number, date: number, personName: string, items?: any[], invoiceNo?: string) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
@@ -264,19 +264,21 @@ export default function MarketsView() {
         <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
           <thead>
             <tr style="background-color: #f1f5f9;">
-              <th style="padding: 8px; border: 1px solid #ddd;">کاڵا</th>
-              <th style="padding: 8px; border: 1px solid #ddd;">دانە</th>
-              <th style="padding: 8px; border: 1px solid #ddd;">نرخ</th>
-              <th style="padding: 8px; border: 1px solid #ddd;">کۆ</th>
+              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 40px; text-align: center;">#</th>
+              <th style="padding: 8px; border: 1px solid #cbd5e1; text-align: right;">کاڵا</th>
+              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 80px; text-align: center;">دانە</th>
+              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 120px; text-align: left;">نرخ</th>
+              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 140px; text-align: left;">کۆ</th>
             </tr>
           </thead>
           <tbody>
-            ${items.map(it => `
+            ${items.map((it, idx) => `
               <tr>
-                <td style="padding: 8px; border: 1px solid #ddd;">${it.name}</td>
-                <td style="padding: 8px; border: 1px solid #ddd;" dir="ltr">${it.quantity}</td>
-                <td style="padding: 8px; border: 1px solid #ddd;" dir="ltr">${(it.price || 0).toLocaleString()}</td>
-                <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;" dir="ltr">${((it.quantity || 0) * (it.price || 0)).toLocaleString()}</td>
+                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
+                <td style="padding: 8px; border: 1px solid #cbd5e1; font-weight: bold;">${it.name}</td>
+                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;" dir="ltr">${it.quantity}</td>
+                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: left;" dir="ltr">${(it.price || 0).toLocaleString()} د.ع</td>
+                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: left; font-weight: bold;" dir="ltr">${((it.quantity || 0) * (it.price || 0)).toLocaleString()} د.ع</td>
               </tr>
             `).join('')}
           </tbody>
@@ -284,22 +286,25 @@ export default function MarketsView() {
       `;
     }
 
+    const invText = invoiceNo ? `<div style="font-size: 14px; font-weight: bold; margin-top: 5px;">ژمارەی وەسڵ: #${invoiceNo}</div>` : '';
+
     const html = `
       <html dir="rtl">
         <head>
-          <title>${title} - ${entityName}</title>
+          <title>${title} - ${entityName} ${invoiceNo ? `#${invoiceNo}` : ''}</title>
           <style>
             body { font-family: Tahoma, Arial, sans-serif; padding: 25px; color: #333; direction: rtl; }
             .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 20px; }
             .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-            .amount { font-size: 22px; font-weight: bold; text-align: center; margin: 20px 0; padding: 12px; border: 2px solid #333; border-radius: 8px; }
+            .amount { font-size: 22px; font-weight: bold; text-align: center; margin: 20px 0; padding: 12px; border: 2px solid #1e293b; border-radius: 8px; background-color: #f8fafc; }
             @media print { body { padding: 0; } }
           </style>
         </head>
         <body>
           <div class="header">
-            <h2 style="margin: 0 0 5px 0;">کۆمپانیای RF</h2>
-            <div style="color: #666; font-size: 13px;">${title}</div>
+            <h1 style="margin: 0; color: #1e293b; font-size: 32px; font-weight: 900; letter-spacing: 2px;">TAM TAM</h1>
+            <div style="color: #64748b; font-size: 14px; margin-top: 4px;">${title}</div>
+            ${invText}
           </div>
           <div class="row"><span>ناوی مارکێت:</span> <strong>${entityName}</strong></div>
           <div class="row"><span>ئەنجامدەر:</span> <strong>${personName}</strong></div>
@@ -679,46 +684,54 @@ export default function MarketsView() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {selectedMarketOrders.map(order => (
-                        <div key={order.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                          <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-100">
-                            <div>
-                              <div className="font-bold text-slate-800 text-sm">
-                                مەندووب: {order.repName}
-                              </div>
-                              <div className="text-xs text-slate-400 font-mono" dir="ltr">
-                                {format(order.timestamp, 'yyyy-MM-dd HH:mm')}
-                              </div>
-                            </div>
-                            <div className="text-left flex items-center gap-3">
+                      {selectedMarketOrders.map(order => {
+                        const invNo = order.invoiceId || order.invoiceNo || order.id.slice(-6);
+                        return (
+                          <div key={order.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                            <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-100">
                               <div>
-                                <div className="font-bold text-indigo-600 font-mono" dir="ltr">
-                                  {order.totalAmount.toLocaleString()} د.ع
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-800 text-sm">
+                                    مەندووب: {order.repName}
+                                  </span>
+                                  <span className="text-[11px] font-mono font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded" dir="ltr">
+                                    #{invNo}
+                                  </span>
                                 </div>
-                                <div className="text-[11px] text-slate-500">
-                                  {order.status === 'completed' ? 'تەسفییە کراوە' : order.status === 'printed' ? 'چاپکراوە' : 'چاوەڕوانە'}
-                                  {order.paymentStatus === 'cash' ? ' (نەقد)' : order.paymentStatus === 'debt' ? ' (قەرز)' : ''}
+                                <div className="text-xs text-slate-400 font-mono mt-0.5" dir="ltr">
+                                  {format(order.timestamp, 'yyyy-MM-dd HH:mm')}
                                 </div>
                               </div>
-                              <button
-                                onClick={() => printSingleInvoice('پسوڵەی ئۆردەری مەندووب', order.marketName, order.totalAmount, order.timestamp, order.repName, order.items)}
-                                className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition"
-                                title="چاپکردن"
-                              >
-                                <Printer size={15} />
-                              </button>
+                              <div className="text-left flex items-center gap-3">
+                                <div>
+                                  <div className="font-bold text-indigo-600 font-mono" dir="ltr">
+                                    {order.totalAmount.toLocaleString()} د.ع
+                                  </div>
+                                  <div className="text-[11px] text-slate-500">
+                                    {order.status === 'completed' ? 'تەسفییە کراوە' : order.status === 'printed' ? 'چاپکراوە' : 'چاوەڕوانە'}
+                                    {order.paymentStatus === 'cash' ? ' (نەقد)' : order.paymentStatus === 'debt' ? ' (قەرز)' : ''}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => printSingleInvoice('پسوڵەی ئۆردەری مەندووب', order.marketName, order.totalAmount, order.timestamp, order.repName, order.items, invNo)}
+                                  className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition"
+                                  title="چاپکردن"
+                                >
+                                  <Printer size={15} />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="space-y-1.5">
+                              {order.items.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded-lg">
+                                  <span className="font-medium text-slate-700">{item.name}</span>
+                                  <span className="text-slate-500 font-mono" dir="ltr">{item.quantity} x {item.price.toLocaleString()}</span>
+                                </div>
+                              ))}
                             </div>
                           </div>
-                          <div className="space-y-1.5">
-                            {order.items.map((item, idx) => (
-                              <div key={idx} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded-lg">
-                                <span className="font-medium text-slate-700">{item.name}</span>
-                                <span className="text-slate-500 font-mono" dir="ltr">{item.quantity} x {item.price.toLocaleString()}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -737,48 +750,56 @@ export default function MarketsView() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {selectedMarketCashvan.map(sale => (
-                        <div key={sale.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                          <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-100">
-                            <div>
-                              <div className="font-bold text-slate-800 text-sm">
-                                کاشڤان: {sale.cashvanName}
-                              </div>
-                              <div className="text-xs text-slate-400 font-mono" dir="ltr">
-                                {format(sale.date, 'yyyy-MM-dd HH:mm')}
-                              </div>
-                            </div>
-                            <div className="text-left flex items-center gap-3">
+                      {selectedMarketCashvan.map(sale => {
+                        const invNo = sale.invoiceNo || sale.invoiceId || sale.id.slice(-6);
+                        return (
+                          <div key={sale.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+                            <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-100">
                               <div>
-                                <div className="font-bold text-sky-600 font-mono" dir="ltr">
-                                  {sale.totalAmount.toLocaleString()} د.ع
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-800 text-sm">
+                                    کاشڤان: {sale.cashvanName}
+                                  </span>
+                                  <span className="text-[11px] font-mono font-bold bg-sky-50 text-sky-700 px-2 py-0.5 rounded" dir="ltr">
+                                    #{invNo}
+                                  </span>
                                 </div>
-                                <div className="text-[11px] text-slate-500">
-                                  {sale.status === 'accounted' ? 'چووەتە حیسابات' : 'چاوەڕێی حیساباتە'}
-                                  {sale.paymentType === 'cash' ? ' (نەقد)' : sale.paymentType === 'debt' ? ' (قەرز)' : ''}
+                                <div className="text-xs text-slate-400 font-mono mt-0.5" dir="ltr">
+                                  {format(sale.date, 'yyyy-MM-dd HH:mm')}
                                 </div>
                               </div>
-                              <button
-                                onClick={() => printSingleInvoice('پسوڵەی فرۆشتنی کاشڤان', sale.marketName, sale.totalAmount, sale.date, sale.cashvanName, sale.items)}
-                                className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition"
-                                title="چاپکردن"
-                              >
-                                <Printer size={15} />
-                              </button>
-                            </div>
-                          </div>
-                          {sale.items && sale.items.length > 0 && (
-                            <div className="space-y-1.5">
-                              {sale.items.map((item, idx) => (
-                                <div key={idx} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded-lg">
-                                  <span className="font-medium text-slate-700">{item.name}</span>
-                                  <span className="text-slate-500 font-mono" dir="ltr">{item.quantity} x {item.price.toLocaleString()}</span>
+                              <div className="text-left flex items-center gap-3">
+                                <div>
+                                  <div className="font-bold text-sky-600 font-mono" dir="ltr">
+                                    {sale.totalAmount.toLocaleString()} د.ع
+                                  </div>
+                                  <div className="text-[11px] text-slate-500">
+                                    {sale.status === 'accounted' ? 'چووەتە حیسابات' : 'چاوەڕێی حیساباتە'}
+                                    {sale.paymentType === 'cash' ? ' (نەقد)' : sale.paymentType === 'debt' ? ' (قەرز)' : ''}
+                                  </div>
                                 </div>
-                              ))}
+                                <button
+                                  onClick={() => printSingleInvoice('پسوڵەی فرۆشتنی کاشڤان', sale.marketName, sale.totalAmount, sale.date, sale.cashvanName, sale.items, invNo)}
+                                  className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition"
+                                  title="چاپکردن"
+                                >
+                                  <Printer size={15} />
+                                </button>
+                              </div>
                             </div>
-                          )}
-                        </div>
-                      ))}
+                            {sale.items && sale.items.length > 0 && (
+                              <div className="space-y-1.5">
+                                {sale.items.map((item, idx) => (
+                                  <div key={idx} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded-lg">
+                                    <span className="font-medium text-slate-700">{item.name}</span>
+                                    <span className="text-slate-500 font-mono" dir="ltr">{item.quantity} x {item.price.toLocaleString()}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

@@ -158,6 +158,7 @@ export default function LedgerView() {
       });
     });
     fOrders.forEach(o => {
+      const inv = o.invoiceId || o.invoiceNo;
       list.push({
         id: o.id,
         type: 'فرۆشتنی مەندووب',
@@ -166,12 +167,14 @@ export default function LedgerView() {
         personName: o.repName,
         amount: o.totalAmount,
         date: o.timestamp,
-        invoiceNumber: 'ORD-' + o.id.slice(-4).toUpperCase(),
+        invoiceNumber: inv ? `#${inv}` : ('ORD-' + o.id.slice(-4).toUpperCase()),
+        invoiceNo: inv,
         isDeleted: o.status === 'deleted',
         deletedBy: o.deletedBy || ''
       });
     });
     fCashvan.forEach(c => {
+      const inv = c.invoiceNo || c.invoiceId;
       list.push({
         id: c.id,
         type: 'فرۆشتنی کاشڤان',
@@ -180,7 +183,8 @@ export default function LedgerView() {
         personName: c.cashvanName,
         amount: c.totalAmount,
         date: c.date || c.timestamp,
-        invoiceNumber: 'CASH-' + c.id.slice(-4).toUpperCase(),
+        invoiceNumber: inv ? `#${inv}` : ('CASH-' + c.id.slice(-4).toUpperCase()),
+        invoiceNo: inv,
         isDeleted: c.status === 'deleted',
         deletedBy: c.deletedBy || ''
       });

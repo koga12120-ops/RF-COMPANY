@@ -9,6 +9,7 @@ import ConfirmModal from '../common/ConfirmModal';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
 import MarketDailyScheduleCard from '../common/MarketDailyScheduleCard';
 import { printDailyRepReceiptPopup } from '../../lib/statementPrinter';
+import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
 
 interface ActivityItem {
   id: string;
@@ -426,17 +427,22 @@ export default function OrdersView({
         });
         setEditingOrderId(null);
       } else {
-        await addDoc(collection(db, 'orders'), {
+        const nextInvoiceNo = await getNextInvoiceNumber();
+        const newOrderData = {
+          invoiceId: nextInvoiceNo,
+          invoiceNo: nextInvoiceNo,
           repName: repName.trim(),
           marketName: orderMarketName.trim(),
           location: orderLocation.trim(),
           totalAmount,
           totalProfit,
           items: orderItems,
-          status: 'pending',
+          status: 'pending' as const,
           paymentStatus: orderPaymentType,
           timestamp: Date.now()
-        });
+        };
+        const orderRef = await addDoc(collection(db, 'orders'), newOrderData);
+        printOrderReceipt({ ...newOrderData, id: orderRef.id }, nextInvoiceNo);
       }
       
       setActiveFormMode('none');
@@ -516,7 +522,11 @@ export default function OrdersView({
       }, 0);
       const totalProfit = totalAmount - totalCost;
       
+      const nextInvoiceNo = await getNextInvoiceNumber();
+
       const saleData: Omit<CashvanSale, 'id'> = {
+        invoiceNo: nextInvoiceNo,
+        invoiceId: nextInvoiceNo,
         cashvanName: repName || 'کاشڤان',
         marketName: vanMarketName,
         items: vanCart.map(c => ({
@@ -550,7 +560,7 @@ export default function OrdersView({
       // Add transaction for debt or cash if needed
       await addDoc(collection(db, 'transactions'), {
         type: vanPaymentType === 'cash' ? 'cash' : 'debt',
-        invoiceNo: docRef.id,
+        invoiceNo: nextInvoiceNo,
         amount: totalAmount,
         date: Date.now(),
         description: vanPaymentType === 'cash' ? `فرۆشتنی نەقدی کاشڤان بۆ ${vanMarketName}` : `فرۆشتنی قەرزی کاشڤان بۆ ${vanMarketName}`,
@@ -560,7 +570,7 @@ export default function OrdersView({
 
       setVanCart([]);
       setActiveFormMode('none');
-      printCashvanReceipt({ ...saleData, id: docRef.id }, docRef.id.slice(-6));
+      printCashvanReceipt({ ...saleData, id: docRef.id }, nextInvoiceNo);
       alert('فرۆشتنی کاشڤان بە سەرکەوتوویی تۆمارکرا');
     } catch (e: any) {
       console.error(e);
@@ -856,7 +866,9 @@ export default function OrdersView({
         const term = historySearchTerm.toLowerCase();
         const mMatch = act.marketName?.toLowerCase().includes(term);
         const rMatch = act.repName?.toLowerCase().includes(term);
-        if (!mMatch && !rMatch) return false;
+        const invNo = act.rawOrder?.invoiceId || act.rawOrder?.invoiceNo || act.rawSale?.invoiceNo || act.rawTransaction?.invoiceNo || '';
+        const invMatch = invNo.toLowerCase().includes(term);
+        if (!mMatch && !rMatch && !invMatch) return false;
       }
 
       return true;
@@ -1562,6 +1574,9 @@ export default function OrdersView({
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-xs text-slate-900">{act.marketName}</span>
+                        <span className="font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md text-xs" dir="ltr">
+                          #{act.rawOrder?.invoiceId || act.rawOrder?.invoiceNo || act.rawSale?.invoiceNo || act.rawTransaction?.invoiceNo || act.id.slice(-6)}
+                        </span>
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           isOrder ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' :
                           isSale ? 'bg-amber-50 text-amber-800 border border-amber-200' :
@@ -1602,7 +1617,7 @@ export default function OrdersView({
                       {isOrder && act.rawOrder && (
                         <button
                           type="button"
-                          onClick={() => printOrderReceipt(act.rawOrder!, act.rawOrder!.id.slice(-6))}
+                          onClick={() => printOrderReceipt(act.rawOrder!, act.rawOrder!.invoiceId || act.rawOrder!.invoiceNo || act.rawOrder!.id.slice(-6))}
                           className="p-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg transition"
                           title="چاپکردنی وەسڵ"
                         >
@@ -1613,7 +1628,7 @@ export default function OrdersView({
                       {isSale && act.rawSale && (
                         <button
                           type="button"
-                          onClick={() => printCashvanReceipt(act.rawSale!, act.rawSale!.id.slice(-6))}
+                          onClick={() => printCashvanReceipt(act.rawSale!, act.rawSale!.invoiceNo || act.rawSale!.id.slice(-6))}
                           className="p-1.5 bg-amber-50 text-amber-800 hover:bg-amber-100 rounded-lg transition"
                           title="چاپکردنی وەسڵ"
                         >
