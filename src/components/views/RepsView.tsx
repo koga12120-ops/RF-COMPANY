@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, deleteDoc, doc, setDoc, addDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, deleteDoc, doc, setDoc, addDoc, where, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { SalesRep } from '../../types';
@@ -105,25 +105,64 @@ export default function RepsView() {
     setIsProcessingCode(true);
     try {
       const trimmedCode = inputCode.trim();
+      const now = Date.now();
 
-      // 1. Update in reps collection
+      // 1. Update in reps collection with forceReauth flag & updated code
       await setDoc(doc(db, 'reps', codeModalItem.id), {
         accessCode: trimmedCode,
-        status: 'active'
-      }, { merge: true });
-
-      // 2. Set or update credentials in users collection
-      const userUid = codeModalItem.uid || codeModalItem.id;
-      await setDoc(doc(db, 'users', userUid), {
-        role: 'sales_rep',
-        accessCode: trimmedCode,
         status: 'active',
-        name: codeModalItem.name,
-        phone: codeModalItem.phone || '',
-        updatedAt: Date.now()
+        forceReauth: true,
+        codeUpdatedAt: now
       }, { merge: true });
 
-      showToast(`کۆدی چوونەژوورەوە بۆ مەندووب (${codeModalItem.name}) بە سەرکەوتوویی جێگیر کرا: [${trimmedCode}]`);
+      // 2. Set forceReauth and revoke active role on all associated user records in `users` collection
+      const targetUids = new Set<string>();
+      if (codeModalItem.uid) targetUids.add(codeModalItem.uid);
+      if (codeModalItem.id) targetUids.add(codeModalItem.id);
+
+      // Query any user linked by repId or email or phone or name
+      try {
+        const qRepId = query(collection(db, 'users'), where('repId', '==', codeModalItem.id));
+        const snapRepId = await getDocs(qRepId);
+        snapRepId.forEach(d => targetUids.add(d.id));
+
+        if (codeModalItem.phone) {
+          const qPhone = query(collection(db, 'users'), where('phone', '==', codeModalItem.phone));
+          const snapPhone = await getDocs(qPhone);
+          snapPhone.forEach(d => targetUids.add(d.id));
+        }
+
+        if (codeModalItem.email) {
+          const qEmail = query(collection(db, 'users'), where('email', '==', codeModalItem.email));
+          const snapEmail = await getDocs(qEmail);
+          snapEmail.forEach(d => targetUids.add(d.id));
+        }
+
+        if (codeModalItem.name) {
+          const qName = query(collection(db, 'users'), where('name', '==', codeModalItem.name));
+          const snapName = await getDocs(qName);
+          snapName.forEach(d => targetUids.add(d.id));
+        }
+      } catch (err) {
+        console.error("Error querying users for rep:", err);
+      }
+
+      // Update all linked user docs: set role: null, forceReauth: true so they are immediately kicked back to PinEntry
+      for (const uid of targetUids) {
+        await setDoc(doc(db, 'users', uid), {
+          role: null,
+          forceReauth: true,
+          accessCode: trimmedCode,
+          status: 'active',
+          name: codeModalItem.name,
+          phone: codeModalItem.phone || '',
+          repId: codeModalItem.id,
+          codeUpdatedAt: now,
+          updatedAt: now
+        }, { merge: true });
+      }
+
+      showToast(`کۆدی چوونەژوورەوە بۆ مەندووب (${codeModalItem.name}) جێگیرکرا: [${trimmedCode}] (دەستبەجێ داوای کۆدە نوێیەکە دەکرێت لە مەندووب)`);
       setCodeModalItem(null);
     } catch (error) {
       console.error('Error setting PIN code:', error);

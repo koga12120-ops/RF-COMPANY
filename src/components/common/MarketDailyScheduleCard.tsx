@@ -71,6 +71,34 @@ export default function MarketDailyScheduleCard({
   const weekId = getWeekId();
   const effectiveName = activeRepName || activeCashvanName || auth.currentUser?.displayName || '';
 
+  // Calculate week days with dates for header pills (like the screenshot)
+  const weekDays = useMemo(() => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const diffToSaturday = currentDay === 6 ? 0 : currentDay + 1;
+    const saturday = new Date(now);
+    saturday.setDate(now.getDate() - diffToSaturday);
+    saturday.setHours(0, 0, 0, 0);
+
+    return DAYS.map((day, idx) => {
+      const d = new Date(saturday);
+      d.setDate(saturday.getDate() + idx);
+      const dayNum = d.getDate();
+      const monthNum = d.getMonth() + 1;
+      const yearNum = d.getFullYear();
+      const count = (schedule[day.key] || []).length;
+      const isToday = day.key === currentDayIndex;
+      const isSelected = selectedDay === day.key;
+      return {
+        ...day,
+        dateFormatted: `${dayNum}.${monthNum}.${yearNum}`,
+        count,
+        isToday,
+        isSelected
+      };
+    });
+  }, [schedule, currentDayIndex, selectedDay]);
+
   // 1. Locate rep/cashvan doc id in Firestore
   useEffect(() => {
     const findRepId = async () => {
@@ -289,209 +317,154 @@ export default function MarketDailyScheduleCard({
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-6">
-      {/* Days of Week Navigation Bar */}
-      <div className="p-3 sm:p-4 border-b border-slate-100 space-y-3">
-        <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
-          {/* Day Buttons */}
-          <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-            {DAYS.map((day) => {
-              const count = (schedule[day.key] || []).length;
-              const isToday = day.key === currentDayIndex;
-              const isSelected = selectedDay === day.key;
-
-              return (
-                <button
-                  key={day.key}
-                  onClick={() => setSelectedDay(day.key)}
-                  className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
-                    isSelected
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : isToday
-                      ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
-                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
-                  }`}
-                >
-                  <span>{day.label}</span>
-                  {isToday && (
-                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${isSelected ? 'bg-indigo-500 text-white' : 'bg-indigo-200 text-indigo-900'}`}>
-                      ئەمڕۆ
-                    </span>
-                  )}
-                  {count > 0 && (
-                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${isSelected ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-700'}`}>
-                      {count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-
-            {/* All Markets Button (Only for Admin/Warehouse) */}
-            {(role === 'admin' || role === 'warehouse') && (
+      {/* Top Header Bar: Clean Light Theme with Horizontally Scrollable Days */}
+      <div className="bg-slate-50 border-b border-slate-200 p-3 sm:p-4">
+        {/* Days Horizontal Scroll */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          {weekDays.map((day) => {
+            const isSelected = day.isSelected;
+            return (
               <button
-                onClick={() => setSelectedDay('all')}
-                className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
-                  selectedDay === 'all'
-                    ? 'bg-slate-800 text-white shadow-xs'
-                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                key={day.key}
+                type="button"
+                onClick={() => setSelectedDay(day.key)}
+                className={`flex-shrink-0 px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-1 min-w-[95px] sm:min-w-[105px] border ${
+                  isSelected
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm scale-102'
+                    : day.isToday
+                    ? 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100/70'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100/80'
                 }`}
               >
-                <Store size={13} />
-                <span>سەرجەم مارکێتەکان</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${selectedDay === 'all' ? 'bg-slate-700 text-white' : 'bg-slate-200 text-slate-700'}`}>
-                  {markets.length}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-black ${
+                    isSelected ? 'bg-indigo-800 text-indigo-100' : 'bg-slate-100 text-slate-700'
+                  }`}>
+                    {day.count}
+                  </span>
+                  <span>{day.label}</span>
+                </div>
+                <div className={`text-[10px] font-mono tracking-tight ${
+                  isSelected ? 'text-indigo-100 font-bold' : 'text-slate-500'
+                }`}>
+                  {day.dateFormatted}
+                </div>
               </button>
-            )}
-          </div>
+            );
+          })}
 
-          {/* Search Input */}
-          <div className="relative flex-1 max-w-xs md:max-w-sm">
-            <input
-              type="text"
-              placeholder="گەڕان بۆ مارکێت..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pr-8 pl-8 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 focus:bg-white text-xs text-slate-800 placeholder-slate-400 transition"
-            />
-            <Search className="absolute right-2.5 top-2.5 text-slate-400" size={15} />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className="absolute left-2.5 top-2.5 text-slate-400 hover:text-slate-600"
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
+          {/* All Markets Button (Only for Admin/Warehouse) */}
+          {(role === 'admin' || role === 'warehouse') && (
+            <button
+              type="button"
+              onClick={() => setSelectedDay('all')}
+              className={`flex-shrink-0 px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex flex-col items-center justify-center gap-1 min-w-[95px] border ${
+                selectedDay === 'all'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <div className="flex items-center gap-1">
+                <Store size={12} />
+                <span>هەموو</span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-500 font-bold">
+                {markets.length} مارکێت
+              </span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Markets List Body */}
-      <div className="p-4 sm:p-5">
+      {/* Markets List Body (Matching the Reference Image Row Design) */}
+      <div className="divide-y divide-slate-100">
         {loading ? (
-          <div className="text-center py-10 text-xs text-slate-400 font-bold">
+          <div className="text-center py-12 text-xs text-slate-400 font-bold">
             خەریکی هێنانی خشتەی سەردانەکانە...
           </div>
         ) : displayMarkets.length === 0 ? (
-          <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-8 text-center space-y-2">
+          <div className="bg-slate-50 p-8 text-center space-y-2">
             <Store size={32} className="mx-auto text-slate-400" />
             <div className="font-bold text-sm text-slate-700">
               {selectedDay === 'all'
                 ? 'هیچ مارکێتێک نەدۆزرایەوە'
-                : `هیچ مارکێتێک لە خشتەی (${selectedDayLabel})دا دانەنراوە`}
+                : `هیچ مارکێتێک لە خشتەی (${selectedDayLabel})دا نییە`}
             </div>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              دەتوانیت ڕۆژێکی تر هەڵبژێریت یان لە بەشی "سەرجەم مارکێتەکان" مارکێتەکە بدۆزیتەوە.
+              ڕۆژێکی تر لە خشتەی سەرەوە هەڵبژێرە بۆ بینینی مارکێتەکان.
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {displayMarkets.map(({ market, isScheduled, isVisited }) => {
-              const debt = getDebt(market.name);
+          displayMarkets.map(({ market, isScheduled, isVisited }, index) => {
+            const debt = getDebt(market.name);
 
-              return (
-                <div
-                  key={market.id}
-                  className={`relative p-3.5 rounded-xl border transition-all duration-150 flex flex-col justify-between gap-3 ${
-                    isVisited
-                      ? 'bg-emerald-50/40 border-emerald-200'
-                      : isScheduled
-                      ? 'bg-white border-slate-200 hover:border-indigo-400 shadow-2xs'
-                      : 'bg-slate-50/60 border-slate-200'
-                  }`}
-                >
-                  {/* Top Row: Name, Status & 3-Lines Menu */}
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h3 className="font-bold text-sm text-slate-900 truncate">
-                          {market.name}
-                        </h3>
-                        {isVisited && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[10px] rounded-md font-bold">
-                            <CheckCircle2 size={10} />
-                            <span>سەردانکراو</span>
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Location & Phone */}
-                      <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-500 truncate">
-                        {market.location && (
-                          <span className="flex items-center gap-1 truncate" title={market.location}>
-                            <MapPin size={11} className="text-slate-400 shrink-0" />
-                            <span className="truncate">{market.location}</span>
-                          </span>
-                        )}
-                        {market.phone && (
-                          <a
-                            href={`tel:${market.phone}`}
-                            className="flex items-center gap-1 hover:text-indigo-600 font-mono"
-                            dir="ltr"
-                          >
-                            <Phone size={11} className="text-slate-400 shrink-0" />
-                            <span>{market.phone}</span>
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* 3-Lines Menu Button */}
-                    <button
-                      type="button"
-                      onClick={() => setActionMarket({ market, isVisited, debt })}
-                      className="p-2 rounded-xl transition border flex items-center justify-center min-w-[38px] min-h-[38px] bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border-indigo-200 shadow-2xs active:scale-95"
-                      title="مینیوی کارەکانی ئەم مارکێتە"
-                    >
-                      <Menu size={18} />
-                    </button>
+            return (
+              <div
+                key={market.id}
+                className={`p-3 sm:p-4 flex items-center justify-between gap-3 transition-colors ${
+                  isVisited
+                    ? 'bg-emerald-50/30 hover:bg-emerald-50/50'
+                    : 'bg-white hover:bg-slate-50'
+                }`}
+              >
+                {/* Start Column: Index, Phone, Name, Visited Badge */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-slate-400 font-mono font-bold text-xs">
+                      {String(index + 1).padStart(2, '0')}.
+                    </span>
+                    <span className="font-mono font-bold text-xs text-slate-700 tracking-wider" dir="ltr">
+                      {market.phone || market.code || '---'}
+                    </span>
+                    {isVisited && (
+                      <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] rounded-md font-bold">
+                        <CheckCircle2 size={11} />
+                        <span>سەردانکراو</span>
+                      </span>
+                    )}
                   </div>
 
-                  {/* Bottom Row: Debt Balance & Quick Actions */}
-                  <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                    {/* Current Debt Badge */}
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] text-slate-500 font-bold">قەرز:</span>
-                      <span
-                        className={`font-mono font-bold text-xs px-2 py-0.5 rounded-lg border ${
-                          debt > 0
-                            ? 'bg-amber-50 text-amber-800 border-amber-200'
-                            : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                        }`}
-                        dir="ltr"
-                      >
-                        {debt.toLocaleString()} د.ع
-                      </span>
-                    </div>
+                  <h3 className="font-bold text-sm sm:text-base text-slate-900 mt-1 truncate">
+                    {market.name}
+                  </h3>
 
-                    {/* Fast Action Buttons */}
-                    <div className="flex items-center gap-1.5 flex-1 sm:flex-initial justify-end">
-                      <button
-                        type="button"
-                        onClick={() => onSelectForDebtPay(market, debt)}
-                        className="flex-1 sm:flex-initial px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 shadow-2xs"
-                        title="دانەوەی قەرز"
-                      >
-                        <CreditCard size={13} />
-                        <span>قەرزدانەوە</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onSelectForOrder(market)}
-                        className="flex-1 sm:flex-initial px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 shadow-2xs"
-                        title="داواکاری"
-                      >
-                        <ShoppingCart size={13} />
-                        <span>داواکاری</span>
-                      </button>
+                  {market.location && (
+                    <div className="flex items-center gap-1 text-[11px] text-slate-500 mt-0.5 truncate">
+                      <MapPin size={11} className="text-slate-400 shrink-0" />
+                      <span className="truncate">{market.location}</span>
                     </div>
+                  )}
+                </div>
+
+                {/* Middle Column: Current Debt Amount */}
+                <div className="px-2 text-left shrink-0">
+                  <div
+                    className={`font-mono font-bold text-xs sm:text-sm ${
+                      debt > 0 ? 'text-emerald-700' : 'text-slate-500'
+                    }`}
+                    dir="ltr"
+                  >
+                    {debt > 0 ? `+${debt.toLocaleString()} IQD` : `0 IQD`}
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-bold text-right">
+                    بڕی قەرز
                   </div>
                 </div>
-              );
-            })}
-          </div>
+
+                {/* End Column: 3-Dots Action Menu Pill Button */}
+                <button
+                  type="button"
+                  onClick={() => setActionMarket({ market, isVisited, debt })}
+                  className="w-9 h-12 rounded-xl bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 flex flex-col items-center justify-center gap-1 transition active:scale-95 shadow-2xs shrink-0 border border-slate-200"
+                  title="مینیوی کارەکان"
+                >
+                  <div className="w-1.5 h-1.5 bg-current rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-current rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-current rounded-full"></div>
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
 

@@ -116,14 +116,19 @@ export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNo
           return;
         }
 
-        // Save active session PIN
+        // Save active session PIN and rep info
         sessionStorage.setItem('active_session_pin', normalizedPin);
+        sessionStorage.setItem('active_rep_id', repDocSnap.id);
+        if (repData.name) {
+          sessionStorage.setItem('active_rep_name', repData.name);
+        }
 
         if (currentUser) {
           // Sync with users collection and clear any forceReauth
           await setDoc(doc(db, 'users', currentUser.uid), {
             role: 'sales_rep',
             accessCode: normalizedPin,
+            repId: repDocSnap.id,
             forceReauth: false,
             lastReauthAt: Date.now(),
             name: repData.name || currentUser.displayName || currentUser.email,

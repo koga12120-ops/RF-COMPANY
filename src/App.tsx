@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import Login from './components/Login';
 import PinEntry from './components/PinEntry';
 import Dashboard from './components/Dashboard';
@@ -24,18 +24,23 @@ export default function App() {
 
   useEffect(() => {
     let unsubUserDoc: (() => void) | null = null;
+    let unsubRepDoc: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
       if (unsubUserDoc) {
         unsubUserDoc();
         unsubUserDoc = null;
       }
+      if (unsubRepDoc) {
+        unsubRepDoc();
+        unsubRepDoc = null;
+      }
 
       if (firebaseUser) {
         setIsAuthenticated(true);
         setUser(firebaseUser);
 
-        // Real-time listener for user document to catch PIN/password changes instantly
+        // Real-time listener for user document to catch role/ban/reauth updates
         unsubUserDoc = onSnapshot(doc(db, 'users', firebaseUser.uid), (docSnap) => {
           setLoading(false);
           if (docSnap.exists()) {
@@ -45,21 +50,86 @@ export default function App() {
             // 1. Check if user account was deleted or banned
             if (data.isDeleted || data.status === 'banned') {
               setRoleState(null);
+              sessionStorage.removeItem('active_session_pin');
               setPinNotice('ئەم هەژمارە ڕاگیراوە یان سڕدراوەتەوە لەلایەن بەڕێوەبەرەوە.');
               return;
             }
 
-            // 2. Check if password/PIN was changed by Admin (forceReauth or accessCode mismatch)
-            if (data.forceReauth || (data.role === 'sales_rep' && sessionPin && data.accessCode && data.accessCode !== sessionPin)) {
+            // 2. Check if password/PIN was changed by Admin on user record
+            if (data.forceReauth) {
               setRoleState(null);
               sessionStorage.removeItem('active_session_pin');
-              setPinNotice('تێپەڕەوشەی مەندووب لەلایەن بەڕێوەبەرەوە گۆڕدراوە. سیستەمەکە داخرا و تکایە تێپەڕەوشە تازەکەت لێبدە بۆ چوونەژوورەوە.');
+              setPinNotice('تێپەڕەوشەی چوونەژوورەوە لەلایەن بەڕێوەبەرەوە گۆڕدراوە. سیستەمەکە داخرا، تکایە کۆدە نوێیەکەت بنووسە.');
               return;
             }
 
-            // 3. Normal active role
-            if (data.role) {
-              setRoleState(data.role as Role);
+            // 3. For sales rep, attach real-time listener to the rep's document in `reps` collection
+            const repId = data.repId || sessionStorage.getItem('active_rep_id');
+            if (data.role === 'sales_rep' || repId) {
+              if (unsubRepDoc) {
+                unsubRepDoc();
+                unsubRepDoc = null;
+              }
+
+              const targetRepDocId = repId || firebaseUser.uid;
+              unsubRepDoc = onSnapshot(doc(db, 'reps', targetRepDocId), (repSnap) => {
+                const currentSessionPin = sessionStorage.getItem('active_session_pin');
+                if (repSnap.exists()) {
+                  const repData = repSnap.data();
+
+                  if (repData.isDeleted || repData.status === 'disabled') {
+                    setRoleState(null);
+                    sessionStorage.removeItem('active_session_pin');
+                    setPinNotice('ئەم هەژمارەی مەندووب لە سیستەم ڕاگیراوە.');
+                    return;
+                  }
+
+                  // If rep code changed by Admin or forceReauth was set
+                  if (repData.forceReauth || (currentSessionPin && repData.accessCode && repData.accessCode !== currentSessionPin)) {
+                    setRoleState(null);
+                    sessionStorage.removeItem('active_session_pin');
+                    setPinNotice('کۆدی چوونەژوورەوەی ئەم مەندووبە لەلایەن بەڕێوەبەرەوە گۆڕدراوە. سیستەمەکە داخرا، تکایە کۆدە نوێیەکەت بنووسە.');
+                    return;
+                  }
+
+                  // If valid active session pin matches current rep accessCode
+                  if (currentSessionPin && repData.accessCode && repData.accessCode === currentSessionPin && !repData.forceReauth && !data.forceReauth) {
+                    setRoleState('sales_rep');
+                  } else if (!currentSessionPin) {
+                    // No session PIN active, force PIN entry
+                    setRoleState(null);
+                  }
+                } else if (data.role === 'sales_rep') {
+                  // Rep document not found or deleted
+                  setRoleState(null);
+                  sessionStorage.removeItem('active_session_pin');
+                  setPinNotice('پڕۆفایلی مەندووب نەدۆزرایەوە یان سڕدراوەتەوە.');
+                }
+              }, (err) => {
+                console.error("Error listening to rep doc:", err);
+              });
+              return;
+            }
+
+            // 4. Other Roles (Admin, Warehouse, Cashvan)
+            if (data.role === 'admin') {
+              if (sessionPin === '27890') {
+                setRoleState('admin');
+              } else {
+                setRoleState(null);
+              }
+            } else if (data.role === 'warehouse') {
+              if (sessionPin === '35278') {
+                setRoleState('warehouse');
+              } else {
+                setRoleState(null);
+              }
+            } else if (data.role === 'cashvan') {
+              if (sessionPin === '47953' || (sessionPin && data.accessCode === sessionPin)) {
+                setRoleState('cashvan');
+              } else {
+                setRoleState(null);
+              }
             } else {
               setRoleState(null);
             }
@@ -81,6 +151,7 @@ export default function App() {
     return () => {
       unsubscribeAuth();
       if (unsubUserDoc) unsubUserDoc();
+      if (unsubRepDoc) unsubRepDoc();
     };
   }, []);
 
@@ -98,16 +169,9 @@ export default function App() {
           lastActiveAt: Date.now() 
         }, { merge: true });
         
-        if (newRole === 'sales_rep') {
-          await setDoc(doc(db, 'reps', user.uid), { 
-            name: user.displayName || user.email, 
-            uid: user.uid,
-            forceReauth: false 
-          }, { merge: true });
-        }
-        if (newRole === 'cashvan') {
-          await setDoc(doc(db, 'cashvans', user.uid), { 
-            name: user.displayName || user.email, 
+        const repId = sessionStorage.getItem('active_rep_id');
+        if (newRole === 'sales_rep' && repId) {
+          await setDoc(doc(db, 'reps', repId), { 
             uid: user.uid,
             forceReauth: false 
           }, { merge: true });
@@ -120,6 +184,8 @@ export default function App() {
 
   const handleLogout = async () => {
     sessionStorage.removeItem('active_session_pin');
+    sessionStorage.removeItem('active_rep_id');
+    sessionStorage.removeItem('active_rep_name');
     setRoleState(null);
     setUser(null);
     setIsAuthenticated(false);

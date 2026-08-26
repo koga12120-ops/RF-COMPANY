@@ -3,7 +3,7 @@ import { collection, getDocs, where, addDoc, updateDoc, doc, onSnapshot, query, 
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Order, Item, Role, Market, Transaction, CashvanSale } from '../../types';
-import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, Calendar, FileText, CheckCircle2, Truck, Send, ArrowRight } from 'lucide-react';
+import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, Calendar, FileText, CheckCircle2, Truck, Send, ArrowRight, Package } from 'lucide-react';
 import { format, startOfDay, endOfDay, subDays, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
@@ -25,7 +25,15 @@ interface ActivityItem {
   rawTransaction?: Transaction;
 }
 
-export default function OrdersView({ role }: { role: Role }) {
+export default function OrdersView({
+  role,
+  initialTab = 'schedule',
+  onTabChange
+}: {
+  role: Role;
+  initialTab?: 'schedule' | 'info';
+  onTabChange?: (tab: 'schedule' | 'info') => void;
+}) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [cashvanSales, setCashvanSales] = useState<CashvanSale[]>([]);
   const [vanInventory, setVanInventory] = useState<any[]>([]);
@@ -41,7 +49,18 @@ export default function OrdersView({ role }: { role: Role }) {
   const [repName, setRepName] = useState('');
 
   // Main Tabs
-  const [activeMainTab, setActiveMainTab] = useState<'schedule' | 'info'>('schedule');
+  const [activeMainTab, setActiveMainTab] = useState<'schedule' | 'info'>(initialTab);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveMainTab(initialTab);
+    }
+  }, [initialTab]);
+
+  const handleTabSelect = (tab: 'schedule' | 'info') => {
+    setActiveMainTab(tab);
+    if (onTabChange) onTabChange(tab);
+  };
 
   // Forms State (Opened from the Schedule Card's 3-line Menu)
   const [activeFormMode, setActiveFormMode] = useState<'none' | 'order' | 'cashvan'>('none');
@@ -844,22 +863,34 @@ export default function OrdersView({ role }: { role: Role }) {
     });
   }, [allActivities, dateFilter, customDate, activityTypeFilter, historySearchTerm]);
 
-  // Statistics for selected activities
-  const stats = useMemo(() => {
+  // Statistics for sales activities: ONLY Total Cartons and Total Sales Money (as strictly requested)
+  const salesStats = useMemo(() => {
+    let totalCartons = 0;
+    let totalPackets = 0;
+    let totalUnits = 0;
+    let totalSalesMoney = 0;
     let orderCount = 0;
-    let orderTotal = 0;
     let vanSaleCount = 0;
-    let vanSaleTotal = 0;
     let debtCollectCount = 0;
     let debtCollectTotal = 0;
 
     filteredActivities.forEach(a => {
-      if (a.type === 'order') {
-        orderCount++;
-        orderTotal += (a.amount || 0);
-      } else if (a.type === 'cashvan_sale') {
-        vanSaleCount++;
-        vanSaleTotal += (a.amount || 0);
+      if (a.type === 'order' || a.type === 'cashvan_sale') {
+        totalSalesMoney += (a.amount || 0);
+        if (a.type === 'order') orderCount++;
+        if (a.type === 'cashvan_sale') vanSaleCount++;
+
+        if (a.items && Array.isArray(a.items)) {
+          a.items.forEach(item => {
+            const qty = Number(item.quantity) || 0;
+            if (item.unit === 'packet' || item.unit === 'پاکەت') {
+              totalPackets += qty;
+            } else {
+              totalCartons += qty;
+            }
+            totalUnits += qty;
+          });
+        }
       } else if (a.type === 'debt_collection') {
         debtCollectCount++;
         debtCollectTotal += (a.amount || 0);
@@ -867,13 +898,15 @@ export default function OrdersView({ role }: { role: Role }) {
     });
 
     return {
+      totalCartons,
+      totalPackets,
+      totalUnits,
+      totalSalesMoney,
+      totalSalesCount: orderCount + vanSaleCount,
       orderCount,
-      orderTotal,
       vanSaleCount,
-      vanSaleTotal,
       debtCollectCount,
-      debtCollectTotal,
-      grandTotal: orderTotal + vanSaleTotal + debtCollectTotal
+      debtCollectTotal
     };
   }, [filteredActivities]);
 
@@ -882,26 +915,26 @@ export default function OrdersView({ role }: { role: Role }) {
       {/* Top Tabs */}
       <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
         <button
-          onClick={() => setActiveMainTab('schedule')}
-          className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+          onClick={() => handleTabSelect('schedule')}
+          className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 ${
             activeMainTab === 'schedule'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'
           }`}
         >
-          <Calendar size={15} />
-          <span>خشتەی سەردان</span>
+          <Calendar size={16} />
+          <span>فرۆشتن (خشتەی سەردان)</span>
         </button>
         <button
-          onClick={() => setActiveMainTab('info')}
-          className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+          onClick={() => handleTabSelect('info')}
+          className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 ${
             activeMainTab === 'info'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200'
           }`}
         >
-          <FileText size={15} />
-          <span>زانیاریەکان</span>
+          <FileText size={16} />
+          <span>زانیاری لەسەر فرۆشەکان</span>
         </button>
       </div>
 
@@ -960,32 +993,15 @@ export default function OrdersView({ role }: { role: Role }) {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">شێوازی پارەدان *</label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setOrderPaymentType('debt')}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                          orderPaymentType === 'debt'
-                            ? 'bg-amber-600 text-white shadow-xs'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
-                      >
-                        <CreditCard size={14} />
-                        <span>بە قەرز</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setOrderPaymentType('cash')}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                          orderPaymentType === 'cash'
-                            ? 'bg-emerald-600 text-white shadow-xs'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
-                      >
-                        <DollarSign size={14} />
-                        <span>بە نەقد</span>
-                      </button>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">شێوازی پارەدان</label>
+                    <div className="w-full px-3.5 py-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs font-bold text-amber-900">
+                      <div className="flex items-center gap-1.5">
+                        <CreditCard size={15} className="text-amber-700" />
+                        <span>بە قەرز (تەڵەبیە)</span>
+                      </div>
+                      <span className="text-[10px] bg-amber-200 text-amber-900 px-2 py-0.5 rounded-md font-bold">
+                        هەمووی قەرزە
+                      </span>
                     </div>
                   </div>
 
@@ -1420,7 +1436,7 @@ export default function OrdersView({ role }: { role: Role }) {
           </div>
         </div>
 
-        {/* Activity Type Filters & Search */}
+        {/* Activity Search & Quick Filter */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <button
@@ -1432,7 +1448,7 @@ export default function OrdersView({ role }: { role: Role }) {
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
               }`}
             >
-              هەموو کارەکان ({filteredActivities.length})
+              هەموو فرۆشەکان ({salesStats.totalSalesCount})
             </button>
             <button
               type="button"
@@ -1444,7 +1460,7 @@ export default function OrdersView({ role }: { role: Role }) {
               }`}
             >
               <ShoppingCart size={13} />
-              <span>تەڵەبییەکان ({stats.orderCount})</span>
+              <span>تەڵەبییە ({salesStats.orderCount})</span>
             </button>
             <button
               type="button"
@@ -1456,27 +1472,15 @@ export default function OrdersView({ role }: { role: Role }) {
               }`}
             >
               <Truck size={13} />
-              <span>فرۆشتنی کاشڤان ({stats.vanSaleCount})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActivityTypeFilter('debt_collection')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition border flex items-center gap-1.5 ${
-                activityTypeFilter === 'debt_collection'
-                  ? 'bg-emerald-600 text-white border-emerald-600'
-                  : 'bg-white text-emerald-800 border-slate-200 hover:bg-emerald-50'
-              }`}
-            >
-              <CreditCard size={13} />
-              <span>قەرزی وەرگیراو ({stats.debtCollectCount})</span>
+              <span>کاشڤان ({salesStats.vanSaleCount})</span>
             </button>
           </div>
 
-          <div className="relative w-full sm:w-60">
+          <div className="relative w-full sm:w-64">
             <input
               type="text"
-              placeholder="گەڕان لە مێژوودا..."
-              className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-xl text-xs outline-none"
+              placeholder="گەڕان لە وەصڵ و مارکێتەکاندا..."
+              className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-xl text-xs outline-none bg-slate-50 focus:bg-white focus:border-indigo-500 transition"
               value={historySearchTerm}
               onChange={(e) => setHistorySearchTerm(e.target.value)}
             />
@@ -1484,50 +1488,46 @@ export default function OrdersView({ role }: { role: Role }) {
           </div>
         </div>
 
-        {/* Daily Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl">
-            <div className="text-[11px] text-indigo-700 font-bold flex items-center gap-1">
-              <ShoppingCart size={13} />
-              <span>کۆی تەڵەبیەکان</span>
+        {/* Daily Summary Cards: STRICTLY ONLY TWO CARDS (کۆی فرۆش بە کارتۆن & بڕی فرۆشتن بە پارە) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {/* Card 1: کۆی فرۆش بە کارتۆن */}
+          <div className="p-4 sm:p-5 bg-indigo-50/70 border-2 border-indigo-200 rounded-2xl flex items-center justify-between shadow-2xs">
+            <div className="space-y-1">
+              <div className="text-xs text-indigo-800 font-bold flex items-center gap-1.5">
+                <Package size={17} />
+                <span>کۆی فرۆش بە کارتۆن</span>
+              </div>
+              <div className="text-2xl sm:text-3xl font-black text-indigo-950 font-mono" dir="ltr">
+                {salesStats.totalCartons.toLocaleString()} <span className="text-sm font-bold text-indigo-700">کارتۆن</span>
+              </div>
+              {salesStats.totalPackets > 0 && (
+                <div className="text-xs text-indigo-600 font-bold font-mono">
+                  + {salesStats.totalPackets.toLocaleString()} پاکەت
+                </div>
+              )}
             </div>
-            <div className="text-sm font-black text-indigo-950 font-mono mt-1" dir="ltr">
-              {stats.orderTotal.toLocaleString()} د.ع
+            <div className="p-3 bg-indigo-600 text-white rounded-2xl shadow-xs shrink-0">
+              <Package size={26} />
             </div>
-            <div className="text-[10px] text-indigo-600 mt-0.5">{stats.orderCount} داواکاری</div>
           </div>
 
-          <div className="p-3 bg-amber-50/60 border border-amber-100 rounded-xl">
-            <div className="text-[11px] text-amber-800 font-bold flex items-center gap-1">
-              <Truck size={13} />
-              <span>فرۆشتنی کاشڤان</span>
+          {/* Card 2: بڕی فرۆشتن بە پارە */}
+          <div className="p-4 sm:p-5 bg-emerald-50/70 border-2 border-emerald-200 rounded-2xl flex items-center justify-between shadow-2xs">
+            <div className="space-y-1">
+              <div className="text-xs text-emerald-800 font-bold flex items-center gap-1.5">
+                <DollarSign size={17} />
+                <span>بڕی فرۆشتن بە پارە</span>
+              </div>
+              <div className="text-2xl sm:text-3xl font-black text-emerald-950 font-mono" dir="ltr">
+                {salesStats.totalSalesMoney.toLocaleString()} <span className="text-sm font-bold text-emerald-700">د.ع</span>
+              </div>
+              <div className="text-xs text-emerald-700 font-bold">
+                لە کۆی {salesStats.totalSalesCount} وەسڵی فرۆشتن
+              </div>
             </div>
-            <div className="text-sm font-black text-amber-950 font-mono mt-1" dir="ltr">
-              {stats.vanSaleTotal.toLocaleString()} د.ع
+            <div className="p-3 bg-emerald-600 text-white rounded-2xl shadow-xs shrink-0">
+              <DollarSign size={26} />
             </div>
-            <div className="text-[10px] text-amber-700 mt-0.5">{stats.vanSaleCount} فرۆشتن</div>
-          </div>
-
-          <div className="p-3 bg-emerald-50/60 border border-emerald-100 rounded-xl">
-            <div className="text-[11px] text-emerald-800 font-bold flex items-center gap-1">
-              <CreditCard size={13} />
-              <span>قەرزی وەرگیراو</span>
-            </div>
-            <div className="text-sm font-black text-emerald-950 font-mono mt-1" dir="ltr">
-              {stats.debtCollectTotal.toLocaleString()} د.ع
-            </div>
-            <div className="text-[10px] text-emerald-700 mt-0.5">{stats.debtCollectCount} وەرگرتن</div>
-          </div>
-
-          <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl">
-            <div className="text-[11px] text-slate-700 font-bold flex items-center gap-1">
-              <DollarSign size={13} />
-              <span>کۆی گشتی بەها</span>
-            </div>
-            <div className="text-sm font-black text-slate-900 font-mono mt-1" dir="ltr">
-              {stats.grandTotal.toLocaleString()} د.ع
-            </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">{filteredActivities.length} کۆی چالاکی</div>
           </div>
         </div>
 
