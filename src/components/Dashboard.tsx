@@ -178,33 +178,32 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       default: {
         if (role === 'sales_rep') {
           return (
-            <div className="max-w-4xl mx-auto py-4 sm:py-8 px-3 sm:px-6">
-              {/* 3 Main Action Cards - Balanced Size & Mobile Friendly */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-6">
+            <div className="max-w-5xl mx-auto py-5 sm:py-10 px-4 sm:px-6">
+              {/* 3 Main Action Cards - Large, prominent and beautiful on all devices including iOS/Mobile */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                 {/* 1. فرۆشتن */}
                 <button
                   type="button"
                   onClick={() => setActiveTab('rep_sales')}
-                  className="group text-right bg-white hover:bg-indigo-50/60 p-4 sm:p-7 rounded-2xl sm:rounded-3xl border border-slate-200 hover:border-indigo-500 shadow-xs hover:shadow-md transition-all duration-200 flex sm:flex-col justify-between items-center sm:items-stretch gap-4 sm:gap-5 active:scale-[0.98]"
+                  className="group bg-white hover:bg-indigo-50/70 p-6 sm:p-8 rounded-3xl border-2 border-slate-200 hover:border-indigo-500 shadow-sm hover:shadow-lg transition-all duration-200 flex flex-col justify-between items-stretch gap-5 active:scale-[0.98] text-right"
                 >
-                  <div className="flex sm:flex-col items-center sm:items-start gap-3.5 sm:gap-4 flex-1">
-                    <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0 group-hover:scale-105 transition-transform">
-                      <Store size={24} className="sm:hidden" />
-                      <Store size={28} className="hidden sm:block" />
+                  <div className="flex flex-col items-start gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                      <Store size={30} />
                     </div>
                     <div>
-                      <h3 className="text-base sm:text-lg font-black text-slate-900 group-hover:text-indigo-600 transition-colors">
+                      <h3 className="text-lg sm:text-xl font-black text-slate-900 group-hover:text-indigo-600 transition-colors">
                         فرۆشتن
                       </h3>
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-1 sm:line-clamp-2">
+                      <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed">
                         خشتەی هەفتانەی سەردان، فرۆشی کاشڤان و قەرز
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between sm:pt-3 sm:border-t sm:border-slate-100 text-indigo-600 font-bold text-xs shrink-0">
-                    <span className="hidden sm:inline">چوونە ژوورەوە</span>
-                    <div className="p-2 sm:p-0 bg-indigo-50 sm:bg-transparent rounded-xl">
-                      <ChevronLeft size={18} className="group-hover:-translate-x-1 transition-transform text-indigo-700 sm:text-indigo-600" />
+                  <div className="flex items-center justify-between pt-4 border-t border-slate-100 text-indigo-600 font-bold text-xs sm:text-sm">
+                    <span>چوونە ناو فرۆشتن</span>
+                    <div className="p-2 bg-indigo-50 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition">
+                      <ChevronLeft size={18} className="group-hover:-translate-x-0.5 transition-transform" />
                     </div>
                   </div>
                 </button>
@@ -213,26 +212,25 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
                 <button
                   type="button"
                   onClick={() => setActiveTab('rep_sales_info')}
-                  className="group text-right bg-white hover:bg-emerald-50/60 p-4 sm:p-7 rounded-2xl sm:rounded-3xl border border-slate-200 hover:border-emerald-500 shadow-xs hover:shadow-md transition-all duration-200 flex sm:flex-col justify-between items-center sm:items-stretch gap-4 sm:gap-5 active:scale-[0.98]"
+                  className="group bg-white hover:bg-emerald-50/70 p-6 sm:p-8 rounded-3xl border-2 border-slate-200 hover:border-emerald-500 shadow-sm hover:shadow-lg transition-all duration-200 flex flex-col justify-between items-stretch gap-5 active:scale-[0.98] text-right"
                 >
-                  <div className="flex sm:flex-col items-center sm:items-start gap-3.5 sm:gap-4 flex-1">
-                    <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs shrink-0 group-hover:scale-105 transition-transform">
-                      <FileText size={24} className="sm:hidden" />
-                      <FileText size={28} className="hidden sm:block" />
+                  <div className="flex flex-col items-start gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                      <FileText size={30} />
                     </div>
                     <div>
-                      <h3 className="text-base sm:text-lg font-black text-slate-900 group-hover:text-emerald-600 transition-colors">
+                      <h3 className="text-lg sm:text-xl font-black text-slate-900 group-hover:text-emerald-600 transition-colors">
                         زانیاری لەسەر فرۆشەکان
                       </h3>
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-1 sm:line-clamp-2">
+                      <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed">
                         کۆی فرۆش بە کارتۆن و بڕی فرۆشتن بە پارە
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between sm:pt-3 sm:border-t sm:border-slate-100 text-emerald-600 font-bold text-xs shrink-0">
-                    <span className="hidden sm:inline">بینینی ڕاپۆرت</span>
-                    <div className="p-2 sm:p-0 bg-emerald-50 sm:bg-transparent rounded-xl">
-                      <ChevronLeft size={18} className="group-hover:-translate-x-1 transition-transform text-emerald-700 sm:text-emerald-600" />
+                  <div className="flex items-center justify-between pt-4 border-t border-slate-100 text-emerald-600 font-bold text-xs sm:text-sm">
+                    <span>بینینی ڕاپۆرت و ئامار</span>
+                    <div className="p-2 bg-emerald-50 rounded-xl group-hover:bg-emerald-600 group-hover:text-white transition">
+                      <ChevronLeft size={18} className="group-hover:-translate-x-0.5 transition-transform" />
                     </div>
                   </div>
                 </button>
@@ -241,26 +239,25 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
                 <button
                   type="button"
                   onClick={() => setActiveTab('rep_cashvan_preorder')}
-                  className="group text-right bg-white hover:bg-amber-50/60 p-4 sm:p-7 rounded-2xl sm:rounded-3xl border border-slate-200 hover:border-amber-500 shadow-xs hover:shadow-md transition-all duration-200 flex sm:flex-col justify-between items-center sm:items-stretch gap-4 sm:gap-5 active:scale-[0.98]"
+                  className="group bg-white hover:bg-amber-50/70 p-6 sm:p-8 rounded-3xl border-2 border-slate-200 hover:border-amber-500 shadow-sm hover:shadow-lg transition-all duration-200 flex flex-col justify-between items-stretch gap-5 active:scale-[0.98] text-right"
                 >
-                  <div className="flex sm:flex-col items-center sm:items-start gap-3.5 sm:gap-4 flex-1">
-                    <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-amber-600 text-white flex items-center justify-center shadow-xs shrink-0 group-hover:scale-105 transition-transform">
-                      <Send size={24} className="sm:hidden" />
-                      <Send size={28} className="hidden sm:block" />
+                  <div className="flex flex-col items-start gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-amber-600 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                      <Send size={30} />
                     </div>
                     <div>
-                      <h3 className="text-base sm:text-lg font-black text-slate-900 group-hover:text-amber-600 transition-colors">
+                      <h3 className="text-lg sm:text-xl font-black text-slate-900 group-hover:text-amber-600 transition-colors">
                         تەڵەبیەی پێشوەختەی کاشڤان
                       </h3>
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-1 sm:line-clamp-2">
+                      <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed">
                         داواکردنی پێشوەختەی کاڵا لە کۆگای سەرەکی
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between sm:pt-3 sm:border-t sm:border-slate-100 text-amber-600 font-bold text-xs shrink-0">
-                    <span className="hidden sm:inline">داواکردن لە کۆگا</span>
-                    <div className="p-2 sm:p-0 bg-amber-50 sm:bg-transparent rounded-xl">
-                      <ChevronLeft size={18} className="group-hover:-translate-x-1 transition-transform text-amber-700 sm:text-amber-600" />
+                  <div className="flex items-center justify-between pt-4 border-t border-slate-100 text-amber-600 font-bold text-xs sm:text-sm">
+                    <span>داواکردن بۆ ناو ڤان</span>
+                    <div className="p-2 bg-amber-50 rounded-xl group-hover:bg-amber-600 group-hover:text-white transition">
+                      <ChevronLeft size={18} className="group-hover:-translate-x-0.5 transition-transform" />
                     </div>
                   </div>
                 </button>

@@ -883,124 +883,218 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
         </div>
       )}
 
-      {/* TAB 2: Requisitions / Pre-Orders to Warehouse */}
+      {/* TAB 2: Requisitions / Pre-Orders to Warehouse with INLINE + and - Steppers */}
       {activeTab === 'preorder' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Warehouse Items List */}
-          <div className="bg-white p-5 sm:p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
-              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-                <Send className="text-indigo-600" size={18} />
-                کاڵاکانی کۆگای سەرەکی (داواکردن بۆ ڤان)
+        <div className="space-y-5 pb-32">
+          {/* Header & Search */}
+          <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm sm:text-base flex items-center gap-2">
+                <Send className="text-indigo-600" size={20} />
+                داواکردنی کاڵا لە کۆگای سەرەکی بۆ بارکردن لە ڤان
               </h3>
-              <div className="relative w-full sm:w-52">
-                <input
-                  type="text"
-                  placeholder="گەڕان بۆ کاڵا..."
-                  className="w-full pl-3 pr-8 py-1.5 border border-slate-200 rounded-xl outline-none text-xs"
-                  value={preOrderSearch}
-                  onChange={(e) => setPreOrderSearch(e.target.value)}
-                />
-                <Search className="absolute right-2.5 top-2 text-slate-400" size={14} />
-              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                ڕاستەوخۆ لە ڕێگەی نیشانەکانی <strong className="text-indigo-600 font-bold">+</strong> و <strong className="text-indigo-600 font-bold">-</strong> بڕی داواکاری دیاری بکە
+              </p>
             </div>
 
-            <div className="max-h-[420px] overflow-y-auto space-y-2 flex-1 pr-1">
-              {filteredWarehouseItems.map(item => {
-                const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
-                const itemPrice = defaultUnit === 'packet' 
-                  ? (item.packetSellingPrice || item.packetCostPrice || item.sellingPrice || item.price || 0)
-                  : (item.cartonSellingPrice || item.cartonCostPrice || item.sellingPrice || item.price || 0);
-
-                return (
-                  <div key={item.id} className="p-3 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200/70 flex justify-between items-center transition">
-                    <div>
-                      <div className="font-bold text-xs text-slate-800">{item.name}</div>
-                      <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
-                        <span>لە کۆگا: <strong className="text-emerald-700">{item.quantity || 0} {defaultUnit === 'packet' ? 'پاکەت' : 'کارتۆن'}</strong></span>
-                        <span className="text-slate-300">•</span>
-                        <span>نرخ: <strong className="text-indigo-600 font-mono" dir="ltr">{itemPrice.toLocaleString()} د.ع</strong></span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => addPreOrderItem(item)}
-                      className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs"
-                    >
-                      <Plus size={14} />
-                      داواکردن
-                    </button>
-                  </div>
-                );
-              })}
-
-              {filteredWarehouseItems.length === 0 && (
-                <div className="text-center py-10 text-slate-400 text-xs">
-                  هیچ کاڵایەک نەدۆزرایەوە لە کۆگا
-                </div>
-              )}
+            <div className="relative w-full sm:w-72">
+              <input
+                type="text"
+                placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
+                className="w-full pl-3 pr-8 py-2 border border-slate-200 bg-slate-50 focus:bg-white rounded-xl outline-none focus:border-indigo-500 text-xs transition"
+                value={preOrderSearch}
+                onChange={(e) => setPreOrderSearch(e.target.value)}
+              />
+              <Search className="absolute right-2.5 top-2.5 text-slate-400" size={15} />
             </div>
           </div>
 
-          {/* Pre-Order Cart */}
-          <div className="bg-white p-5 sm:p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between">
-            <div className="space-y-4">
-              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-2">
-                <ClipboardList className="text-indigo-600" size={18} />
-                لیستی تەڵەبیە بۆ بارکردن لە کۆگا
-              </h3>
+          {/* Grid of Warehouse Items with Direct + and - Controls */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
+            {filteredWarehouseItems.map(item => {
+              const cartEntry = preOrderCart.find(c => c.item.id === item.id);
+              const currentQty = cartEntry ? cartEntry.quantity : 0;
+              const currentUnit = cartEntry ? cartEntry.unit : (item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton');
+              const itemPrice = currentUnit === 'packet'
+                ? (item.packetSellingPrice || item.packetCostPrice || item.sellingPrice || item.price || 0)
+                : (item.cartonSellingPrice || item.cartonCostPrice || item.sellingPrice || item.price || 0);
+              const subtotal = currentQty * itemPrice;
 
-              <div className="max-h-[280px] overflow-y-auto space-y-2">
-                {preOrderCart.map(c => (
-                  <div key={c.item.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
-                    <div className="font-bold text-slate-800 flex-1 truncate pr-2">{c.item.name}</div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        className="px-2 py-1 border border-slate-300 rounded-lg text-xs bg-white font-bold text-slate-700 outline-none"
-                        value={c.unit}
-                        onChange={(e) => updatePreOrderQty(c.item.id, c.quantity, e.target.value as 'carton' | 'packet')}
-                      >
-                        <option value="carton">کارتۆن</option>
-                        <option value="packet">پاکەت</option>
-                      </select>
-                      <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden">
-                        <button onClick={() => updatePreOrderQty(c.item.id, c.quantity - 1)} className="px-2 py-0.5 text-xs font-bold">-</button>
-                        <span className="w-8 text-center font-bold font-mono text-xs">{c.quantity}</span>
-                        <button onClick={() => updatePreOrderQty(c.item.id, c.quantity + 1)} className="px-2 py-0.5 text-xs font-bold">+</button>
-                      </div>
+              return (
+                <div
+                  key={item.id}
+                  className={`p-4 rounded-2xl transition-all duration-150 flex flex-col justify-between ${
+                    currentQty > 0
+                      ? 'bg-indigo-50/40 border-2 border-indigo-500 shadow-sm'
+                      : 'bg-white border border-slate-200 hover:border-slate-300 shadow-2xs'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <h4 className="font-bold text-sm text-slate-900 line-clamp-2 leading-snug">
+                        {item.name}
+                      </h4>
+                      {currentQty > 0 && (
+                        <span className="bg-indigo-600 text-white text-[11px] font-mono px-2 py-0.5 rounded-full font-bold shrink-0">
+                          {currentQty} {currentUnit === 'packet' ? 'پاکەت' : 'کارتۆن'}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
+                      <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg">
+                        لە کۆگا: <strong className="text-emerald-700 font-mono">{item.quantity || 0}</strong>
+                      </span>
+                      {item.barcode && (
+                        <span className="text-[10px] text-slate-400 font-mono" dir="ltr">
+                          {item.barcode}
+                        </span>
+                      )}
                     </div>
                   </div>
-                ))}
 
-                {preOrderCart.length === 0 && (
-                  <div className="text-center py-12 text-slate-400 text-xs">
-                    هیچ کاڵایەک بۆ تەڵەبیە دیاری نەکراوە
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-2">
+                    {/* Unit Selector & Price */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center bg-slate-100 p-0.5 rounded-lg text-[11px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (currentQty > 0) {
+                              updatePreOrderQty(item.id, currentQty, 'carton');
+                            }
+                          }}
+                          className={`px-2 py-1 rounded-md transition ${currentUnit === 'carton' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500'}`}
+                        >
+                          کارتۆن
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (currentQty > 0) {
+                              updatePreOrderQty(item.id, currentQty, 'packet');
+                            }
+                          }}
+                          className={`px-2 py-1 rounded-md transition ${currentUnit === 'packet' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500'}`}
+                        >
+                          پاکەت
+                        </button>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-xs font-bold text-slate-700 font-mono" dir="ltr">
+                          {itemPrice.toLocaleString()} د.ع
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Stepper / Add Button */}
+                    {currentQty === 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
+                          setPreOrderCart([...preOrderCart, { item, quantity: 1, unit: defaultUnit }]);
+                        }}
+                        className="w-full py-2 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border border-indigo-200 shadow-2xs"
+                      >
+                        <Plus size={15} />
+                        <span>داواکردن</span>
+                      </button>
+                    ) : (
+                      <div>
+                        <div className="flex items-center justify-between gap-1.5 bg-white border border-indigo-300 rounded-xl p-1 shadow-2xs">
+                          <button
+                            type="button"
+                            onClick={() => updatePreOrderQty(item.id, currentQty - 1, currentUnit)}
+                            className="w-8 h-8 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm transition active:scale-95"
+                            title="کەمکردنەوە"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="1"
+                            value={currentQty}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value);
+                              if (!isNaN(val)) {
+                                updatePreOrderQty(item.id, val, currentUnit);
+                              }
+                            }}
+                            className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updatePreOrderQty(item.id, currentQty + 1, currentUnit)}
+                            className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
+                            title="زیادکردن"
+                          >
+                            +
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] font-bold text-indigo-900 mt-1 px-1">
+                          <span>کۆی بەها:</span>
+                          <span className="font-mono text-indigo-700" dir="ltr">{subtotal.toLocaleString()} د.ع</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
+              );
+            })}
+
+            {filteredWarehouseItems.length === 0 && (
+              <div className="col-span-full py-16 text-center text-slate-400 text-xs font-bold bg-white rounded-3xl border border-slate-200">
+                هیچ کاڵایەک نەدۆزرایەوە لە کۆگای سەرەکی
+              </div>
+            )}
+          </div>
+
+          {/* Sticky Checkout Summary Bar */}
+          <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 p-3 sm:p-4 shadow-xl">
+            <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between md:justify-start gap-4">
+                <div>
+                  <div className="text-[11px] text-slate-400 font-bold">کۆی خەمڵێنراوی داواکاری:</div>
+                  <div className="text-base sm:text-lg font-bold font-mono text-indigo-600" dir="ltr">
+                    {preOrderCart.reduce((acc, c) => {
+                      const p = c.unit === 'packet'
+                        ? (c.item.packetSellingPrice || c.item.packetCostPrice || c.item.sellingPrice || c.item.price || 0)
+                        : (c.item.cartonSellingPrice || c.item.cartonCostPrice || c.item.sellingPrice || c.item.price || 0);
+                      return acc + (c.quantity * p);
+                    }, 0).toLocaleString()} د.ع
+                  </div>
+                </div>
+                <div className="h-7 w-px bg-slate-200 hidden sm:block"></div>
+                <div className="text-xs font-bold text-slate-600">
+                  <span className="text-indigo-700">{preOrderCart.length} جۆر کاڵا</span>
+                  <span className="text-slate-400 mr-1.5">
+                    ({preOrderCart.reduce((acc, c) => acc + c.quantity, 0)} دانە)
+                  </span>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">تێبینی بۆ کارمەندی کۆگا (ئارەزوومەندانە)</label>
-                <textarea
-                  rows={2}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
-                  placeholder="بۆ نموونە: بەیانی کاتژمێر ٨ دەگەمە کۆگا..."
+              <div className="flex items-center gap-2 flex-1 md:max-w-md">
+                <input
+                  type="text"
+                  placeholder="تێبینی بۆ کۆگا (ئارەزوومەندانە)..."
                   value={preOrderNotes}
                   onChange={(e) => setPreOrderNotes(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-indigo-500 bg-slate-50 focus:bg-white"
                 />
+                <button
+                  type="button"
+                  onClick={handleSendPreOrder}
+                  disabled={preOrderCart.length === 0 || isProcessing}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition disabled:opacity-50 active:scale-95 whitespace-nowrap"
+                >
+                  <Send size={15} />
+                  <span>{isProcessing ? 'خەریکی ناردنە...' : 'ناردنی تەڵەبیە بۆ کۆگا'}</span>
+                </button>
               </div>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={handleSendPreOrder}
-                disabled={preOrderCart.length === 0 || isProcessing}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition disabled:opacity-50"
-              >
-                <Send size={16} />
-                <span>{isProcessing ? 'خەریکی ناردنە...' : 'ناردنی تەڵەبیە بۆ بارکردن لە کۆگا'}</span>
-              </button>
             </div>
           </div>
         </div>

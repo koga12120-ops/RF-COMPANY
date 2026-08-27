@@ -24,6 +24,7 @@ export interface MarketDailyScheduleCardProps {
   onSelectForOrder: (market: Market) => void;
   onSelectForCashvan?: (market: Market) => void;
   onSelectForDebtPay: (market: Market, debtAmount: number) => void;
+  onOpenMarketActions?: (market: Market, debt: number, isVisited: boolean) => void;
   marketDebtMap?: Map<string, number>;
 }
 
@@ -53,6 +54,7 @@ export default function MarketDailyScheduleCard({
   onSelectForOrder,
   onSelectForCashvan,
   onSelectForDebtPay,
+  onOpenMarketActions,
   marketDebtMap
 }: MarketDailyScheduleCardProps) {
   const [repDocId, setRepDocId] = useState<string | null>(null);
@@ -454,7 +456,13 @@ export default function MarketDailyScheduleCard({
                 {/* End Column: 3-Dots Action Menu Pill Button */}
                 <button
                   type="button"
-                  onClick={() => setActionMarket({ market, isVisited, debt })}
+                  onClick={() => {
+                    if (onOpenMarketActions) {
+                      onOpenMarketActions(market, debt, isVisited);
+                    } else {
+                      setActionMarket({ market, isVisited, debt });
+                    }
+                  }}
                   className="w-9 h-12 rounded-xl bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 flex flex-col items-center justify-center gap-1 transition active:scale-95 shadow-2xs shrink-0 border border-slate-200"
                   title="مینیوی کارەکان"
                 >
@@ -503,7 +511,7 @@ export default function MarketDailyScheduleCard({
             </div>
 
             {/* Action Options */}
-            <div className="p-3 sm:p-4 space-y-2.5 overflow-y-auto">
+            <div className="p-3 sm:p-4 space-y-2 overflow-y-auto">
               {/* Option 1: تەڵەبییە */}
               <button
                 onClick={() => {
@@ -511,14 +519,14 @@ export default function MarketDailyScheduleCard({
                   setActionMarket(null);
                   onSelectForOrder(m);
                 }}
-                className="w-full p-3.5 bg-indigo-50/70 hover:bg-indigo-100 text-slate-900 rounded-2xl flex items-center gap-3 transition border border-indigo-100 text-right active:scale-98"
+                className="w-full p-2.5 bg-indigo-50/70 hover:bg-indigo-100 text-slate-900 rounded-xl flex items-center gap-2.5 transition border border-indigo-100 text-right active:scale-98"
               >
-                <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-xs shrink-0">
-                  <ShoppingCart size={20} />
+                <div className="p-2 bg-indigo-600 text-white rounded-lg shadow-xs shrink-0">
+                  <ShoppingCart size={16} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-sm text-indigo-950">١. تەڵەبییە (داواکاری مەندووب)</div>
-                  <div className="text-xs text-slate-500 mt-0.5">تۆمارکردنی داواکاری کاڵا بە قەرز یان نەقد</div>
+                  <div className="font-bold text-xs sm:text-sm text-indigo-950">١. تەڵەبییە (داواکاری مەندووب)</div>
+                  <div className="text-[11px] text-slate-500 truncate">تۆمارکردنی داواکاری کاڵاکانی کۆگا</div>
                 </div>
               </button>
 
@@ -533,14 +541,14 @@ export default function MarketDailyScheduleCard({
                     onSelectForOrder(m);
                   }
                 }}
-                className="w-full p-3.5 bg-amber-50/70 hover:bg-amber-100 text-slate-900 rounded-2xl flex items-center gap-3 transition border border-amber-100 text-right active:scale-98"
+                className="w-full p-2.5 bg-amber-50/70 hover:bg-amber-100 text-slate-900 rounded-xl flex items-center gap-2.5 transition border border-amber-100 text-right active:scale-98"
               >
-                <div className="p-2.5 bg-amber-600 text-white rounded-xl shadow-xs shrink-0">
-                  <Truck size={20} />
+                <div className="p-2 bg-amber-600 text-white rounded-lg shadow-xs shrink-0">
+                  <Truck size={16} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-sm text-amber-950">٢. کاشڤان (فرۆشتنی ڕاستەوخۆ)</div>
-                  <div className="text-xs text-slate-500 mt-0.5">فرۆشتن لە کاڵاکانی ناو ڤان بە نەقد یان قەرز</div>
+                  <div className="font-bold text-xs sm:text-sm text-amber-950">٢. کاشڤان (فرۆشتنی ڕاستەوخۆ)</div>
+                  <div className="text-[11px] text-slate-500 truncate">فرۆشتن لە کاڵاکانی ناو ڤان</div>
                 </div>
               </button>
 
@@ -552,14 +560,14 @@ export default function MarketDailyScheduleCard({
                   setActionMarket(null);
                   onSelectForDebtPay(m, d);
                 }}
-                className="w-full p-3.5 bg-emerald-50/70 hover:bg-emerald-100 text-slate-900 rounded-2xl flex items-center gap-3 transition border border-emerald-100 text-right active:scale-98"
+                className="w-full p-2.5 bg-emerald-50/70 hover:bg-emerald-100 text-slate-900 rounded-xl flex items-center gap-2.5 transition border border-emerald-100 text-right active:scale-98"
               >
-                <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs shrink-0">
-                  <CreditCard size={20} />
+                <div className="p-2 bg-emerald-600 text-white rounded-lg shadow-xs shrink-0">
+                  <CreditCard size={16} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-sm text-emerald-950">٣. دانەوەی قەرزی مارکێت</div>
-                  <div className="text-xs text-slate-500 mt-0.5">وەرگرتنەوەی قەرز و چاپکردنی پسوڵەی وەرگرتن</div>
+                  <div className="font-bold text-xs sm:text-sm text-emerald-950">٣. دانەوەی قەرزی مارکێت</div>
+                  <div className="text-[11px] text-slate-500 truncate">وەرگرتنەوەی قەرز و پسوڵە</div>
                 </div>
               </button>
 
@@ -569,17 +577,17 @@ export default function MarketDailyScheduleCard({
                   handleToggleVisit(actionMarket.market.id, actionMarket.isVisited, e);
                   setActionMarket(null);
                 }}
-                className="w-full p-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-2xl flex items-center justify-between transition border border-slate-200 text-right active:scale-98"
+                className="w-full p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl flex items-center justify-between transition border border-slate-200 text-right active:scale-98"
               >
-                <div className="flex items-center gap-3">
-                  <div className={`p-2.5 rounded-xl shrink-0 ${actionMarket.isVisited ? 'bg-emerald-600 text-white' : 'bg-slate-300 text-slate-700'}`}>
-                    <CheckCircle2 size={20} />
+                <div className="flex items-center gap-2.5">
+                  <div className={`p-2 rounded-lg shrink-0 ${actionMarket.isVisited ? 'bg-emerald-600 text-white' : 'bg-slate-300 text-slate-700'}`}>
+                    <CheckCircle2 size={16} />
                   </div>
                   <div>
-                    <div className="font-bold text-sm text-slate-900">
+                    <div className="font-bold text-xs sm:text-sm text-slate-900">
                       {actionMarket.isVisited ? 'نیشانکردن وەک سەردان نەکراو' : '٤. وەک سەردانیکراو نیشانی بدە'}
                     </div>
-                    <div className="text-xs text-slate-500 mt-0.5">گۆڕینی دۆخی سەردان لە خشتەی ئەمڕۆدا</div>
+                    <div className="text-[11px] text-slate-500">گۆڕینی دۆخی سەردان</div>
                   </div>
                 </div>
               </button>
