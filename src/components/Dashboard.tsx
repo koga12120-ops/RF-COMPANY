@@ -145,10 +145,13 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
 
   const menu = role === 'admin' ? adminMenu : role === 'warehouse' ? warehouseMenu : repMenu;
 
-  // Initialize active tab if empty or obsolete (For admin and warehouse, default to first tab; For sales_rep, keep empty so they land on the 3-button board)
-  if (!activeTab && menu.length > 0 && role !== 'sales_rep') {
+  const isStaffRep = role === 'sales_rep' || role === 'cashvan';
+  const isAdminOrWarehouse = role === 'admin' || role === 'warehouse';
+
+  // Initialize active tab if empty or obsolete (For admin and warehouse, default to first tab; For sales_rep and cashvan, keep empty so they land on the 3-button board)
+  if (!activeTab && menu.length > 0 && isAdminOrWarehouse) {
     setActiveTab(menu[0].id);
-  } else if (role === 'sales_rep' && (activeTab === 'orders' || activeTab === 'cashvan_sales')) {
+  } else if (isStaffRep && (activeTab === 'orders' || activeTab === 'cashvan_sales')) {
     setActiveTab(activeTab === 'cashvan_sales' ? 'rep_cashvan_preorder' : 'rep_sales');
   }
 
@@ -157,7 +160,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       case 'inventory': return <InventoryView role={role} />;
       case 'admin_cashvan': return <AdminCashvanView />;
       case 'warehouse_cashvan': return <WarehouseCashvanView />;
-      case 'cashvan_sales': return <CashvanSalesView onlyPreorder={role === 'sales_rep'} />;
+      case 'cashvan_sales': return <CashvanSalesView onlyPreorder={isStaffRep} />;
       case 'rep_schedule': return <RepScheduleView />;
       case 'stock_history': return <StockHistoryView />;
       case 'companies_group': return <CompaniesGroupView />;
@@ -176,9 +179,9 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       }} />;
       case 'rep_cashvan_preorder': return <CashvanSalesView onlyPreorder={true} />;
       default: {
-        if (role === 'sales_rep') {
+        if (isStaffRep) {
           return (
-            <div className="max-w-5xl mx-auto py-5 sm:py-10 px-4 sm:px-6">
+            <div className="max-w-5xl mx-auto py-4 sm:py-8 px-3 sm:px-6">
               {/* 3 Main Action Cards - Large, prominent and beautiful on all devices including iOS/Mobile */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                 {/* 1. فرۆشتن */}
@@ -281,7 +284,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       )}
 
       {/* For Admin and Warehouse: Desktop Header */}
-      {role !== 'sales_rep' && (
+      {isAdminOrWarehouse && (
         <header className="hidden lg:flex h-16 bg-white border-b border-slate-200 items-center justify-between px-6 shrink-0 z-10">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-slate-200 bg-white">
@@ -338,7 +341,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       )}
 
       {/* For Admin and Warehouse: Mobile header */}
-      {role !== 'sales_rep' && (
+      {isAdminOrWarehouse && (
         <header className="lg:hidden bg-white shadow-sm border-b px-4 py-3 flex items-center justify-between z-10 shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg overflow-hidden shrink-0 border border-slate-200 bg-white">
@@ -391,77 +394,50 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       )}
 
       {/* For Sales Rep and Cashvan: Dedicated Top Button Navigation Bar (No Menu/Drawer needed!) */}
-      {role === 'sales_rep' && (
+      {isStaffRep && (
         <header className="bg-white border-b border-slate-200 px-4 py-3 shrink-0 z-20 shadow-2xs">
-          <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="max-w-7xl mx-auto flex flex-row items-center justify-between gap-3">
             {/* Logo & Info */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl overflow-hidden shrink-0 border border-slate-200 bg-white">
-                  <img src="/LOGO1.jpg" alt="Logo" className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = 'none'} />
-                </div>
-                <div>
-                  <h1 className="text-sm font-black text-slate-800 leading-tight">کۆمپانیای RF</h1>
-                  <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
-                    سیستەمی مەندووب و کاشڤان
-                  </span>
-                </div>
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl overflow-hidden shrink-0 border border-slate-200 bg-white">
+                <img src="/LOGO1.jpg" alt="Logo" className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = 'none'} />
               </div>
-
-              {/* Theme & Logout on Mobile */}
-              <div className="flex md:hidden items-center gap-2">
-                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-full border border-slate-200">
-                  <button onClick={() => setTheme('light')} className={`w-4 h-4 rounded-full ${theme === 'light' ? 'ring-2 ring-indigo-500' : ''} bg-white`} />
-                  <button onClick={() => setTheme('dark')} className={`w-4 h-4 rounded-full ${theme === 'dark' ? 'ring-2 ring-indigo-500' : ''} bg-slate-800`} />
-                  <button onClick={() => setTheme('sepia')} className={`w-4 h-4 rounded-full ${theme === 'sepia' ? 'ring-2 ring-indigo-500' : ''} bg-[#fef3c7]`} />
-                </div>
-                <button
-                  onClick={onLogout}
-                  className="p-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-xs font-bold flex items-center gap-1"
-                  title="چوونەدەرەوە"
-                >
-                  <LogOut size={16} />
-                </button>
+              <div>
+                <h1 className="text-sm font-black text-slate-800 leading-tight">کۆمپانیای RF</h1>
+                <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
+                  سیستەمی مەندووب و کاشڤان
+                </span>
               </div>
             </div>
 
-            {/* Header Center: Back button & Current view title when inside a section */}
-            {activeTab ? (
-              <div className="flex items-center gap-2">
+            {/* Header Center / Action Buttons */}
+            <div className="flex items-center gap-2">
+              {activeTab ? (
                 <button
                   type="button"
                   onClick={() => setActiveTab('')}
-                  className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl font-bold text-xs sm:text-sm transition-all border border-indigo-200 flex items-center gap-1.5 shadow-2xs"
+                  className="px-3 py-1.5 sm:px-3.5 sm:py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
                 >
-                  <ChevronLeft size={16} className="rotate-180 text-indigo-600" />
-                  <span>گەڕانەوە بۆ سەرەکی</span>
+                  <Home size={15} />
+                  <span>پەڕەی سەرەکی</span>
                 </button>
-                <div className="hidden sm:flex items-center gap-1 text-xs font-bold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
-                  <span>بەشی چالاک:</span>
-                  <span className="text-slate-800 font-black">
-                    {repMenu.find(m => m.id === activeTab)?.label || ''}
-                  </span>
+              ) : (
+                <div className="text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl hidden sm:block">
+                  پەڕەی سەرەکی
                 </div>
-              </div>
-            ) : (
-              <div />
-            )}
+              )}
 
-            {/* Desktop Actions */}
-            <div className="hidden md:flex items-center gap-3">
-              <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-full border border-slate-200">
-                <button onClick={() => setTheme('light')} className={`w-5 h-5 rounded-full border-2 ${theme === 'light' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-white`} title="سپی" />
-                <button onClick={() => setTheme('dark')} className={`w-5 h-5 rounded-full border-2 ${theme === 'dark' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-slate-800`} title="ڕەش" />
-                <button onClick={() => setTheme('sepia')} className={`w-5 h-5 rounded-full border-2 ${theme === 'sepia' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-[#fef3c7]`} title="زەردباو" />
+              {/* Theme & Logout */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={onLogout}
+                  className="px-2.5 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-xs font-bold flex items-center gap-1 transition"
+                  title="چوونەدەرەوە"
+                >
+                  <LogOut size={15} />
+                  <span className="hidden sm:inline">چوونەدەرەوە</span>
+                </button>
               </div>
-
-              <button
-                onClick={onLogout}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition"
-              >
-                <LogOut size={16} />
-                <span>چوونەدەرەوە</span>
-              </button>
             </div>
           </div>
         </header>
@@ -469,7 +445,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar (Only for Admin & Warehouse) */}
-        {role !== 'sales_rep' && (
+        {isAdminOrWarehouse && (
           <aside className={`
             fixed lg:static inset-y-0 right-0 z-30 w-64 bg-white border-l border-slate-200 flex flex-col p-4 gap-2 transition-transform duration-300
             ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}

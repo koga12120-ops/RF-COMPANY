@@ -1115,6 +1115,22 @@ export default function OrdersView({
             </div>
           </div>
         </div>
+
+        {/* Simple Market Debt Payment Modal for Rep / Staff */}
+        <SimpleMarketDebtPayModal
+          isOpen={isSimpleDebtModalOpen}
+          onClose={() => {
+            setIsSimpleDebtModalOpen(false);
+            setDebtTargetMarket('');
+            setDebtTargetMarketObj(null);
+            setDebtTargetAmount(0);
+          }}
+          marketName={debtTargetMarket}
+          market={debtTargetMarketObj}
+          currentDebt={debtTargetAmount || (marketDebtMap.get(debtTargetMarket) || 0)}
+          collectorName={repName || (role === 'sales_rep' ? 'مەندووب' : 'کارمەند')}
+          repId={auth.currentUser?.uid}
+        />
       </div>
     );
   }
