@@ -58,10 +58,25 @@ export default function WarehouseOrdersView() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Rep Order Details Modal & Fulfillment
+  // Rep Order Details Modal, Edit & Fulfillment
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null);
   const [fulfillingOrder, setFulfillingOrder] = useState<Order | null>(null);
   const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [editOrderItems, setEditOrderItems] = useState<{
+    itemId: string;
+    name: string;
+    quantity: number;
+    giftQuantity?: number;
+    unit: 'carton' | 'packet';
+    price: number;
+    totalPrice: number;
+    isGift?: boolean;
+  }[]>([]);
+  const [editOrderMarketName, setEditOrderMarketName] = useState('');
+  const [editOrderRepName, setEditOrderRepName] = useState('');
+  const [editOrderPaymentType, setEditOrderPaymentType] = useState<'cash' | 'debt'>('debt');
+  const [editOrderSearchTerm, setEditOrderSearchTerm] = useState('');
   const [repOrderFilter, setRepOrderFilter] = useState<'all' | 'pending' | 'completed'>('all');
   const [repOrderSearch, setRepOrderSearch] = useState('');
 
@@ -303,9 +318,10 @@ export default function WarehouseOrdersView() {
         }
       }
 
-      // Mark order as completed
+      // Mark order as completed & accepted by warehouse
       await updateDoc(doc(db, 'orders', order.id), {
         status: 'completed',
+        acceptedByWarehouse: true,
         fulfilledAt: Date.now()
       });
 
@@ -314,6 +330,188 @@ export default function WarehouseOrdersView() {
     } catch (err) {
       console.error(err);
       alert('هەڵەیەک ڕوویدا لە ئامادەکردنی تەڵەبیە');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Start Editing Rep Order
+  const handleStartEditOrder = (order: Order) => {
+    setEditingOrder(order);
+    setEditOrderMarketName(order.marketName || '');
+    setEditOrderRepName(order.repName || '');
+    setEditOrderPaymentType(order.paymentStatus || order.paymentType || 'debt');
+    setEditOrderItems(
+      (order.items || []).map((it) => ({
+        itemId: it.itemId,
+        name: it.name,
+        quantity: it.quantity || 0,
+        giftQuantity: it.giftQuantity || 0,
+        unit: it.unit || 'carton',
+        price: it.price || 0,
+        totalPrice: it.totalPrice || ((it.quantity || 0) * (it.price || 0)),
+        isGift: !!it.isGift
+      }))
+    );
+    setEditOrderSearchTerm('');
+  };
+
+  // Add Item to Edit Order
+  const handleAddItemToEditOrder = (item: Item) => {
+    const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
+    const defaultPrice = defaultUnit === 'packet'
+      ? (item.packetSellingPrice || item.sellingPrice || 0)
+      : (item.cartonSellingPrice || item.sellingPrice || 0);
+
+    const existingIdx = editOrderItems.findIndex((it) => it.itemId === item.id && it.unit === defaultUnit);
+    if (existingIdx >= 0) {
+      setEditOrderItems((prev) =>
+        prev.map((it, idx) => {
+          if (idx === existingIdx) {
+            const nextQty = it.quantity + 1;
+            return {
+              ...it,
+              quantity: nextQty,
+              totalPrice: nextQty * (it.price || 0)
+            };
+          }
+          return it;
+        })
+      );
+    } else {
+      setEditOrderItems((prev) => [
+        ...prev,
+        {
+          itemId: item.id,
+          name: item.name,
+          quantity: 1,
+          giftQuantity: 0,
+          unit: defaultUnit,
+          price: defaultPrice,
+          totalPrice: defaultPrice,
+          isGift: false
+        }
+      ]);
+    }
+  };
+
+  // Update Edit Order Item Qty
+  const handleUpdateEditOrderItemQty = (index: number, delta: number) => {
+    setEditOrderItems((prev) =>
+      prev
+        .map((it, idx) => {
+          if (idx === index) {
+            const nextQty = it.quantity + delta;
+            if (nextQty <= 0) return null;
+            return {
+              ...it,
+              quantity: nextQty,
+              totalPrice: nextQty * (it.price || 0)
+            };
+          }
+          return it;
+        })
+        .filter(Boolean) as any[]
+    );
+  };
+
+  // Update Edit Order Item Unit
+  const handleUpdateEditOrderItemUnit = (index: number, newUnit: 'carton' | 'packet') => {
+    setEditOrderItems((prev) =>
+      prev.map((it, idx) => {
+        if (idx === index) {
+          const matchingWarehouseItem = items.find((w) => w.id === it.itemId);
+          let newPrice = it.price;
+          if (matchingWarehouseItem) {
+            newPrice = newUnit === 'packet'
+              ? (matchingWarehouseItem.packetSellingPrice || matchingWarehouseItem.sellingPrice || 0)
+              : (matchingWarehouseItem.cartonSellingPrice || matchingWarehouseItem.sellingPrice || 0);
+          }
+          return {
+            ...it,
+            unit: newUnit,
+            price: newPrice,
+            totalPrice: it.quantity * newPrice
+          };
+        }
+        return it;
+      })
+    );
+  };
+
+  // Update Edit Order Item Price
+  const handleUpdateEditOrderItemPrice = (index: number, newPrice: number) => {
+    setEditOrderItems((prev) =>
+      prev.map((it, idx) => {
+        if (idx === index) {
+          return {
+            ...it,
+            price: newPrice,
+            totalPrice: it.quantity * newPrice
+          };
+        }
+        return it;
+      })
+    );
+  };
+
+  // Update Edit Order Gift Qty
+  const handleUpdateEditOrderItemGiftQty = (index: number, giftQty: number) => {
+    setEditOrderItems((prev) =>
+      prev.map((it, idx) => {
+        if (idx === index) {
+          return {
+            ...it,
+            giftQuantity: Math.max(0, giftQty),
+            isGift: giftQty > 0
+          };
+        }
+        return it;
+      })
+    );
+  };
+
+  // Remove Edit Order Item
+  const handleRemoveEditOrderItem = (index: number) => {
+    setEditOrderItems((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  // Save Edited Rep Order
+  const handleSaveEditedOrder = async () => {
+    if (!editingOrder) return;
+    if (editOrderItems.length === 0) {
+      alert('تکایە بەلایەنی کەم یەک کاڵا لە داواکارییەکە دابنێ');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const calculatedTotal = editOrderItems.reduce((sum, it) => sum + (it.totalPrice || (it.quantity * (it.price || 0))), 0);
+      
+      const payload: any = {
+        items: editOrderItems.map(it => ({
+          itemId: it.itemId,
+          name: it.name,
+          quantity: it.quantity,
+          giftQuantity: it.giftQuantity || 0,
+          unit: it.unit,
+          price: it.price,
+          totalPrice: it.totalPrice || (it.quantity * (it.price || 0)),
+          isGift: !!it.isGift
+        })),
+        totalAmount: calculatedTotal,
+        paymentStatus: editOrderPaymentType,
+        paymentType: editOrderPaymentType,
+        lastEditedAt: Date.now(),
+        lastEditedBy: 'warehouse'
+      };
+
+      await updateDoc(doc(db, 'orders', editingOrder.id), payload);
+      setEditingOrder(null);
+      alert('دەستکاریکردنی تەڵەبیە بە سەرکەوتوویی پاشەکەوت کرا');
+    } catch (err) {
+      console.error(err);
+      alert('هەڵەیەک ڕوویدا لە پاشەکەوتکردنی دەستکارییەکان');
     } finally {
       setIsProcessing(false);
     }
@@ -1176,6 +1374,15 @@ export default function WarehouseOrdersView() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => handleStartEditOrder(item.rawOrder!)}
+                          className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+                          title="دەستکاریکردنی تەڵەبیە"
+                        >
+                          <Edit2 size={14} />
+                          <span>دەستکاری</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => printRepOrderSlip(item.rawOrder!)}
                           className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
                           title="چاپکردنی وەسڵ"
@@ -1192,6 +1399,14 @@ export default function WarehouseOrdersView() {
                             <span>تەواوکردنی بار</span>
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => setDeletingOrder(item.rawOrder!)}
+                          className="p-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-bold transition"
+                          title="سڕینەوەی تەڵەبیە"
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </>
                     )}
 
@@ -1364,6 +1579,16 @@ export default function WarehouseOrdersView() {
                       >
                         <Eye size={14} />
                         <span>بینینی کاڵاکان</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleStartEditOrder(order)}
+                        className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+                        title="دەستکاریکردنی تەڵەبیە"
+                      >
+                        <Edit2 size={14} />
+                        <span>دەستکاری</span>
                       </button>
 
                       <button
@@ -1936,15 +2161,30 @@ export default function WarehouseOrdersView() {
               </div>
             </div>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center">
-              <button
-                type="button"
-                onClick={() => printRepOrderSlip(viewingOrder)}
-                className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
-              >
-                <Printer size={15} />
-                <span>چاپکردنی وەسڵ</span>
-              </button>
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-between items-center flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => printRepOrderSlip(viewingOrder)}
+                  className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+                >
+                  <Printer size={15} />
+                  <span>چاپکردنی وەسڵ</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ord = viewingOrder;
+                    setViewingOrder(null);
+                    handleStartEditOrder(ord);
+                  }}
+                  className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+                >
+                  <Edit2 size={15} />
+                  <span>دەستکاریکردنی تەڵەبیە</span>
+                </button>
+              </div>
 
               {viewingOrder.status !== 'completed' && (
                 <button
@@ -1960,6 +2200,274 @@ export default function WarehouseOrdersView() {
                   <span>ئامادەکرا و بارکرا (دابەزین لە کۆگا)</span>
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          MODAL: EDIT REP ORDER (دەستکاریکردنی تەڵەبیەی مەندووب)
+      ======================================================== */}
+      {editingOrder && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl border border-slate-200 max-h-[92vh] flex flex-col animate-in fade-in zoom-in-95">
+            <div className="p-5 bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 text-white flex justify-between items-center">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Edit2 size={18} className="text-indigo-400" />
+                  دەستکاریکردنی تەڵەبیەی: {editOrderMarketName}
+                </h3>
+                <div className="text-xs text-slate-300 mt-1 flex items-center gap-3">
+                  <span>مەندووب: <strong>{editOrderRepName || 'دیارینەکراو'}</strong></span>
+                  {editingOrder.invoiceNo && (
+                    <span className="font-mono bg-white/10 px-2 py-0.5 rounded">#{editingOrder.invoiceNo}</span>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingOrder(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-white/5 hover:bg-white/10 transition"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-5 flex-1 text-xs">
+              {/* Payment Type Switch */}
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <span className="font-bold text-slate-700">جۆری وەسڵ / پارەدان:</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditOrderPaymentType('debt')}
+                    className={`px-4 py-2 rounded-xl font-bold transition flex items-center gap-1.5 ${
+                      editOrderPaymentType === 'debt'
+                        ? 'bg-rose-600 text-white shadow-xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-200'
+                    }`}
+                  >
+                    <span>بە قەرز 💳</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditOrderPaymentType('cash')}
+                    className={`px-4 py-2 rounded-xl font-bold transition flex items-center gap-1.5 ${
+                      editOrderPaymentType === 'cash'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-200'
+                    }`}
+                  >
+                    <span>بە نەقد (کاش) 💵</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Order Items Table */}
+              <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white">
+                <div className="p-3 bg-slate-100 border-b border-slate-200 flex justify-between items-center font-bold text-slate-700">
+                  <span>کاڵاکانی ناو تەڵەبیە ({editOrderItems.length})</span>
+                  <span>کۆی گشتی عەدەد: {editOrderItems.reduce((s, i) => s + i.quantity, 0)}</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-bold">
+                      <tr>
+                        <th className="p-2.5">#</th>
+                        <th className="p-2.5 min-w-[140px]">ناوی کاڵا</th>
+                        <th className="p-2.5 text-center">یەکە</th>
+                        <th className="p-2.5 text-center min-w-[120px]">عەدەد</th>
+                        <th className="p-2.5 text-center min-w-[90px]">هەدیە 🎁</th>
+                        <th className="p-2.5 text-center min-w-[110px]">نرخی یەکە</th>
+                        <th className="p-2.5 text-left min-w-[100px]">کۆی نرخ</th>
+                        <th className="p-2.5 text-center">سڕینەوە</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {editOrderItems.map((item, idx) => (
+                        <tr key={`${item.itemId}-${idx}`} className="hover:bg-slate-50/80">
+                          <td className="p-2.5 text-slate-400 font-mono">{idx + 1}</td>
+                          <td className="p-2.5 font-bold text-slate-800">{item.name}</td>
+                          <td className="p-2.5 text-center">
+                            <select
+                              value={item.unit}
+                              onChange={(e) => handleUpdateEditOrderItemUnit(idx, e.target.value as any)}
+                              className="px-2 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none"
+                            >
+                              <option value="carton">کارتۆن</option>
+                              <option value="packet">پاکەت</option>
+                            </select>
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, -1)}
+                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-black flex items-center justify-center"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min="1"
+                                value={item.quantity}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value) || 1;
+                                  setEditOrderItems(prev => prev.map((it, i) => i === idx ? {
+                                    ...it,
+                                    quantity: Math.max(1, val),
+                                    totalPrice: Math.max(1, val) * (it.price || 0)
+                                  } : it));
+                                }}
+                                className="w-14 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, 1)}
+                                className="w-7 h-7 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-black flex items-center justify-center"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <input
+                              type="number"
+                              min="0"
+                              value={item.giftQuantity || 0}
+                              onChange={(e) => handleUpdateEditOrderItemGiftQty(idx, parseInt(e.target.value) || 0)}
+                              className="w-14 text-center font-bold font-mono py-1 border border-yellow-300 bg-yellow-50/50 rounded-lg text-xs"
+                            />
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <input
+                              type="number"
+                              min="0"
+                              value={item.price || 0}
+                              onChange={(e) => handleUpdateEditOrderItemPrice(idx, parseFloat(e.target.value) || 0)}
+                              className="w-24 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs"
+                              dir="ltr"
+                            />
+                          </td>
+                          <td className="p-2.5 text-left font-mono font-bold text-emerald-700" dir="ltr">
+                            {((item.quantity || 0) * (item.price || 0)).toLocaleString()} IQD
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveEditOrderItem(idx)}
+                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                              title="سڕینەوەی کاڵا لە داواکاری"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {editOrderItems.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="p-8 text-center text-slate-400 font-bold">
+                            هیچ کاڵایەک لەم داواکارییەدا نەماوە. تکایە لە خوارەوە کاڵا زیاد بکە.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Add Item From Warehouse Catalog */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                  <Plus size={16} className="text-indigo-600" />
+                  زیادکردنی کاڵای نوێ بۆ ئەم داواکارییە
+                </h4>
+
+                <div className="relative">
+                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                  <input
+                    type="text"
+                    placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
+                    className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl bg-white outline-none text-xs"
+                    value={editOrderSearchTerm}
+                    onChange={(e) => setEditOrderSearchTerm(e.target.value)}
+                  />
+                </div>
+
+                <div className="max-h-44 overflow-y-auto divide-y divide-slate-200 border border-slate-200 rounded-xl bg-white">
+                  {items
+                    .filter((item) => {
+                      if (!editOrderSearchTerm.trim()) return true;
+                      const term = editOrderSearchTerm.toLowerCase();
+                      return (
+                        (item.name || '').toLowerCase().includes(term) ||
+                        (item.barcode || '').toLowerCase().includes(term)
+                      );
+                    })
+                    .slice(0, 30)
+                    .map((wItem) => {
+                      const cPrice = wItem.cartonSellingPrice || wItem.sellingPrice || 0;
+                      const pPrice = wItem.packetSellingPrice || wItem.sellingPrice || 0;
+                      return (
+                        <div
+                          key={wItem.id}
+                          className="p-2.5 flex items-center justify-between hover:bg-indigo-50/50 transition gap-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-slate-800 truncate">{wItem.name}</div>
+                            <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                              <span>کارتۆن: <strong className="font-mono text-emerald-700">{cPrice.toLocaleString()} IQD</strong></span>
+                              <span>•</span>
+                              <span>پاکەت: <strong className="font-mono text-emerald-700">{pPrice.toLocaleString()} IQD</strong></span>
+                              <span>•</span>
+                              <span>مەوجودی کۆگا: <strong className="font-mono text-slate-700">{wItem.quantity || 0}</strong></span>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleAddItemToEditOrder(wItem)}
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 transition shrink-0 active:scale-95 shadow-2xs"
+                          >
+                            <Plus size={14} />
+                            <span>زیادکردن</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {/* Total Calculation summary */}
+              <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-200 flex justify-between items-center text-sm font-bold">
+                <span className="text-emerald-900">کۆی گشتی نوێکراوەی تەڵەبیە:</span>
+                <span className="text-emerald-700 font-mono text-lg font-black" dir="ltr">
+                  {editOrderItems
+                    .reduce((sum, it) => sum + (it.totalPrice || (it.quantity * (it.price || 0))), 0)
+                    .toLocaleString()}{' '}
+                  IQD
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingOrder(null)}
+                className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-bold transition"
+              >
+                پاشگەزبوونەوە
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEditedOrder}
+                disabled={isProcessing || editOrderItems.length === 0}
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95"
+              >
+                <Check size={16} />
+                <span>{isProcessing ? 'خەریکی پاشەکەوتکردنە...' : 'پاشەکەوتکردنی دەستکارییەکان'}</span>
+              </button>
             </div>
           </div>
         </div>

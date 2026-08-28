@@ -27,8 +27,21 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMsg = error instanceof Error ? error.message : String(error);
+  
+  // Suppress harmless browser tab closing / IndexedDB connection closing logs
+  if (errMsg.includes('closing') || errMsg.includes('hidden')) {
+    console.warn('Firestore connection state update:', errMsg);
+    return {
+      error: errMsg,
+      authInfo: {},
+      operationType,
+      path
+    };
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
