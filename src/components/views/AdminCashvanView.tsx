@@ -38,7 +38,8 @@ import {
   Building2,
   Receipt,
   Store,
-  Filter
+  Filter,
+  Gift
 } from 'lucide-react';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { printDailyRepReceiptPopup, printStatementPopup } from '../../lib/statementPrinter';
@@ -234,16 +235,32 @@ export default function AdminCashvanView() {
     });
   }, [transfers, selectedCashvanFilter, searchTerm]);
 
+  // Gift extraction helpers
+  const extractGiftsFromItems = (itemList: any[]) => {
+    return (itemList || []).filter(i => i.isGift || (i.name && i.name.includes('(هەدیە)')) || i.price === 0);
+  };
+
+  const getGiftTotalCount = (itemList: any[]) => {
+    const giftItems = extractGiftsFromItems(itemList);
+    return giftItems.reduce((sum, g) => sum + (g.quantity || 0), 0);
+  };
+
   // KPI Calculations
   const repPendingOrders = orders.filter(o => o.status !== 'completed');
   const repPendingTotal = repPendingOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
   const repCompletedOrders = orders.filter(o => o.status === 'completed');
   const repCompletedTotal = repCompletedOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
 
+  const repTotalGifts = orders.reduce((sum, o) => sum + getGiftTotalCount(o.items), 0);
+  const repPendingGifts = repPendingOrders.reduce((sum, o) => sum + getGiftTotalCount(o.items), 0);
+
   const cvPendingSales = sales.filter(s => s.status === 'pending_accounting');
   const cvPendingTotal = cvPendingSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
   const cvAccountedSales = sales.filter(s => s.status === 'accounted');
   const cvAccountedTotal = cvAccountedSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+
+  const cvTotalGifts = sales.filter(s => s.status !== 'deleted').reduce((sum, s) => sum + getGiftTotalCount(s.items), 0);
+  const cvPendingGifts = cvPendingSales.reduce((sum, s) => sum + getGiftTotalCount(s.items), 0);
 
   // Print market statement
   const printStatement = (marketName: string) => {
@@ -515,16 +532,23 @@ export default function AdminCashvanView() {
     const invoiceNum = order.invoiceId || order.invoiceNo || (order.id || '0').slice(-6);
 
     const itemsHtml = (order.items || []).map((item, idx) => {
+      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const total = (item.quantity * item.price);
+      const total = isGift ? 0 : (item.quantity * item.price);
       return `
-        <tr>
+        <tr style="${isGift ? 'background-color: #fef9c3;' : ''}">
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; ${isGift ? 'color: #854d0e;' : ''}">
+            ${item.name} ${isGift ? '<span style="background: #fef08a; color: #713f12; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 4px;">🎁 دیاری / هەدیە</span>' : ''}
+          </td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">${total.toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">
+            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع (هەدیە)</span>' : `${(item.price || 0).toLocaleString()} د.ع`}
+          </td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">
+            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع</span>' : `${total.toLocaleString()} د.ع`}
+          </td>
         </tr>
       `;
     }).join('');
@@ -662,16 +686,23 @@ export default function AdminCashvanView() {
     const invoiceNum = sale.invoiceNo || sale.invoiceId || (sale.id || '0').slice(-6);
 
     const itemsHtml = (sale.items || []).map((item, idx) => {
+      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const total = (item.quantity * item.price);
+      const total = isGift ? 0 : (item.quantity * item.price);
       return `
-        <tr>
+        <tr style="${isGift ? 'background-color: #fef9c3;' : ''}">
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; ${isGift ? 'color: #854d0e;' : ''}">
+            ${item.name} ${isGift ? '<span style="background: #fef08a; color: #713f12; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 4px;">🎁 دیاری / هەدیە</span>' : ''}
+          </td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">${total.toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">
+            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع (هەدیە)</span>' : `${(item.price || 0).toLocaleString()} د.ع`}
+          </td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">
+            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع</span>' : `${total.toLocaleString()} د.ع`}
+          </td>
         </tr>
       `;
     }).join('');
@@ -949,12 +980,54 @@ export default function AdminCashvanView() {
       }))
     ];
 
+    const dayGifts: {
+      id?: string;
+      marketName: string;
+      invoiceNo?: string;
+      name: string;
+      quantity: number;
+      unit?: string;
+    }[] = [];
+
+    daySales.forEach(s => {
+      (s.items || []).forEach(item => {
+        const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
+        if (isGift && (item.quantity || 0) > 0) {
+          dayGifts.push({
+            id: s.id,
+            marketName: s.marketName,
+            invoiceNo: s.invoiceNo,
+            name: item.name.replace(' (هەدیە)', ''),
+            quantity: item.quantity,
+            unit: item.unit
+          });
+        }
+      });
+    });
+
+    dayOrders.forEach(o => {
+      (o.items || []).forEach(item => {
+        const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
+        if (isGift && (item.quantity || 0) > 0) {
+          dayGifts.push({
+            id: o.id,
+            marketName: o.marketName,
+            invoiceNo: o.invoiceId || o.invoiceNo || o.id.slice(-6),
+            name: item.name.replace(' (هەدیە)', ''),
+            quantity: item.quantity,
+            unit: item.unit
+          });
+        }
+      });
+    });
+
     printDailyRepReceiptPopup({
       repName: dailySelectedPerson === 'all' ? 'سەرجەم مەندووب و کاشڤانەکان' : dailySelectedPerson,
       roleTitle: dailySelectedPerson === 'all' ? 'مەندووب و کاشڤان' : roleTitle,
       date: targetDate.getTime(),
       sales: formattedSales,
-      collections: dayCollections
+      collections: dayCollections,
+      gifts: dayGifts
     });
   };
 
@@ -986,7 +1059,7 @@ export default function AdminCashvanView() {
           }`}
         >
           <ShoppingCart size={18} />
-          <span>فرۆشتنی مەندووب</span>
+          <span>تەڵەبیە</span>
           {repPendingOrders.length > 0 && (
             <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono ${
               activeTab === 'rep_sales' ? 'bg-indigo-800 text-indigo-100' : 'bg-amber-100 text-amber-800'
@@ -1005,7 +1078,7 @@ export default function AdminCashvanView() {
           }`}
         >
           <Truck size={18} />
-          <span>فرۆشتنی کاشڤان</span>
+          <span>کاشڤان</span>
           {cvPendingSales.length > 0 && (
             <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono ${
               activeTab === 'cashvan_sales' ? 'bg-indigo-800 text-indigo-100' : 'bg-amber-100 text-amber-800'
@@ -1046,7 +1119,7 @@ export default function AdminCashvanView() {
       {activeTab === 'rep_sales' && (
         <div className="space-y-6">
           {/* KPI Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
                 <div className="text-xs text-slate-500 font-bold">کۆی ئۆردەرەکانی مەندووب</div>
@@ -1080,6 +1153,19 @@ export default function AdminCashvanView() {
               </div>
               <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
                 <CheckCircle2 size={24} />
+              </div>
+            </div>
+
+            <div className="bg-yellow-50/80 p-5 rounded-2xl border border-yellow-300 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-yellow-900 font-bold">کۆی هەدیەکان (مەندووب)</div>
+                <div className="text-2xl font-black text-yellow-800 font-mono mt-1">
+                  {repTotalGifts} <span className="text-sm font-bold">دانە</span>
+                </div>
+                <div className="text-[11px] text-yellow-700 mt-0.5">({repPendingGifts} دانە چاوەڕێی تەسفییە)</div>
+              </div>
+              <div className="p-3 bg-yellow-200 text-yellow-800 rounded-xl">
+                <Gift size={24} />
               </div>
             </div>
           </div>
@@ -1154,7 +1240,7 @@ export default function AdminCashvanView() {
                     <th className="p-4">مەندووب</th>
                     <th className="p-4">مارکێت</th>
                     <th className="p-4">بەروار و کات</th>
-                    <th className="p-4">کۆی بڕ</th>
+                    <th className="p-4">کۆی بڕ و هەدیە</th>
                     <th className="p-4">دۆخی تەسفییە</th>
                     <th className="p-4 text-center">کردارەکان</th>
                   </tr>
@@ -1163,6 +1249,7 @@ export default function AdminCashvanView() {
                   {filteredOrders.map(order => {
                     const isCompleted = order.status === 'completed';
                     const invNo = order.invoiceId || order.id.slice(-6);
+                    const giftCount = getGiftTotalCount(order.items);
 
                     return (
                       <tr key={order.id} className="hover:bg-slate-50/70 transition">
@@ -1184,8 +1271,16 @@ export default function AdminCashvanView() {
                         <td className="p-4 text-slate-500 text-xs font-mono" dir="ltr">
                           {format(order.timestamp, 'yyyy/MM/dd HH:mm')}
                         </td>
-                        <td className="p-4 font-bold text-indigo-600 font-mono" dir="ltr">
-                          {(order.totalAmount || 0).toLocaleString()} د.ع
+                        <td className="p-4">
+                          <div className="font-bold text-indigo-600 font-mono" dir="ltr">
+                            {(order.totalAmount || 0).toLocaleString()} د.ع
+                          </div>
+                          {giftCount > 0 && (
+                            <span className="inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 border border-yellow-300 text-[11px] font-bold px-2 py-0.5 rounded-md mt-1">
+                              <Gift size={12} className="text-yellow-700 fill-yellow-400" />
+                              {giftCount} هەدیە
+                            </span>
+                          )}
                         </td>
                         <td className="p-4">
                           {isCompleted ? (
@@ -1269,7 +1364,7 @@ export default function AdminCashvanView() {
       {activeTab === 'cashvan_sales' && (
         <div className="space-y-6">
           {/* KPI Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
                 <div className="text-xs text-slate-500 font-bold">کۆی فرۆشتنەکانی کاشڤان</div>
@@ -1303,6 +1398,19 @@ export default function AdminCashvanView() {
               </div>
               <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
                 <CheckCircle2 size={24} />
+              </div>
+            </div>
+
+            <div className="bg-yellow-50/80 p-5 rounded-2xl border border-yellow-300 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs text-yellow-900 font-bold">کۆی هەدیەکان (کاشڤان)</div>
+                <div className="text-2xl font-black text-yellow-800 font-mono mt-1">
+                  {cvTotalGifts} <span className="text-sm font-bold">دانە</span>
+                </div>
+                <div className="text-[11px] text-yellow-700 mt-0.5">({cvPendingGifts} دانە چاوەڕێی حیسابات)</div>
+              </div>
+              <div className="p-3 bg-yellow-200 text-yellow-800 rounded-xl">
+                <Gift size={24} />
               </div>
             </div>
           </div>
@@ -1377,7 +1485,7 @@ export default function AdminCashvanView() {
                     <th className="p-4">کاشڤان</th>
                     <th className="p-4">مارکێت</th>
                     <th className="p-4">بەروار و کات</th>
-                    <th className="p-4">بڕی فرۆشراو</th>
+                    <th className="p-4">بڕی فرۆشراو و هەدیە</th>
                     <th className="p-4">دۆخی حیسابات</th>
                     <th className="p-4 text-center">کردارەکان</th>
                   </tr>
@@ -1386,6 +1494,7 @@ export default function AdminCashvanView() {
                   {filteredSales.map(sale => {
                     const isAccounted = sale.status === 'accounted';
                     const invNo = sale.invoiceNo || sale.invoiceId || sale.id.slice(-6);
+                    const giftCount = getGiftTotalCount(sale.items);
 
                     return (
                       <tr key={sale.id} className="hover:bg-slate-50/70 transition">
@@ -1407,8 +1516,16 @@ export default function AdminCashvanView() {
                         <td className="p-4 text-slate-500 text-xs font-mono" dir="ltr">
                           {format(sale.date, 'yyyy/MM/dd HH:mm')}
                         </td>
-                        <td className="p-4 font-bold text-indigo-600 font-mono" dir="ltr">
-                          {sale.totalAmount.toLocaleString()} د.ع
+                        <td className="p-4">
+                          <div className="font-bold text-indigo-600 font-mono" dir="ltr">
+                            {sale.totalAmount.toLocaleString()} د.ع
+                          </div>
+                          {giftCount > 0 && (
+                            <span className="inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 border border-yellow-300 text-[11px] font-bold px-2 py-0.5 rounded-md mt-1">
+                              <Gift size={12} className="text-yellow-700 fill-yellow-400" />
+                              {giftCount} هەدیە
+                            </span>
+                          )}
                         </td>
                         <td className="p-4">
                           {isAccounted ? (
@@ -1709,6 +1826,23 @@ export default function AdminCashvanView() {
                 </div>
               </div>
 
+              {extractGiftsFromItems(settlingOrder.items).length > 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-xl space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-yellow-900">
+                    <Gift size={15} className="text-yellow-700 fill-yellow-400" />
+                    <span>کاڵای هەدیە / بێ بەرامبەر لەم وەسڵەدا:</span>
+                  </div>
+                  <div className="space-y-1 pt-1">
+                    {extractGiftsFromItems(settlingOrder.items).map((g, idx) => (
+                      <div key={idx} className="flex justify-between text-xs text-yellow-800 font-medium">
+                        <span>🎁 {g.name}</span>
+                        <span className="font-bold">{g.quantity} {g.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <p className="text-xs text-slate-600 text-center font-medium">
                 تکایە جۆری تەسفییەکردنی ئەم وەسڵە دیاری بکە:
               </p>
@@ -1776,6 +1910,23 @@ export default function AdminCashvanView() {
                   </span>
                 </div>
               </div>
+
+              {extractGiftsFromItems(settlingSale.items).length > 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-xl space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-yellow-900">
+                    <Gift size={15} className="text-yellow-700 fill-yellow-400" />
+                    <span>کاڵای هەدیە / بێ بەرامبەر لەم وەسڵەدا:</span>
+                  </div>
+                  <div className="space-y-1 pt-1">
+                    {extractGiftsFromItems(settlingSale.items).map((g, idx) => (
+                      <div key={idx} className="flex justify-between text-xs text-yellow-800 font-medium">
+                        <span>🎁 {g.name}</span>
+                        <span className="font-bold">{g.quantity} {g.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <p className="text-xs text-slate-600 text-center font-medium">
                 تکایە جۆری تەسفییەکردنی ئەم وەسڵە دیاری بکە:

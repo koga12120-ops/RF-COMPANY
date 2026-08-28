@@ -647,7 +647,7 @@ export default function MarketsView() {
                 }`}
               >
                 <ShoppingCart size={16} />
-                ئۆردەری مەندووب ({selectedMarketOrders.length})
+                تەڵەبیە ({selectedMarketOrders.length})
               </button>
               <button
                 onClick={() => setMarketTab('cashvan')}
@@ -656,7 +656,7 @@ export default function MarketsView() {
                 }`}
               >
                 <Truck size={16} />
-                فرۆشتنی کاشڤان ({selectedMarketCashvan.length})
+                کاشڤان ({selectedMarketCashvan.length})
               </button>
               <button
                 onClick={() => setMarketTab('transactions')}

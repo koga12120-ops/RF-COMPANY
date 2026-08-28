@@ -132,18 +132,12 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
   }, [activeCashvanName]);
 
   const filteredInventory = useMemo(() => {
-    return inventory.filter(item => 
-      item.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.barcode?.includes(searchTerm)
-    );
-  }, [inventory, searchTerm]);
+    return inventory;
+  }, [inventory]);
 
   const filteredWarehouseItems = useMemo(() => {
-    return warehouseItems.filter(item => 
-      item.name?.toLowerCase().includes(preOrderSearch.toLowerCase()) ||
-      item.barcode?.includes(preOrderSearch)
-    );
-  }, [warehouseItems, preOrderSearch]);
+    return warehouseItems;
+  }, [warehouseItems]);
 
   const filteredVanForReturn = useMemo(() => {
     return inventory.filter(item =>
@@ -702,17 +696,6 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                 <RotateCcw size={15} />
                 <span>گەڕاندنەوەی کاڵا بۆ کۆگا</span>
               </button>
-
-              <div className="relative w-full sm:w-64">
-                <input
-                  type="text"
-                  placeholder="گەڕان بەپێی کاڵا یان بارکۆد..."
-                  className="w-full pl-3 pr-8 py-2 border border-slate-200 bg-slate-50 focus:bg-white rounded-xl outline-none focus:border-indigo-500 text-xs transition"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-                <Search className="absolute right-2.5 top-2.5 text-slate-400" size={15} />
-              </div>
             </div>
           </div>
 
@@ -886,7 +869,7 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
       {/* TAB 2: Requisitions / Pre-Orders to Warehouse with INLINE + and - Steppers */}
       {activeTab === 'preorder' && (
         <div className="space-y-5 pb-32">
-          {/* Header & Search */}
+          {/* Header */}
           <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
               <h3 className="font-bold text-slate-800 text-sm sm:text-base flex items-center gap-2">
@@ -896,17 +879,6 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
               <p className="text-xs text-slate-500 mt-0.5">
                 ڕاستەوخۆ لە ڕێگەی نیشانەکانی <strong className="text-indigo-600 font-bold">+</strong> و <strong className="text-indigo-600 font-bold">-</strong> بڕی داواکاری دیاری بکە
               </p>
-            </div>
-
-            <div className="relative w-full sm:w-72">
-              <input
-                type="text"
-                placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
-                className="w-full pl-3 pr-8 py-2 border border-slate-200 bg-slate-50 focus:bg-white rounded-xl outline-none focus:border-indigo-500 text-xs transition"
-                value={preOrderSearch}
-                onChange={(e) => setPreOrderSearch(e.target.value)}
-              />
-              <Search className="absolute right-2.5 top-2.5 text-slate-400" size={15} />
             </div>
           </div>
 

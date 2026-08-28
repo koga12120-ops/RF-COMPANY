@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { collection, getDocs, where, addDoc, updateDoc, doc, setDoc, onSnapshot, query, orderBy, deleteDoc, getDoc } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { Order, Item, Role, Market, Transaction, CashvanSale } from '../../types';
-import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, Calendar, FileText, CheckCircle2, Truck, Send, ArrowRight, Package, Phone, MapPin, Store, Clock, Receipt, Check } from 'lucide-react';
+import { Order, OrderItem, Item, Role, Market, Transaction, CashvanSale } from '../../types';
+import { ShoppingCart, Plus, Printer, CheckCircle, Search, X, DollarSign, CreditCard, Trash2, Edit2, User, Calendar, FileText, CheckCircle2, Truck, Send, ArrowRight, Package, Phone, MapPin, Store, Clock, Receipt, Check, Gift } from 'lucide-react';
 import { format, startOfDay, endOfDay, subDays, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
@@ -79,14 +79,16 @@ export default function OrdersView({
   const [orderMarketName, setOrderMarketName] = useState('');
   const [orderLocation, setOrderLocation] = useState('');
   const [orderPaymentType, setOrderPaymentType] = useState<'cash' | 'debt'>('debt');
-  const [orderSelectedItems, setOrderSelectedItems] = useState<{ item: Item; quantity: number; unit: 'carton' | 'packet' }[]>([]);
+  const [orderSelectedItems, setOrderSelectedItems] = useState<{ item: Item; quantity: number; giftQuantity?: number; unit: 'carton' | 'packet' }[]>([]);
   const [orderItemSearch, setOrderItemSearch] = useState('');
+  const [isOrderGiftMode, setIsOrderGiftMode] = useState(false);
 
   // Cashvan Direct Sale Form State (کاشڤان ڕاستەوخۆ)
   const [vanMarketName, setVanMarketName] = useState('');
   const [vanPaymentType, setVanPaymentType] = useState<'cash' | 'debt'>('cash');
   const [vanCart, setVanCart] = useState<any[]>([]);
   const [vanItemSearch, setVanItemSearch] = useState('');
+  const [isVanGiftMode, setIsVanGiftMode] = useState(false);
 
   // Simple Debt Pay Modal state
   const [isSimpleDebtModalOpen, setIsSimpleDebtModalOpen] = useState(false);
@@ -399,38 +401,80 @@ export default function OrdersView({
   // --- ORDER FORM HANDLERS ---
   const handleAddItemToOrder = (item: Item) => {
     const exists = orderSelectedItems.find(si => si.item.id === item.id);
-    if (exists) {
-      const newQty = exists.quantity + 1;
-      if (newQty > (exists.item.quantity || 0)) {
-        alert('بڕی داواکراو لە کۆگا بەردەست نییە');
-        return;
+    const defaultUnit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
+    const stock = item.quantity || 0;
+
+    if (isOrderGiftMode) {
+      if (exists) {
+        const newGiftQty = (exists.giftQuantity || 0) + 1;
+        if ((exists.quantity || 0) + newGiftQty > stock) {
+          alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
+          return;
+        }
+        setOrderSelectedItems(orderSelectedItems.map(si => 
+          si.item.id === item.id ? { ...si, giftQuantity: newGiftQty } : si
+        ));
+      } else {
+        if (stock < 1) {
+          alert('بڕی داواکراو لە کۆگا بەردەست نییە');
+          return;
+        }
+        setOrderSelectedItems([...orderSelectedItems, { item, quantity: 0, giftQuantity: 1, unit: defaultUnit }]);
       }
-      setOrderSelectedItems(orderSelectedItems.map(si => 
-        si.item.id === item.id ? { ...si, quantity: newQty } : si
-      ));
     } else {
-      if ((item.quantity || 0) < 1) {
-        alert('بڕی داواکراو لە کۆگا بەردەست نییە');
-        return;
+      if (exists) {
+        const newQty = (exists.quantity || 0) + 1;
+        if (newQty + (exists.giftQuantity || 0) > stock) {
+          alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
+          return;
+        }
+        setOrderSelectedItems(orderSelectedItems.map(si => 
+          si.item.id === item.id ? { ...si, quantity: newQty } : si
+        ));
+      } else {
+        if (stock < 1) {
+          alert('بڕی داواکراو لە کۆگا بەردەست نییە');
+          return;
+        }
+        setOrderSelectedItems([...orderSelectedItems, { item, quantity: 1, giftQuantity: 0, unit: defaultUnit }]);
       }
-      const unit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
-      setOrderSelectedItems([...orderSelectedItems, { item, quantity: 1, unit }]);
     }
   };
 
-  const handleUpdateOrderItemQty = (id: string, qty: number, unit?: 'carton' | 'packet') => {
-    if (qty <= 0) {
-      setOrderSelectedItems(orderSelectedItems.filter(si => si.item.id !== id));
-      return;
-    }
+  const handleUpdateOrderItemQty = (id: string, qty: number, unit?: 'carton' | 'packet', isGiftUpdate = false) => {
     const itemObj = orderSelectedItems.find(si => si.item.id === id);
-    if (itemObj && qty > (itemObj.item.quantity || 0)) {
-      alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${itemObj.item.quantity} بەردەستە.`);
-      return;
+    if (!itemObj) return;
+
+    const stock = itemObj.item.quantity || 0;
+    const currentUnit = unit || itemObj.unit;
+
+    if (isGiftUpdate || isOrderGiftMode) {
+      const newGiftQty = Math.max(0, qty);
+      if ((itemObj.quantity || 0) + newGiftQty > stock) {
+        alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
+        return;
+      }
+      if ((itemObj.quantity || 0) <= 0 && newGiftQty <= 0) {
+        setOrderSelectedItems(orderSelectedItems.filter(si => si.item.id !== id));
+      } else {
+        setOrderSelectedItems(orderSelectedItems.map(si => 
+          si.item.id === id ? { ...si, giftQuantity: newGiftQty, unit: currentUnit } : si
+        ));
+      }
+    } else {
+      const newQty = Math.max(0, qty);
+      if (newQty + (itemObj.giftQuantity || 0) > stock) {
+        alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
+        return;
+      }
+      if (newQty <= 0 && (itemObj.giftQuantity || 0) <= 0) {
+        setOrderSelectedItems(orderSelectedItems.filter(si => si.item.id !== id));
+      } else {
+        setOrderSelectedItems(orderSelectedItems.map(si => 
+          si.item.id === id ? { ...si, quantity: newQty, unit: currentUnit } : si
+        ));
+      }
     }
-    setOrderSelectedItems(orderSelectedItems.map(si => 
-      si.item.id === id ? { ...si, quantity: qty, unit: unit || si.unit } : si
-    ));
   };
 
   const submitOrder = async (e: React.FormEvent) => {
@@ -450,25 +494,42 @@ export default function OrdersView({
 
     const totalAmount = orderSelectedItems.reduce((acc, curr) => {
       const price = calcPrice(curr.item, curr.unit, orderMarketName);
-      return acc + (price * curr.quantity);
+      return acc + (price * (curr.quantity || 0));
     }, 0);
 
     const totalCost = orderSelectedItems.reduce((acc, curr) => {
       const cost = curr.unit === 'packet'
         ? (curr.item.packetCostPrice || curr.item.costPrice || 0)
         : (curr.item.cartonCostPrice || curr.item.costPrice || 0);
-      return acc + (cost * curr.quantity);
+      const totalCount = (curr.quantity || 0) + (curr.giftQuantity || 0);
+      return acc + (cost * totalCount);
     }, 0);
 
     const totalProfit = totalAmount - totalCost;
 
-    const orderItems = orderSelectedItems.map(si => ({
-      itemId: si.item.id,
-      name: si.item.name,
-      price: calcPrice(si.item, si.unit, orderMarketName),
-      quantity: si.quantity,
-      unit: si.unit
-    }));
+    const orderItems: OrderItem[] = [];
+    orderSelectedItems.forEach(si => {
+      if ((si.quantity || 0) > 0) {
+        orderItems.push({
+          itemId: si.item.id,
+          name: si.item.name,
+          price: calcPrice(si.item, si.unit, orderMarketName),
+          quantity: si.quantity,
+          unit: si.unit,
+          isGift: false
+        });
+      }
+      if ((si.giftQuantity || 0) > 0) {
+        orderItems.push({
+          itemId: si.item.id,
+          name: `${si.item.name} (هەدیە)`,
+          price: 0,
+          quantity: si.giftQuantity || 0,
+          unit: si.unit,
+          isGift: true
+        });
+      }
+    });
 
     try {
       if (orderMarketName && !markets.find(m => m.name === orderMarketName.trim())) {
@@ -518,6 +579,7 @@ export default function OrdersView({
       setOrderMarketName('');
       setOrderLocation('');
       setOrderSelectedItems([]);
+      setIsOrderGiftMode(false);
       alert('داواکارییەکە بە سەرکەوتوویی نێردرا بۆ کۆگا');
     } catch (error) {
       console.error(error);
@@ -529,41 +591,74 @@ export default function OrdersView({
   const addToVanCart = (item: any) => {
     setVanCart(prev => {
       const existing = prev.find(p => p.id === item.id);
-      if (existing) {
-        if (existing.cartQty >= item.quantity) {
-          alert('بڕی زیاتر لەناو ڤاندا بەردەست نییە');
+      const unit = item.unit || (item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton');
+      const stock = item.quantity || 0;
+
+      if (isVanGiftMode) {
+        if (existing) {
+          const newGiftQty = (existing.giftQty || 0) + 1;
+          if ((existing.cartQty || 0) + newGiftQty > stock) {
+            alert(`بڕی زیاتر لەناو ڤاندا بەردەست نییە. تەنها ${stock} بەردەستە.`);
+            return prev;
+          }
+          return prev.map(p => p.id === item.id ? { ...p, giftQty: newGiftQty } : p);
+        }
+        if (stock < 1) {
+          alert('بڕی بەردەست لەناو ڤان نەماوە');
           return prev;
         }
-        return prev.map(p => p.id === item.id ? { ...p, cartQty: p.cartQty + 1 } : p);
+        return [...prev, { ...item, cartQty: 0, giftQty: 1, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
+      } else {
+        if (existing) {
+          const newCartQty = (existing.cartQty || 0) + 1;
+          if (newCartQty + (existing.giftQty || 0) > stock) {
+            alert(`بڕی زیاتر لەناو ڤاندا بەردەست نییە. تەنها ${stock} بەردەستە.`);
+            return prev;
+          }
+          return prev.map(p => p.id === item.id ? { ...p, cartQty: newCartQty } : p);
+        }
+        if (stock < 1) {
+          alert('بڕی بەردەست لەناو ڤان نەماوە');
+          return prev;
+        }
+        return [...prev, { ...item, cartQty: 1, giftQty: 0, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
       }
-      if (item.quantity < 1) {
-        alert('بڕی بەردەست لەناو ڤان نەماوە');
-        return prev;
-      }
-      const unit = item.unit || (item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton');
-      return [...prev, { ...item, cartQty: 1, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
     });
   };
 
-  const updateVanCartQty = (id: string, qty: number, unit?: 'carton' | 'packet') => {
+  const updateVanCartQty = (id: string, qty: number, unit?: 'carton' | 'packet', isGiftUpdate = false) => {
     const item = vanInventory.find(i => i.id === id);
     if (!item) return;
+    const stock = item.quantity || 0;
     
     setVanCart(prev => {
       const cartItem = prev.find(p => p.id === id);
       if (!cartItem) return prev;
       
       const newUnit = unit || cartItem.unit || 'carton';
-      if (qty > item.quantity) {
-        alert(`تەنها ${item.quantity} لەناو ڤاندا بەردەستە`);
-        return prev;
-      }
-      if (qty < 1) {
-        return prev.filter(p => p.id !== id);
-      }
-      
       const price = calcPrice(item, newUnit, vanMarketName);
-      return prev.map(p => p.id === id ? { ...p, cartQty: qty, unit: newUnit, finalPrice: price } : p);
+
+      if (isGiftUpdate || isVanGiftMode) {
+        const newGiftQty = Math.max(0, qty);
+        if ((cartItem.cartQty || 0) + newGiftQty > stock) {
+          alert(`تەنها ${stock} لەناو ڤاندا بەردەستە`);
+          return prev;
+        }
+        if ((cartItem.cartQty || 0) <= 0 && newGiftQty <= 0) {
+          return prev.filter(p => p.id !== id);
+        }
+        return prev.map(p => p.id === id ? { ...p, giftQty: newGiftQty, unit: newUnit, finalPrice: price } : p);
+      } else {
+        const newCartQty = Math.max(0, qty);
+        if (newCartQty + (cartItem.giftQty || 0) > stock) {
+          alert(`تەنها ${stock} لەناو ڤاندا بەردەستە`);
+          return prev;
+        }
+        if (newCartQty <= 0 && (cartItem.giftQty || 0) <= 0) {
+          return prev.filter(p => p.id !== id);
+        }
+        return prev.map(p => p.id === id ? { ...p, cartQty: newCartQty, unit: newUnit, finalPrice: price } : p);
+      }
     });
   };
 
@@ -584,28 +679,48 @@ export default function OrdersView({
         });
       }
       
-      const totalAmount = vanCart.reduce((acc, curr) => acc + (curr.finalPrice * curr.cartQty), 0);
+      const totalAmount = vanCart.reduce((acc, curr) => acc + ((curr.finalPrice || 0) * (curr.cartQty || 0)), 0);
       const totalCost = vanCart.reduce((acc, curr) => { 
         const cost = curr.unit === "packet" ? (curr.packetCostPrice || curr.costPrice || 0) : (curr.cartonCostPrice || curr.costPrice || 0); 
-        return acc + (cost * curr.cartQty); 
+        const totalCount = (curr.cartQty || 0) + (curr.giftQty || 0);
+        return acc + (cost * totalCount); 
       }, 0);
       const totalProfit = totalAmount - totalCost;
       
       const nextInvoiceNo = await getNextInvoiceNumber();
+
+      const saleItems: any[] = [];
+      vanCart.forEach(c => {
+        if ((c.cartQty || 0) > 0) {
+          saleItems.push({
+            itemId: c.itemId || c.id,
+            name: c.name,
+            quantity: c.cartQty,
+            price: c.finalPrice,
+            unit: c.unit || 'carton',
+            barcode: c.barcode || '-',
+            isGift: false
+          });
+        }
+        if ((c.giftQty || 0) > 0) {
+          saleItems.push({
+            itemId: c.itemId || c.id,
+            name: `${c.name} (هەدیە)`,
+            quantity: c.giftQty,
+            price: 0,
+            unit: c.unit || 'carton',
+            barcode: c.barcode || '-',
+            isGift: true
+          });
+        }
+      });
 
       const saleData: Omit<CashvanSale, 'id'> = {
         invoiceNo: nextInvoiceNo,
         invoiceId: nextInvoiceNo,
         cashvanName: repName || 'کاشڤان',
         marketName: vanMarketName,
-        items: vanCart.map(c => ({
-          itemId: c.itemId || c.id,
-          name: c.name,
-          quantity: c.cartQty,
-          price: c.finalPrice,
-          unit: c.unit || 'carton',
-          barcode: c.barcode || '-'
-        })),
+        items: saleItems,
         totalAmount,
         totalProfit,
         date: Date.now(),
@@ -615,14 +730,17 @@ export default function OrdersView({
 
       const docRef = await addDoc(collection(db, 'cashvan_sales'), saleData);
 
-      // Deduct from isolated cashvan_inventory
+      // Deduct from isolated cashvan_inventory (regular + gift)
       for (const cartItem of vanCart) {
-        const itemRef = doc(db, 'cashvan_inventory', cartItem.id);
-        const itemSnap = await getDoc(itemRef);
-        if (itemSnap.exists()) {
-          const currentQty = itemSnap.data().quantity || 0;
-          const newQty = Math.max(0, currentQty - cartItem.cartQty);
-          await updateDoc(itemRef, { quantity: newQty });
+        const totalDeduct = (cartItem.cartQty || 0) + (cartItem.giftQty || 0);
+        if (totalDeduct > 0) {
+          const itemRef = doc(db, 'cashvan_inventory', cartItem.id);
+          const itemSnap = await getDoc(itemRef);
+          if (itemSnap.exists()) {
+            const currentQty = itemSnap.data().quantity || 0;
+            const newQty = Math.max(0, currentQty - totalDeduct);
+            await updateDoc(itemRef, { quantity: newQty });
+          }
         }
       }
 
@@ -638,6 +756,7 @@ export default function OrdersView({
       });
 
       setVanCart([]);
+      setIsVanGiftMode(false);
       setActiveFormMode('none');
       setCurrentView('main');
       printCashvanReceipt({ ...saleData, id: docRef.id }, nextInvoiceNo);
@@ -677,13 +796,18 @@ export default function OrdersView({
 
     const itemsHtml = (sale.items || []).map((item: any) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
+      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
       const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr>
-          <td style="text-align: right; font-weight: bold;">${item.name}</td>
+        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
+          <td style="text-align: right; font-weight: bold;">
+            ${cleanName}
+            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 10px; font-weight: 900; padding: 1px 4px; border-radius: 4px; margin-right: 4px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
+          </td>
           <td style="text-align: center;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center;" dir="ltr">${(item.price || 0).toLocaleString()}</td>
-          <td style="text-align: left; font-weight: bold;" dir="ltr">${itemTotal.toLocaleString()}</td>
+          <td style="text-align: center;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
@@ -781,14 +905,23 @@ export default function OrdersView({
 
     const itemsHtml = (order.items || []).map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+      const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
+      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
       const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr>
+        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 6px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 6px; font-weight: bold;">${item.name}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; font-weight: bold;">
+            ${cleanName}
+            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 11px; font-weight: 900; padding: 2px 6px; border-radius: 4px; margin-right: 6px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
+          </td>
           <td style="text-align: center; border: 1px solid #cbd5e1; padding: 6px;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 6px;" dir="ltr">${(item.price || 0).toLocaleString()} د.ع</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 6px; font-weight: bold;" dir="ltr">${itemTotal.toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 6px;" dir="ltr">
+            ${isGift ? '<strong style="color: #ca8a04;">0 د.ع (هەدیە)</strong>' : `${(item.price || 0).toLocaleString()} د.ع`}
+          </td>
+          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 6px; font-weight: bold;" dir="ltr">
+            ${isGift ? '<strong style="color: #ca8a04;">0 د.ع</strong>' : `${itemTotal.toLocaleString()} د.ع`}
+          </td>
         </tr>
       `;
     }).join('');
@@ -1015,7 +1148,7 @@ export default function OrdersView({
 
         {/* Compact Action Choice Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {/* 1. Pre-Order (تەڵەبییە) */}
+          {/* 1. Pre-Order (تەڵەبیە) */}
           <div
             onClick={() => handleSelectMarketForOrder(market)}
             className="p-3.5 bg-white hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-500 rounded-2xl cursor-pointer transition-all duration-150 shadow-2xs hover:shadow-xs group flex items-center gap-3"
@@ -1026,7 +1159,7 @@ export default function OrdersView({
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs sm:text-sm font-bold text-slate-800 group-hover:text-indigo-700">
-                  ١. داواکاری مەندووب (تەڵەبییە)
+                  ١. تەڵەبیە
                 </h3>
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-indigo-100 text-indigo-700">
                   داواکاری نوێ
@@ -1049,7 +1182,7 @@ export default function OrdersView({
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs sm:text-sm font-bold text-slate-800 group-hover:text-amber-800">
-                  ٢. فرۆشتنی کاشڤان (ڕاستەوخۆ)
+                  ٢. کاشڤان
                 </h3>
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800">
                   فرۆشتن لە ڤان
@@ -1139,12 +1272,13 @@ export default function OrdersView({
   if (currentView === 'order_form') {
     const totalAmount = orderSelectedItems.reduce((acc, curr) => {
       const price = calcPrice(curr.item, curr.unit, orderMarketName);
-      return acc + (price * curr.quantity);
+      return acc + (price * (curr.quantity || 0));
     }, 0);
-    const totalCount = orderSelectedItems.reduce((acc, curr) => acc + curr.quantity, 0);
+    const totalRegularCount = orderSelectedItems.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+    const totalGiftCount = orderSelectedItems.reduce((acc, curr) => acc + (curr.giftQuantity || 0), 0);
 
     const filteredWarehouseItems = items.filter(
-      i => (i.quantity || 0) > 0 && i.name.toLowerCase().includes(orderItemSearch.toLowerCase())
+      i => (i.quantity || 0) > 0
     );
 
     return (
@@ -1163,28 +1297,54 @@ export default function OrdersView({
             <div className="flex items-center gap-2">
               <ShoppingCart size={18} className="text-indigo-600 shrink-0" />
               <h2 className="text-sm sm:text-base font-bold text-slate-800 truncate">
-                تەڵەبییە بۆ: <strong className="text-indigo-600">{orderMarketName}</strong>
+                تەڵەبیە بۆ: <strong className="text-indigo-600">{orderMarketName}</strong>
               </h2>
             </div>
           </div>
 
-          <div className="relative w-full sm:w-72">
-            <input
-              type="text"
-              placeholder="گەڕان بۆ کاڵاکانی کۆگا..."
-              className="w-full pl-3 pr-8 py-1.5 sm:py-2 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50 font-bold text-slate-800"
-              value={orderItemSearch}
-              onChange={(e) => setOrderItemSearch(e.target.value)}
-            />
-            <Search className="absolute right-2.5 top-2 sm:top-2.5 text-slate-400" size={15} />
+          <div className="flex items-center gap-2">
+            {/* Yellow Gift Mode Button */}
+            <button
+              type="button"
+              onClick={() => setIsOrderGiftMode(!isOrderGiftMode)}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border shadow-xs shrink-0 ${
+                isOrderGiftMode
+                  ? 'bg-yellow-400 text-yellow-950 border-yellow-500 ring-2 ring-yellow-400 font-extrabold shadow-sm'
+                  : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-900 border-yellow-300'
+              }`}
+            >
+              <Gift size={16} className={isOrderGiftMode ? 'fill-yellow-950' : ''} />
+              <span>هەدیە {isOrderGiftMode ? '(چالاکە)' : ''}</span>
+            </button>
           </div>
         </div>
+
+        {/* Gift Mode Active Notice Banner */}
+        {isOrderGiftMode && (
+          <div className="p-3 bg-yellow-50 border-2 border-yellow-400 rounded-2xl flex items-center justify-between gap-2 text-xs font-bold text-yellow-950 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <div className="p-1 bg-yellow-400 text-yellow-950 rounded-lg shrink-0">
+                <Gift size={16} className="fill-yellow-950" />
+              </div>
+              <span>دۆخی هەدیە چالاکە: هەر کاڵایەک دابگریت بە نرخی ٠ وەک هەدیە دادەنرێت. بۆ گەڕانەوە بۆ فرۆشتنی ئاسایی دوگمەی هەدیە دابگرەوە.</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsOrderGiftMode(false)}
+              className="px-2.5 py-1 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-lg text-xs font-bold shrink-0 transition"
+            >
+              کوژاندنەوە
+            </button>
+          </div>
+        )}
 
         {/* Catalog of Warehouse Items with Direct Inline + / - Steppers */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {filteredWarehouseItems.map(item => {
             const selectedItem = orderSelectedItems.find(si => si.item.id === item.id);
-            const currentQty = selectedItem ? selectedItem.quantity : 0;
+            const currentQty = selectedItem ? (selectedItem.quantity || 0) : 0;
+            const currentGiftQty = selectedItem ? (selectedItem.giftQuantity || 0) : 0;
+            const totalItemCount = currentQty + currentGiftQty;
             const currentUnit = selectedItem ? selectedItem.unit : (item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton');
             const unitPrice = calcPrice(item, currentUnit, orderMarketName);
             const subtotal = currentQty * unitPrice;
@@ -1194,8 +1354,10 @@ export default function OrdersView({
               <div
                 key={item.id}
                 className={`p-4 rounded-2xl transition-all duration-200 flex flex-col justify-between ${
-                  currentQty > 0
-                    ? 'bg-indigo-50/70 border-2 border-indigo-500 shadow-xs'
+                  totalItemCount > 0
+                    ? isOrderGiftMode
+                      ? 'bg-yellow-50/60 border-2 border-yellow-400 shadow-xs'
+                      : 'bg-indigo-50/70 border-2 border-indigo-500 shadow-xs'
                     : 'bg-white border border-slate-200 hover:border-slate-300 shadow-2xs'
                 }`}
               >
@@ -1203,9 +1365,14 @@ export default function OrdersView({
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <h4 className="text-xs sm:text-sm font-bold text-slate-800 line-clamp-1">{item.name}</h4>
-                      <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
+                      <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
                         <span>کۆگا: <strong className="text-slate-700 font-mono font-bold">{item.quantity}</strong></span>
                         {item.barcode && <span className="text-slate-400 font-mono">| {item.barcode}</span>}
+                        {currentGiftQty > 0 && (
+                          <span className="bg-yellow-200 text-yellow-900 px-1.5 py-0.5 rounded-md font-black text-[10px]">
+                            {currentGiftQty} هەدیە
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -1226,10 +1393,10 @@ export default function OrdersView({
                       <button
                         type="button"
                         onClick={() => {
-                          if (currentQty > 0) {
-                            handleUpdateOrderItemQty(item.id, currentQty, 'carton');
+                          if (selectedItem) {
+                            handleUpdateOrderItemQty(item.id, currentQty, 'carton', false);
                           } else {
-                            setOrderSelectedItems([...orderSelectedItems, { item, quantity: 1, unit: 'carton' }]);
+                            setOrderSelectedItems([...orderSelectedItems, { item, quantity: isOrderGiftMode ? 0 : 1, giftQuantity: isOrderGiftMode ? 1 : 0, unit: 'carton' }]);
                           }
                         }}
                         className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition ${
@@ -1243,10 +1410,10 @@ export default function OrdersView({
                       <button
                         type="button"
                         onClick={() => {
-                          if (currentQty > 0) {
-                            handleUpdateOrderItemQty(item.id, currentQty, 'packet');
+                          if (selectedItem) {
+                            handleUpdateOrderItemQty(item.id, currentQty, 'packet', false);
                           } else {
-                            setOrderSelectedItems([...orderSelectedItems, { item, quantity: 1, unit: 'packet' }]);
+                            setOrderSelectedItems([...orderSelectedItems, { item, quantity: isOrderGiftMode ? 0 : 1, giftQuantity: isOrderGiftMode ? 1 : 0, unit: 'packet' }]);
                           }
                         }}
                         className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition ${
@@ -1262,53 +1429,106 @@ export default function OrdersView({
                 </div>
 
                 {/* INLINE + / - STEPPER CONTROLS */}
-                <div className="mt-3.5 pt-2.5 border-t border-slate-100/80">
-                  {currentQty === 0 ? (
+                <div className="mt-3.5 pt-2.5 border-t border-slate-100/80 space-y-2">
+                  {totalItemCount === 0 ? (
                     <button
                       type="button"
                       onClick={() => handleAddItemToOrder(item)}
-                      className="w-full py-2 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-98 border border-indigo-200 hover:border-indigo-600"
+                      className={`w-full py-2 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-98 border ${
+                        isOrderGiftMode
+                          ? 'bg-yellow-400 hover:bg-yellow-500 text-yellow-950 border-yellow-500 shadow-xs'
+                          : 'bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 border-indigo-200 hover:border-indigo-600'
+                      }`}
                     >
-                      <Plus size={15} />
-                      <span>زیادکردن</span>
+                      {isOrderGiftMode ? <Gift size={15} /> : <Plus size={15} />}
+                      <span>{isOrderGiftMode ? 'زیادکردن وەک هەدیە' : 'زیادکردن'}</span>
                     </button>
                   ) : (
                     <div>
-                      <div className="flex items-center justify-between gap-1.5 bg-white border border-indigo-300 rounded-xl p-1 shadow-2xs">
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateOrderItemQty(item.id, currentQty - 1, currentUnit)}
-                          className="w-8 h-8 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                          title="کەمکردنەوە"
-                        >
-                          -
-                        </button>
-                        <input
-                          type="number"
-                          min="1"
-                          max={item.quantity || 999}
-                          value={currentQty}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value);
-                            if (!isNaN(val)) {
-                              handleUpdateOrderItemQty(item.id, val, currentUnit);
-                            }
-                          }}
-                          className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateOrderItemQty(item.id, currentQty + 1, currentUnit)}
-                          className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
-                          title="زیادکردن"
-                        >
-                          +
-                        </button>
-                      </div>
+                      {/* Active Mode Stepper */}
+                      {isOrderGiftMode ? (
+                        <div className="space-y-1">
+                          <div className="text-[10px] font-black text-yellow-900 flex items-center justify-between">
+                            <span className="flex items-center gap-1"><Gift size={12} /> بڕی هەدیە (نرخ: ٠):</span>
+                            <span>{currentGiftQty} دانە</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-1.5 bg-yellow-100/70 border border-yellow-400 rounded-xl p-1 shadow-2xs">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, currentGiftQty - 1, currentUnit, true)}
+                              className="w-8 h-8 rounded-lg bg-yellow-200 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="کەمکردنەوەی هەدیە"
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              max={item.quantity || 999}
+                              value={currentGiftQty}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!isNaN(val)) {
+                                  handleUpdateOrderItemQty(item.id, val, currentUnit, true);
+                                }
+                              }}
+                              className="w-16 h-8 text-center font-mono font-bold text-sm text-yellow-950 outline-none bg-transparent"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, currentGiftQty + 1, currentUnit, true)}
+                              className="w-8 h-8 rounded-lg bg-yellow-400 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="زیادکردنی هەدیە"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-1.5 bg-white border border-indigo-300 rounded-xl p-1 shadow-2xs">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, currentQty - 1, currentUnit, false)}
+                              className="w-8 h-8 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="کەمکردنەوە"
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              max={item.quantity || 999}
+                              value={currentQty}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!isNaN(val)) {
+                                  handleUpdateOrderItemQty(item.id, val, currentUnit, false);
+                                }
+                              }}
+                              className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, currentQty + 1, currentUnit, false)}
+                              className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="زیادکردن"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
+                      {/* Summary Breakdown */}
                       <div className="flex items-center justify-between text-[11px] font-bold text-indigo-900 mt-1.5 px-1">
                         <span>کۆی کاڵا:</span>
-                        <span className="font-mono text-indigo-700" dir="ltr">{subtotal.toLocaleString()} د.ع</span>
+                        <div className="flex items-center gap-1.5">
+                          {currentGiftQty > 0 && (
+                            <span className="text-yellow-700 text-[10px]">({currentGiftQty} هەدیە)</span>
+                          )}
+                          <span className="font-mono text-indigo-700" dir="ltr">{subtotal.toLocaleString()} د.ع</span>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -1337,7 +1557,7 @@ export default function OrdersView({
               <div className="h-8 w-px bg-slate-200"></div>
               <div className="text-xs font-bold text-slate-600">
                 <span>{orderSelectedItems.length} جۆر کاڵا</span>
-                <span className="text-slate-400 mr-1">({totalCount} دانە)</span>
+                <span className="text-slate-400 mr-1">({totalRegularCount} فرۆشتن {totalGiftCount > 0 ? `+ ${totalGiftCount} هەدیە` : ''})</span>
               </div>
             </div>
 
@@ -1367,11 +1587,12 @@ export default function OrdersView({
 
   // Render Dedicated Page: Cashvan Direct Sale (کاشڤان ڕاستەوخۆ) Page with INLINE + / - Steppers on Van Inventory
   if (currentView === 'cashvan_form') {
-    const totalAmount = vanCart.reduce((acc, curr) => acc + (curr.cartQty * curr.finalPrice), 0);
-    const totalCount = vanCart.reduce((acc, curr) => acc + curr.cartQty, 0);
+    const totalAmount = vanCart.reduce((acc, curr) => acc + ((curr.cartQty || 0) * (curr.finalPrice || 0)), 0);
+    const totalRegularCount = vanCart.reduce((acc, curr) => acc + (curr.cartQty || 0), 0);
+    const totalGiftCount = vanCart.reduce((acc, curr) => acc + (curr.giftQty || 0), 0);
 
     const filteredVanItems = vanInventory.filter(
-      i => (i.quantity || 0) > 0 && i.name.toLowerCase().includes(vanItemSearch.toLowerCase())
+      i => (i.quantity || 0) > 0
     );
 
     return (
@@ -1395,8 +1616,8 @@ export default function OrdersView({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Payment Type Selector */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Payment Type Selector (نەقد / قەرز) */}
             <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
               <button
                 type="button"
@@ -1424,19 +1645,40 @@ export default function OrdersView({
               </button>
             </div>
 
-            {/* Search */}
-            <div className="relative flex-1 sm:w-60">
-              <input
-                type="text"
-                placeholder="گەڕان لەناو ڤاندا..."
-                className="w-full pl-3 pr-8 py-1.5 sm:py-2 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-amber-500 bg-slate-50 font-bold text-slate-800"
-                value={vanItemSearch}
-                onChange={(e) => setVanItemSearch(e.target.value)}
-              />
-              <Search className="absolute right-2.5 top-2 sm:top-2.5 text-slate-400" size={15} />
-            </div>
+            {/* Yellow Gift Mode Button Next to Debt/Cash */}
+            <button
+              type="button"
+              onClick={() => setIsVanGiftMode(!isVanGiftMode)}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border shadow-xs shrink-0 ${
+                isVanGiftMode
+                  ? 'bg-yellow-400 text-yellow-950 border-yellow-500 ring-2 ring-yellow-400 font-extrabold shadow-sm'
+                  : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-900 border-yellow-300'
+              }`}
+            >
+              <Gift size={16} className={isVanGiftMode ? 'fill-yellow-950' : ''} />
+              <span>هەدیە {isVanGiftMode ? '(چالاکە)' : ''}</span>
+            </button>
           </div>
         </div>
+
+        {/* Gift Mode Active Notice Banner */}
+        {isVanGiftMode && (
+          <div className="p-3 bg-yellow-50 border-2 border-yellow-400 rounded-2xl flex items-center justify-between gap-2 text-xs font-bold text-yellow-950 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <div className="p-1 bg-yellow-400 text-yellow-950 rounded-lg shrink-0">
+                <Gift size={16} className="fill-yellow-950" />
+              </div>
+              <span>دۆخی هەدیە چالاکە: هەر کاڵایەک دابگریت لەمەودوا بە نرخی ٠ وەک هەدیە دادەنرێت. بۆ گەڕانەوە بۆ فرۆشتنی ئاسایی دوگمەی هەدیە دابگرەوە.</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsVanGiftMode(false)}
+              className="px-2.5 py-1 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-lg text-xs font-bold shrink-0 transition"
+            >
+              کوژاندنەوە
+            </button>
+          </div>
+        )}
 
         {/* Debt notice if debt exists */}
         {(marketDebtMap.get(vanMarketName) || 0) > 0 && (
@@ -1455,7 +1697,9 @@ export default function OrdersView({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {filteredVanItems.map(item => {
             const cartItem = vanCart.find(c => c.id === item.id);
-            const currentQty = cartItem ? cartItem.cartQty : 0;
+            const currentQty = cartItem ? (cartItem.cartQty || 0) : 0;
+            const currentGiftQty = cartItem ? (cartItem.giftQty || 0) : 0;
+            const totalItemCount = currentQty + currentGiftQty;
             const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
             const unitPrice = calcPrice(item, item.unit || 'carton', vanMarketName);
             const subtotal = currentQty * unitPrice;
@@ -1464,8 +1708,10 @@ export default function OrdersView({
               <div
                 key={item.id}
                 className={`p-4 rounded-2xl transition-all duration-200 flex flex-col justify-between ${
-                  currentQty > 0
-                    ? 'bg-amber-50/70 border-2 border-amber-500 shadow-xs'
+                  totalItemCount > 0
+                    ? isVanGiftMode
+                      ? 'bg-yellow-50/60 border-2 border-yellow-400 shadow-xs'
+                      : 'bg-amber-50/70 border-2 border-amber-500 shadow-xs'
                     : 'bg-white border border-slate-200 hover:border-slate-300 shadow-2xs'
                 }`}
               >
@@ -1473,9 +1719,14 @@ export default function OrdersView({
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <h4 className="text-xs sm:text-sm font-bold text-slate-800 line-clamp-1">{item.name}</h4>
-                      <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
+                      <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
                         <span>لە ڤان: <strong className="text-slate-700 font-mono font-bold">{item.quantity} {unitLabel}</strong></span>
                         {item.barcode && <span className="text-slate-400 font-mono">| {item.barcode}</span>}
+                        {currentGiftQty > 0 && (
+                          <span className="bg-yellow-200 text-yellow-900 px-1.5 py-0.5 rounded-md font-black text-[10px]">
+                            {currentGiftQty} هەدیە
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -1491,53 +1742,106 @@ export default function OrdersView({
                 </div>
 
                 {/* INLINE + / - STEPPER CONTROLS */}
-                <div className="mt-3.5 pt-2.5 border-t border-slate-100/80">
-                  {currentQty === 0 ? (
+                <div className="mt-3.5 pt-2.5 border-t border-slate-100/80 space-y-2">
+                  {totalItemCount === 0 ? (
                     <button
                       type="button"
                       onClick={() => addToVanCart(item)}
-                      className="w-full py-2 bg-amber-50 hover:bg-amber-600 hover:text-white text-amber-900 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-98 border border-amber-200 hover:border-amber-600"
+                      className={`w-full py-2 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition active:scale-98 border ${
+                        isVanGiftMode
+                          ? 'bg-yellow-400 hover:bg-yellow-500 text-yellow-950 border-yellow-500 shadow-xs'
+                          : 'bg-amber-50 hover:bg-amber-600 hover:text-white text-amber-900 border-amber-200 hover:border-amber-600'
+                      }`}
                     >
-                      <Plus size={15} />
-                      <span>زیادکردن</span>
+                      {isVanGiftMode ? <Gift size={15} /> : <Plus size={15} />}
+                      <span>{isVanGiftMode ? 'زیادکردن وەک هەدیە' : 'زیادکردن'}</span>
                     </button>
                   ) : (
                     <div>
-                      <div className="flex items-center justify-between gap-1.5 bg-white border border-amber-300 rounded-xl p-1 shadow-2xs">
-                        <button
-                          type="button"
-                          onClick={() => updateVanCartQty(item.id, currentQty - 1, item.unit)}
-                          className="w-8 h-8 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                          title="کەمکردنەوە"
-                        >
-                          -
-                        </button>
-                        <input
-                          type="number"
-                          min="1"
-                          max={item.quantity || 999}
-                          value={currentQty}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value);
-                            if (!isNaN(val)) {
-                              updateVanCartQty(item.id, val, item.unit);
-                            }
-                          }}
-                          className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => updateVanCartQty(item.id, currentQty + 1, item.unit)}
-                          className="w-8 h-8 rounded-lg bg-amber-600 hover:bg-amber-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
-                          title="زیادکردن"
-                        >
-                          +
-                        </button>
-                      </div>
+                      {/* Active Mode Stepper */}
+                      {isVanGiftMode ? (
+                        <div className="space-y-1">
+                          <div className="text-[10px] font-black text-yellow-900 flex items-center justify-between">
+                            <span className="flex items-center gap-1"><Gift size={12} /> بڕی هەدیە (نرخ: ٠):</span>
+                            <span>{currentGiftQty} دانە</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-1.5 bg-yellow-100/70 border border-yellow-400 rounded-xl p-1 shadow-2xs">
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, currentGiftQty - 1, item.unit, true)}
+                              className="w-8 h-8 rounded-lg bg-yellow-200 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="کەمکردنەوەی هەدیە"
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              max={item.quantity || 999}
+                              value={currentGiftQty}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!isNaN(val)) {
+                                  updateVanCartQty(item.id, val, item.unit, true);
+                                }
+                              }}
+                              className="w-16 h-8 text-center font-mono font-bold text-sm text-yellow-950 outline-none bg-transparent"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, currentGiftQty + 1, item.unit, true)}
+                              className="w-8 h-8 rounded-lg bg-yellow-400 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="زیادکردنی هەدیە"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-1.5 bg-white border border-amber-300 rounded-xl p-1 shadow-2xs">
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, currentQty - 1, item.unit, false)}
+                              className="w-8 h-8 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="کەمکردنەوە"
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              max={item.quantity || 999}
+                              value={currentQty}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!isNaN(val)) {
+                                  updateVanCartQty(item.id, val, item.unit, false);
+                                }
+                              }}
+                              className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, currentQty + 1, item.unit, false)}
+                              className="w-8 h-8 rounded-lg bg-amber-600 hover:bg-amber-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
+                              title="زیادکردن"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
+                      {/* Summary Breakdown */}
                       <div className="flex items-center justify-between text-[11px] font-bold text-amber-950 mt-1.5 px-1">
                         <span>کۆی کاڵا:</span>
-                        <span className="font-mono text-emerald-700" dir="ltr">{subtotal.toLocaleString()} د.ع</span>
+                        <div className="flex items-center gap-1.5">
+                          {currentGiftQty > 0 && (
+                            <span className="text-yellow-700 text-[10px]">({currentGiftQty} هەدیە)</span>
+                          )}
+                          <span className="font-mono text-emerald-700" dir="ltr">{subtotal.toLocaleString()} د.ع</span>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -1566,7 +1870,7 @@ export default function OrdersView({
               <div className="h-8 w-px bg-slate-200"></div>
               <div className="text-xs font-bold text-slate-600">
                 <span>{vanCart.length} جۆر کاڵا</span>
-                <span className="text-slate-400 mr-1">({totalCount} دانە)</span>
+                <span className="text-slate-400 mr-1">({totalRegularCount} فرۆشتن {totalGiftCount > 0 ? `+ ${totalGiftCount} هەدیە` : ''})</span>
               </div>
             </div>
 
@@ -1695,7 +1999,7 @@ export default function OrdersView({
               }`}
             >
               <ShoppingCart size={13} />
-              <span>تەڵەبییە ({salesStats.orderCount})</span>
+              <span>تەڵەبیە ({salesStats.orderCount})</span>
             </button>
             <button
               type="button"

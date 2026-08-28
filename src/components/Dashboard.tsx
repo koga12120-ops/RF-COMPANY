@@ -35,10 +35,12 @@ import CompaniesGroupView from './views/CompaniesGroupView';
 import { Building2 } from 'lucide-react';
 import CashvanSalesView from './views/CashvanSalesView';
 import WarehouseCashvanView from './views/WarehouseCashvanView';
+import WarehouseOrdersView from './views/WarehouseOrdersView';
 import AdminCashvanView from './views/AdminCashvanView';
 import ReturnsView from './views/ReturnsView';
 import RepScheduleView from './views/RepScheduleView';
-import { Truck, Undo2 } from 'lucide-react';
+import AdminScheduleView from './views/AdminScheduleView';
+import { Truck, Undo2, ClipboardList, Calendar } from 'lucide-react';
 
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -95,27 +97,51 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
 
   useEffect(() => {
     if (role !== 'admin' && role !== 'warehouse') return;
-    const q = query(collection(db, 'orders'), where('status', '==', 'pending'));
-    const unsubscribe = onSnapshot(
-      q,
+    
+    let ordersCount = 0;
+    let reqsCount = 0;
+
+    const updateTotals = () => {
+      const total = ordersCount + reqsCount;
+      setPendingOrdersCount(total);
+      if (total > prevCountRef.current) {
+        // Play notification sound
+        try {
+          const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+          audio.play().catch(e => console.log('Audio play prevented by browser'));
+        } catch(e) {}
+      }
+      prevCountRef.current = total;
+    };
+
+    const qOrders = query(collection(db, 'orders'), where('status', '==', 'pending'));
+    const unsubOrders = onSnapshot(
+      qOrders,
       (snapshot) => {
-        const count = snapshot.size;
-        setPendingOrdersCount(count);
-        
-        if (count > prevCountRef.current) {
-          // Play notification sound
-          try {
-            const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
-            audio.play().catch(e => console.log('Audio play prevented by browser'));
-          } catch(e) {}
-        }
-        prevCountRef.current = count;
+        ordersCount = snapshot.size;
+        updateTotals();
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, 'orders');
       }
     );
-    return () => unsubscribe();
+
+    const qReqs = query(collection(db, 'cashvan_requisitions'), where('status', '==', 'pending'));
+    const unsubReqs = onSnapshot(
+      qReqs,
+      (snapshot) => {
+        reqsCount = snapshot.size;
+        updateTotals();
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvan_requisitions');
+      }
+    );
+
+    return () => {
+      unsubOrders();
+      unsubReqs();
+    };
   }, [role]);
 
   const adminMenu = [
@@ -133,8 +159,8 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
     { id: 'inventory', label: 'داخڵکردن و کۆگا', icon: Package },
     { id: 'stock_history', label: 'مێژووی هاتنی کاڵا', icon: History },
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
-    { id: 'orders', label: 'داواکاریەکانی مەندووب', icon: ShoppingCart },
-    { id: 'warehouse_cashvan', label: 'پێدان بە کاشڤان', icon: Truck },
+    { id: 'warehouse_orders', label: 'داواکارییەکان', icon: ClipboardList },
+    { id: 'admin_schedule', label: 'خشتەی سەردانی مارکێت', icon: Calendar },
   ];
 
   const repMenu = [
@@ -159,7 +185,10 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
     switch (activeTab) {
       case 'inventory': return <InventoryView role={role} />;
       case 'admin_cashvan': return <AdminCashvanView />;
-      case 'warehouse_cashvan': return <WarehouseCashvanView />;
+      case 'warehouse_orders': return <WarehouseOrdersView />;
+      case 'warehouse_cashvan': return <WarehouseOrdersView />;
+      case 'admin_schedule':
+      case 'schedule': return <AdminScheduleView />;
       case 'cashvan_sales': return <CashvanSalesView onlyPreorder={isStaffRep} />;
       case 'rep_schedule': return <RepScheduleView />;
       case 'stock_history': return <StockHistoryView />;
@@ -294,22 +323,28 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
           </div>
           <div className="flex items-center gap-4">
             {/* Theme Switcher */}
-            <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-full border border-slate-200 mr-4">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-full border border-slate-200 mr-4">
               <button 
                 onClick={() => setTheme('light')} 
-                className={`w-6 h-6 rounded-full border-2 ${theme === 'light' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-white`}
-                title="سپی"
-              />
+                className={`w-6 h-6 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'light' ? 'border-indigo-600 scale-110 shadow-sm ring-2 ring-indigo-200' : 'border-transparent opacity-70 hover:opacity-100'} bg-white text-slate-800`}
+                title="سپی / ڕووناک"
+              >
+                <span className="text-[10px]">☀️</span>
+              </button>
               <button 
                 onClick={() => setTheme('dark')} 
-                className={`w-6 h-6 rounded-full border-2 ${theme === 'dark' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-slate-800`}
-                title="ڕەش"
-              />
+                className={`w-6 h-6 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'dark' ? 'border-indigo-600 scale-110 shadow-sm ring-2 ring-indigo-200' : 'border-transparent opacity-70 hover:opacity-100'} bg-slate-900 text-yellow-300`}
+                title="ڕەش / تاریک"
+              >
+                <span className="text-[10px]">🌙</span>
+              </button>
               <button 
                 onClick={() => setTheme('sepia')} 
-                className={`w-6 h-6 rounded-full border-2 ${theme === 'sepia' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-[#fef3c7]`}
-                title="زەردباو"
-              />
+                className={`w-6 h-6 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'sepia' ? 'border-indigo-600 scale-110 shadow-sm ring-2 ring-indigo-200' : 'border-transparent opacity-70 hover:opacity-100'} bg-[#fef3c7] text-amber-900`}
+                title="زەردباو (Sepia)"
+              >
+                <span className="text-[10px]">📜</span>
+              </button>
             </div>
 
             {/* Lock Button for Admin */}
@@ -354,19 +389,28 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
           
           <div className="flex items-center gap-3">
             {/* Theme Switcher (Mobile) */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-full border border-slate-200">
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-full border border-slate-200">
               <button 
                 onClick={() => setTheme('light')} 
-                className={`w-5 h-5 rounded-full border-2 ${theme === 'light' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-white`}
-              />
+                className={`w-5 h-5 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'light' ? 'border-indigo-600 scale-110 shadow-sm ring-1 ring-indigo-200' : 'border-transparent opacity-70'} bg-white text-slate-800`}
+                title="سپی"
+              >
+                <span className="text-[9px]">☀️</span>
+              </button>
               <button 
                 onClick={() => setTheme('dark')} 
-                className={`w-5 h-5 rounded-full border-2 ${theme === 'dark' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-slate-800`}
-              />
+                className={`w-5 h-5 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'dark' ? 'border-indigo-600 scale-110 shadow-sm ring-1 ring-indigo-200' : 'border-transparent opacity-70'} bg-slate-900 text-yellow-300`}
+                title="ڕەش"
+              >
+                <span className="text-[9px]">🌙</span>
+              </button>
               <button 
                 onClick={() => setTheme('sepia')} 
-                className={`w-5 h-5 rounded-full border-2 ${theme === 'sepia' ? 'border-indigo-500 scale-110 shadow-sm' : 'border-transparent'} bg-[#fef3c7]`}
-              />
+                className={`w-5 h-5 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'sepia' ? 'border-indigo-600 scale-110 shadow-sm ring-1 ring-indigo-200' : 'border-transparent opacity-70'} bg-[#fef3c7] text-amber-900`}
+                title="زەردباو"
+              >
+                <span className="text-[9px]">📜</span>
+              </button>
             </div>
 
             {/* Lock Button for Admin on Mobile */}
@@ -411,7 +455,35 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
             </div>
 
             {/* Header Center / Action Buttons */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Theme Switcher (ڕەش / زەرد / سپی) - هەمیشە بەردەستە */}
+              <div className="flex items-center gap-1 sm:gap-1.5 bg-slate-100 p-1 sm:p-1.5 rounded-full border border-slate-200 shadow-2xs" title="گۆڕینی ڕووکاری سیستەم (سپی / تاریک / زەرد)">
+                <button 
+                  type="button"
+                  onClick={() => setTheme('light')} 
+                  className={`w-6 h-6 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'light' ? 'border-indigo-600 scale-110 shadow-sm ring-2 ring-indigo-200' : 'border-slate-300 opacity-70 hover:opacity-100'} bg-white text-slate-800`}
+                  title="ڕەنگی سپی / ڕووناک"
+                >
+                  <span className="text-[10px]">☀️</span>
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setTheme('dark')} 
+                  className={`w-6 h-6 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'dark' ? 'border-indigo-600 scale-110 shadow-sm ring-2 ring-indigo-200' : 'border-slate-700 opacity-70 hover:opacity-100'} bg-slate-900 text-yellow-300`}
+                  title="ڕەنگی ڕەش / تاریک"
+                >
+                  <span className="text-[10px]">🌙</span>
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setTheme('sepia')} 
+                  className={`w-6 h-6 rounded-full border-2 transition-all flex items-center justify-center ${theme === 'sepia' ? 'border-indigo-600 scale-110 shadow-sm ring-2 ring-indigo-200' : 'border-amber-300 opacity-70 hover:opacity-100'} bg-[#fef3c7] text-amber-900`}
+                  title="ڕەنگی زەرد (Sepia)"
+                >
+                  <span className="text-[10px]">📜</span>
+                </button>
+              </div>
+
               {activeTab ? (
                 <button
                   type="button"
@@ -427,17 +499,15 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
                 </div>
               )}
 
-              {/* Theme & Logout */}
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={onLogout}
-                  className="px-2.5 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-xs font-bold flex items-center gap-1 transition"
-                  title="چوونەدەرەوە"
-                >
-                  <LogOut size={15} />
-                  <span className="hidden sm:inline">چوونەدەرەوە</span>
-                </button>
-              </div>
+              {/* Logout */}
+              <button
+                onClick={onLogout}
+                className="px-2.5 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-xs font-bold flex items-center gap-1 transition"
+                title="چوونەدەرەوە"
+              >
+                <LogOut size={15} />
+                <span className="hidden sm:inline">چوونەدەرەوە</span>
+              </button>
             </div>
           </div>
         </header>
@@ -484,7 +554,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
                       <Icon size={20} className={isActive ? 'text-indigo-600' : 'text-slate-400'} />
                       <span>{item.label}</span>
                     </div>
-                    {item.id === 'orders' && pendingOrdersCount > 0 && (
+                    {(item.id === 'orders' || item.id === 'warehouse_orders') && pendingOrdersCount > 0 && (
                       <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
                         {pendingOrdersCount}
                       </span>

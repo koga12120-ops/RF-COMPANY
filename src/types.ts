@@ -91,8 +91,11 @@ export interface OrderItem {
   itemId: string;
   name: string;
   quantity: number;
+  giftQuantity?: number;
   unit?: 'carton' | 'packet';
   price: number;
+  totalPrice?: number;
+  isGift?: boolean;
 }
 
 export interface Order {
@@ -107,7 +110,9 @@ export interface Order {
   items: OrderItem[];
   status: 'pending' | 'printed' | 'completed' | 'deleted';
   paymentStatus?: 'cash' | 'debt';
+  paymentType?: 'cash' | 'debt';
   timestamp: number;
+  fulfilledAt?: number;
   deletedBy?: string;
   deletedAt?: number;
 }
@@ -176,6 +181,7 @@ export interface CashvanSale {
     unit?: 'carton' | 'packet';
     price: number;
     barcode?: string;
+    isGift?: boolean;
   }[];
   totalAmount: number;
   totalProfit?: number;

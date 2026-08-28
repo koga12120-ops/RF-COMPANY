@@ -329,6 +329,7 @@ export interface DailyRepActivityData {
     amount: number;
     paymentType: string; // 'نەقد' or 'قەرز'
     itemsSummary?: string;
+    giftsSummary?: string;
   }[];
   collections: {
     id: string;
@@ -336,6 +337,14 @@ export interface DailyRepActivityData {
     invoiceNo?: string;
     amount: number;
     notes?: string;
+  }[];
+  gifts?: {
+    id?: string;
+    marketName: string;
+    invoiceNo?: string;
+    name: string;
+    quantity: number;
+    unit?: string;
   }[];
 }
 
@@ -345,6 +354,8 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
   const totalSalesAmount = totalCashSales + totalDebtSales;
   const totalCollectedDebt = data.collections.reduce((sum, c) => sum + c.amount, 0);
   const totalCashInHand = totalCashSales + totalCollectedDebt;
+
+  const totalGiftItemsCount = (data.gifts || []).reduce((sum, g) => sum + (g.quantity || 0), 0);
 
   const salesRowsHtml = data.sales.map((s, idx) => `
     <tr>
@@ -369,6 +380,16 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
       <td dir="ltr" style="text-align:left;font-weight:bold;color:#166534;">${c.amount.toLocaleString()} د.ع</td>
     </tr>
   `).join('') || '<tr><td colspan="5" style="text-align:center;padding:12px;color:#94a3b8;">هیچ قەرزێک لەم بەروارەدا وەرنەگیراوەتەوە</td></tr>';
+
+  const giftRowsHtml = (data.gifts && data.gifts.length > 0) ? data.gifts.map((g, idx) => `
+    <tr style="background: #fefce8;">
+      <td style="text-align:center;font-weight:bold;color:#854d0e;">${idx + 1}</td>
+      <td style="font-weight:bold;color:#713f12;">🎁 ${g.name}</td>
+      <td style="text-align:center;font-weight:bold;color:#854d0e;">${g.quantity} ${g.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</td>
+      <td style="font-weight:medium;color:#334155;">${g.marketName}</td>
+      <td dir="ltr" style="text-align:center;font-family:monospace;font-size:13px;color:#a16207;">${g.invoiceNo ? `#${g.invoiceNo}` : '-'}</td>
+    </tr>
+  `).join('') : '';
 
   return `
     <html dir="rtl">
@@ -464,6 +485,27 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
           </tbody>
         </table>
 
+        ${(data.gifts && data.gifts.length > 0) ? `
+        <div class="section-title" style="color: #854d0e; border-bottom: 2px solid #fde047;">
+          <span>🎁 لیستی کاڵا و بڕی هەدیە دراوەکان (${totalGiftItemsCount} دانە)</span>
+          <span style="font-size: 13px; background: #fef08a; color: #713f12; padding: 2px 8px; border-radius: 6px; font-weight: bold;">تێچووی وەرگیراو: ٠ د.ع</span>
+        </div>
+        <table>
+          <thead>
+            <tr style="background: #fef9c3;">
+              <th style="width: 40px; text-align: center; color: #854d0e;">#</th>
+              <th style="text-align: right; color: #854d0e;">ناوی کاڵای هەدیە</th>
+              <th style="width: 120px; text-align: center; color: #854d0e;">بڕی هەدیە</th>
+              <th style="text-align: right; color: #854d0e;">ناوی مارکێت / شوێن</th>
+              <th style="width: 130px; text-align: center; color: #854d0e;">ژمارەی وەسڵ</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${giftRowsHtml}
+          </tbody>
+        </table>
+        ` : ''}
+
         <div class="summary-box">
           <div class="summary-row">
             <span>کۆی فرۆشتنی نەقد:</span>
@@ -477,6 +519,12 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
             <span>کۆی قەرزی وەرگیراوە لە مارکێتەکان (کاش):</span>
             <span dir="ltr" style="font-weight: bold; color: #166534;">${totalCollectedDebt.toLocaleString()} د.ع</span>
           </div>
+          ${totalGiftItemsCount > 0 ? `
+          <div class="summary-row" style="background: #fef9c3; padding: 6px 10px; border-radius: 8px; border: 1px solid #fde047; margin: 8px 0;">
+            <span style="font-weight: bold; color: #854d0e;">🎁 کۆی گشتی بڕی هەدیەکان (بێ بەرامبەر):</span>
+            <span style="font-weight: bold; color: #854d0e;">${totalGiftItemsCount} دانە</span>
+          </div>
+          ` : ''}
           <div class="summary-row total-highlight">
             <span>کۆی گشتی پارەی نەقد بۆ ڕادەستکردن بە بەڕێوەبەر:</span>
             <span dir="ltr">${totalCashInHand.toLocaleString()} د.ع</span>

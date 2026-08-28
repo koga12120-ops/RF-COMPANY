@@ -512,7 +512,7 @@ export default function MarketDailyScheduleCard({
 
             {/* Action Options */}
             <div className="p-3 sm:p-4 space-y-2 overflow-y-auto">
-              {/* Option 1: تەڵەبییە */}
+              {/* Option 1: تەڵەبیە */}
               <button
                 onClick={() => {
                   const m = actionMarket.market;
@@ -525,7 +525,7 @@ export default function MarketDailyScheduleCard({
                   <ShoppingCart size={16} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-indigo-950">١. تەڵەبییە (داواکاری مەندووب)</div>
+                  <div className="font-bold text-xs sm:text-sm text-indigo-950">١. تەڵەبیە</div>
                   <div className="text-[11px] text-slate-500 truncate">تۆمارکردنی داواکاری کاڵاکانی کۆگا</div>
                 </div>
               </button>
@@ -547,7 +547,7 @@ export default function MarketDailyScheduleCard({
                   <Truck size={16} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-amber-950">٢. کاشڤان (فرۆشتنی ڕاستەوخۆ)</div>
+                  <div className="font-bold text-xs sm:text-sm text-amber-950">٢. کاشڤان</div>
                   <div className="text-[11px] text-slate-500 truncate">فرۆشتن لە کاڵاکانی ناو ڤان</div>
                 </div>
               </button>
