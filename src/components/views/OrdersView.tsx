@@ -29,11 +29,13 @@ interface ActivityItem {
 export default function OrdersView({
   role,
   initialTab = 'schedule',
-  onTabChange
+  onTabChange,
+  isWarehouseMode = false
 }: {
   role: Role;
   initialTab?: 'schedule' | 'info';
   onTabChange?: (tab: 'schedule' | 'info') => void;
+  isWarehouseMode?: boolean;
 }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [cashvanSales, setCashvanSales] = useState<CashvanSale[]>([]);
@@ -110,6 +112,8 @@ export default function OrdersView({
   // Auto-fill rep name and sync live with users collection
   useEffect(() => {
     if (!auth.currentUser) return;
+    // If in warehouse mode or warehouse role, allow selecting any rep manually
+    if (isWarehouseMode || role === 'warehouse') return;
     const unsubUser = onSnapshot(
       doc(db, 'users', auth.currentUser.uid),
       (docSnap) => {
@@ -122,7 +126,14 @@ export default function OrdersView({
       (error) => handleFirestoreError(error, OperationType.GET, 'users')
     );
     return () => unsubUser();
-  }, []);
+  }, [isWarehouseMode, role]);
+
+  // When reps are loaded in warehouse mode, auto-select the first rep if not selected yet
+  useEffect(() => {
+    if ((isWarehouseMode || role === 'warehouse') && !repName && reps.length > 0) {
+      setRepName(reps[0].name);
+    }
+  }, [reps, isWarehouseMode, role, repName]);
 
   // Listeners for Firestore Collections
   useEffect(() => {
@@ -1284,8 +1295,8 @@ export default function OrdersView({
     return (
       <div className="space-y-4 animate-in fade-in zoom-in-98 duration-200 pb-28">
         {/* Compact Integrated Header Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 sm:p-4 rounded-2xl shadow-xs border border-slate-200">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-3 sm:p-4 rounded-2xl shadow-xs border border-slate-200">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={() => setCurrentView(activeActionMarket ? 'market_actions' : 'main')}
@@ -1300,9 +1311,59 @@ export default function OrdersView({
                 تەڵەبیە بۆ: <strong className="text-indigo-600">{orderMarketName}</strong>
               </h2>
             </div>
+
+            {/* Rep Selector Badge in Order Form */}
+            <div className="flex items-center gap-1.5 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-xl">
+              <User size={14} className="text-indigo-600 shrink-0" />
+              <span className="text-xs font-bold text-indigo-900">مەندووب:</span>
+              {(isWarehouseMode || role === 'warehouse' || role === 'admin') ? (
+                <select
+                  value={repName}
+                  onChange={(e) => setRepName(e.target.value)}
+                  className="bg-white border border-indigo-300 rounded-lg text-xs font-bold text-indigo-950 px-2 py-0.5 outline-none cursor-pointer focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="">-- دیاریکردنی مەندووب --</option>
+                  {reps.map((r) => (
+                    <option key={r.id} value={r.name}>
+                      {r.name} {r.isCashvan ? '(کاشڤان)' : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-xs font-black text-indigo-700">{repName || 'مەندووب'}</span>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Payment Type Selector (نەقد / قەرز) */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setOrderPaymentType('cash')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                  orderPaymentType === 'cash'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <DollarSign size={13} />
+                <span>بە نەقد</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setOrderPaymentType('debt')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                  orderPaymentType === 'debt'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <CreditCard size={13} />
+                <span>بە قەرز</span>
+              </button>
+            </div>
+
             {/* Yellow Gift Mode Button */}
             <button
               type="button"
@@ -1901,16 +1962,61 @@ export default function OrdersView({
   return (
     <div className="space-y-6">
       {activeMainTab === 'schedule' && (
-        <MarketDailyScheduleCard
-          role={role}
-          activeRepName={repName}
-          activeCashvanName={repName}
-          onSelectForOrder={handleSelectMarketForOrder}
-          onSelectForCashvan={handleSelectMarketForCashvan}
-          onSelectForDebtPay={handleSelectMarketForDebtPay}
-          onOpenMarketActions={handleOpenMarketActions}
-          marketDebtMap={marketDebtMap}
-        />
+        <>
+          {(isWarehouseMode || role === 'warehouse' || role === 'admin') && (
+            <div className="bg-white border-2 border-indigo-200 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 bg-indigo-600 text-white rounded-2xl flex items-center justify-center shadow-xs shrink-0">
+                  <User size={24} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm sm:text-base font-bold text-slate-800">
+                      تۆمارکردنی تەڵەبییە لەژێر ناوی مەندووب
+                    </h3>
+                    <span className="bg-indigo-100 text-indigo-800 text-[11px] px-2.5 py-0.5 rounded-full font-bold border border-indigo-200">
+                      کۆگا
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    مەندووبێک دیاری بکە بۆ ئەوەی خشتەی سەردان، وەسڵ و حساباتی داواکارییەکە لەسەر حسابی ئەو مەندووبە تۆمار بکرێت
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 min-w-[260px] sm:min-w-[320px]">
+                <div className="w-full">
+                  <label className="block text-[11px] font-bold text-indigo-900 mb-1">
+                    هەڵبژاردنی مەندووب / کاشڤان:
+                  </label>
+                  <select
+                    value={repName}
+                    onChange={(e) => setRepName(e.target.value)}
+                    className="w-full bg-slate-50 hover:bg-slate-100 border-2 border-indigo-300 text-slate-800 font-bold text-xs sm:text-sm py-2.5 px-3.5 rounded-xl outline-none focus:border-indigo-600 transition shadow-2xs cursor-pointer"
+                  >
+                    <option value="">-- مەندووب هەڵبژێرە --</option>
+                    {reps.map((r) => (
+                      <option key={r.id} value={r.name}>
+                        {r.name} {r.isCashvan ? '(کاشڤان)' : '(مەندووب)'} {r.phone ? `(${r.phone})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <MarketDailyScheduleCard
+            role={role}
+            activeRepName={repName}
+            activeCashvanName={repName}
+            onSelectForOrder={handleSelectMarketForOrder}
+            onSelectForCashvan={handleSelectMarketForCashvan}
+            onSelectForDebtPay={handleSelectMarketForDebtPay}
+            onOpenMarketActions={handleOpenMarketActions}
+            marketDebtMap={marketDebtMap}
+          />
+        </>
       )}
 
       {/* 3. BOTTOM SECTION: MY DAILY ACTIVITIES & HISTORY (FILTER BY DATE: TODAY, YESTERDAY, CUSTOM) */}

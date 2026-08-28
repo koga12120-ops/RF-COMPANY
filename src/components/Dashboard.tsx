@@ -76,7 +76,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
   const handleUnlock = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const cleanCode = normalizeDigits(unlockCode);
-    if (cleanCode === '969899') {
+    if (cleanCode === '990011') {
       setIsAdminLocked(false);
       sessionStorage.removeItem('admin_system_locked');
       setUnlockCode('');
@@ -160,6 +160,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
     { id: 'stock_history', label: 'مێژووی هاتنی کاڵا', icon: History },
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
     { id: 'warehouse_orders', label: 'داواکارییەکان', icon: ClipboardList },
+    { id: 'warehouse_create_order', label: 'تەڵەبییە (مەندووب)', icon: ShoppingCart },
     { id: 'admin_schedule', label: 'خشتەی سەردانی مارکێت', icon: Calendar },
   ];
 
@@ -187,6 +188,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       case 'admin_cashvan': return <AdminCashvanView />;
       case 'warehouse_orders': return <WarehouseOrdersView />;
       case 'warehouse_cashvan': return <WarehouseOrdersView />;
+      case 'warehouse_create_order': return <OrdersView role={role} isWarehouseMode={true} initialTab="schedule" />;
       case 'admin_schedule':
       case 'schedule': return <AdminScheduleView />;
       case 'cashvan_sales': return <CashvanSalesView onlyPreorder={isStaffRep} />;
