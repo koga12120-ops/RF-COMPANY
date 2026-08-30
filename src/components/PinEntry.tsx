@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, UserCheck, KeyRound, AlertTriangle, CheckCircle2, X, Send } from 'lucide-react';
+import { KeyRound, AlertTriangle } from 'lucide-react';
 import { Role } from '../types';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc, setDoc, getDocs, collection, query, where, updateDoc } from 'firebase/firestore';
@@ -23,12 +23,6 @@ export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNo
       setInfoMessage(initialNotice);
     }
   }, [initialNotice]);
-
-  // Rep Registration modal states
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [repName, setRepName] = useState(auth.currentUser?.displayName || '');
-  const [repPhone, setRepPhone] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,43 +60,72 @@ export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNo
       // Static Roles
       if (normalizedPin === '27890') {
         sessionStorage.setItem('active_session_pin', '27890');
+        if (currentUser) {
+          await setDoc(doc(db, 'users', currentUser.uid), {
+            role: 'admin',
+            accessCode: '27890',
+            forceReauth: false,
+            lastReauthAt: Date.now(),
+            name: currentUser.displayName || currentUser.email || 'بەڕێوەبەر',
+            email: currentUser.email || '',
+            status: 'active',
+            isDeleted: false
+          }, { merge: true });
+        }
         await onSuccess('admin');
         return;
       } else if (normalizedPin === '35278') {
         sessionStorage.setItem('active_session_pin', '35278');
+        if (currentUser) {
+          await setDoc(doc(db, 'users', currentUser.uid), {
+            role: 'warehouse',
+            accessCode: '35278',
+            forceReauth: false,
+            lastReauthAt: Date.now(),
+            name: currentUser.displayName || currentUser.email || 'بەرپرسی کۆگا',
+            email: currentUser.email || '',
+            status: 'active',
+            isDeleted: false
+          }, { merge: true });
+        }
         await onSuccess('warehouse');
         return;
       } else if (normalizedPin === '47953') {
         sessionStorage.setItem('active_session_pin', '47953');
+        if (currentUser) {
+          await setDoc(doc(db, 'users', currentUser.uid), {
+            role: 'cashvan',
+            accessCode: '47953',
+            forceReauth: false,
+            lastReauthAt: Date.now(),
+            name: currentUser.displayName || currentUser.email || 'کاشڤان',
+            email: currentUser.email || '',
+            status: 'active',
+            isDeleted: false
+          }, { merge: true });
+        }
         await onSuccess('cashvan');
         return;
-      } 
-      
-      // Initial Sales Rep Request Code (43629)
-      if (normalizedPin === '43629') {
-        if (!currentUser) {
-          setError('تکایە سەرەتا بە هەژمار بچۆ ژوورەوە');
-          return;
+      } else if (normalizedPin === '43629') {
+        // Universal Sales Rep Access Code (43629)
+        sessionStorage.setItem('active_session_pin', '43629');
+        if (currentUser) {
+          await setDoc(doc(db, 'users', currentUser.uid), {
+            role: 'sales_rep',
+            accessCode: '43629',
+            forceReauth: false,
+            lastReauthAt: Date.now(),
+            name: currentUser.displayName || currentUser.email || 'مەندووب',
+            email: currentUser.email || '',
+            status: 'active',
+            isDeleted: false
+          }, { merge: true });
         }
-
-        // Check if user already registered in reps
-        const repDoc = await getDoc(doc(db, 'reps', currentUser.uid));
-        if (repDoc.exists()) {
-          const repData = repDoc.data();
-          if (repData.accessCode && repData.status === 'active') {
-            setInfoMessage('بەڕێوەبەر کۆدی تایبەتی بۆ داناویت. تکایە کۆدە ٥ ژمارەییە تایبەتەکەت لێبدە بۆ چوونەژوورەوە.');
-          } else {
-            setInfoMessage('داواکارییەکەت لە چاوەڕوانیدایە. تکایە داوا لە بەڕێوەبەر بکە لە لیستی مەندووبەکان کۆدی تایبەتت بۆ دابنێت.');
-          }
-        } else {
-          // Open registration form to submit name and phone to admin
-          setShowRegisterModal(true);
-        }
-        setPin('');
+        await onSuccess('sales_rep');
         return;
       }
 
-      // Check for Personal Rep Access Code (assigned by Admin)
+      // Check for Personal Rep Access Code (assigned by Admin in RepsView)
       const repsQuery = query(collection(db, 'reps'), where('accessCode', '==', normalizedPin));
       const repsSnap = await getDocs(repsQuery);
 
@@ -151,7 +174,7 @@ export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNo
         return;
       }
 
-      // Check for Cashvan Personal Access Code (assigned by Admin)
+      // Check for Cashvan Personal Access Code (assigned by Admin in CashvanView)
       const cashvansQuery = query(collection(db, 'cashvans'), where('accessCode', '==', normalizedPin));
       const cashvansSnap = await getDocs(cashvansQuery);
 
@@ -166,6 +189,9 @@ export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNo
         }
 
         sessionStorage.setItem('active_session_pin', normalizedPin);
+        if (cvData.name) {
+          sessionStorage.setItem('active_cashvan_name', cvData.name);
+        }
 
         if (currentUser) {
           await setDoc(doc(db, 'users', currentUser.uid), {
@@ -199,52 +225,6 @@ export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNo
       setError('هەڵەیەک ڕوویدا لە کاتی پشتڕاستکردنەوە');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleRegisterRep = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!repName.trim() || !repPhone.trim()) return;
-
-    const currentUser = auth.currentUser;
-    if (!currentUser) return;
-
-    setIsRegistering(true);
-    try {
-      // 1. Create Rep Profile in reps collection
-      await setDoc(doc(db, 'reps', currentUser.uid), {
-        id: currentUser.uid,
-        uid: currentUser.uid,
-        name: repName.trim(),
-        phone: repPhone.trim(),
-        email: currentUser.email || '',
-        accessCode: '', // Waiting for admin to set
-        status: 'pending',
-        totalSales: 0,
-        totalProfit: 0,
-        createdAt: Date.now()
-      }, { merge: true });
-
-      // 2. Set user record in users collection
-      await setDoc(doc(db, 'users', currentUser.uid), {
-        uid: currentUser.uid,
-        name: repName.trim(),
-        phone: repPhone.trim(),
-        email: currentUser.email || '',
-        role: null, // role will be assigned once admin sets code
-        status: 'pending',
-        accessCode: '',
-        isDeleted: false,
-        createdAt: Date.now()
-      }, { merge: true });
-
-      setShowRegisterModal(false);
-      setInfoMessage('داواکارییەکەت بە سەرکەوتوویی تۆمارکرا! ناوت لە لیستی مەندووبەکان لای بەڕێوەبەر دەردەکەوێت، تکایە داوای لێبکە کۆدی تایبەتت بۆ دابنێت تا بتوانیت بچیتە ژوورەوە.');
-    } catch (err) {
-      console.error(err);
-      setError('هەڵەیەک ڕوویدا لە کاتی تۆمارکردنی داواکاری');
-    } finally {
-      setIsRegistering(false);
     }
   };
 
@@ -308,77 +288,6 @@ export default function PinEntry({ onSuccess, onLogout, initialNotice, onClearNo
           چوونەدەرەوە لە هەژمار
         </button>
       </div>
-
-      {/* Rep First-Time Registration Modal */}
-      {showRegisterModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
-              <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
-                <UserCheck className="text-indigo-600" size={20} />
-                تۆمارکردنی ناوی مەندووب
-              </h3>
-              <button 
-                onClick={() => setShowRegisterModal(false)} 
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
-                disabled={isRegistering}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleRegisterRep} className="p-6 space-y-4">
-              <p className="text-xs text-slate-600 leading-relaxed">
-                بەخێربێیت. تکایە ناوی تەواو و ژمارەی تەلەفۆنت بنووسە بۆ ئەوەی ناوت لە لیستی مەندووبەکان تۆماربێت و بەڕێوەبەر کۆدی تایبەتت بۆ دابنێت.
-              </p>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی سیانی مەندووب</label>
-                <input
-                  type="text"
-                  required
-                  value={repName}
-                  onChange={(e) => setRepName(e.target.value)}
-                  placeholder="بۆ نموونە: ئارام ئەحمەد کەریم"
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">ژمارەی مۆبایل</label>
-                <input
-                  type="tel"
-                  required
-                  value={repPhone}
-                  onChange={(e) => setRepPhone(e.target.value)}
-                  placeholder="07XXXXXXXXX"
-                  dir="ltr"
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono text-right"
-                />
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="submit"
-                  disabled={isRegistering}
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 text-sm shadow-sm disabled:opacity-50"
-                >
-                  <Send size={16} />
-                  <span>{isRegistering ? 'خەریکی ناردنە...' : 'ناردنی داواکاری بۆ بەڕێوەبەر'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowRegisterModal(false)}
-                  disabled={isRegistering}
-                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-sm"
-                >
-                  پاشگەزبوونەوە
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
