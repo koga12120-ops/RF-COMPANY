@@ -3,7 +3,7 @@ import { collection, query, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Market, SalesRep } from '../../types';
-import { Calendar, Save, Trash2, Search, Store, UserCheck, Plus } from 'lucide-react';
+import { Calendar, Save, Trash2, Search, Store, UserCheck, Plus, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 
 const DAYS = [
   { id: '6', label: 'شەممە', color: 'border-indigo-200 bg-indigo-50/40 text-indigo-900' },
@@ -23,19 +23,48 @@ export default function AdminScheduleView() {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [marketSearch, setMarketSearch] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    let repsList: SalesRep[] = [];
+    let cashvansList: SalesRep[] = [];
+
+    const updateCombinedReps = () => {
+      const map = new Map<string, SalesRep>();
+      repsList.forEach(r => map.set(r.id, r));
+      cashvansList.forEach(cv => {
+        if (!map.has(cv.id)) {
+          map.set(cv.id, cv);
+        }
+      });
+      const combined = Array.from(map.values());
+      combined.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      setReps(combined);
+    };
+
     const unsubReps = onSnapshot(
       query(collection(db, 'reps')),
       (snapshot) => {
-        const data: SalesRep[] = [];
-        snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as SalesRep));
-        data.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        setReps(data);
+        repsList = [];
+        snapshot.forEach(doc => repsList.push({ id: doc.id, ...doc.data() } as SalesRep));
+        updateCombinedReps();
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, 'reps');
+      }
+    );
+
+    const unsubCashvans = onSnapshot(
+      query(collection(db, 'cashvans')),
+      (snapshot) => {
+        cashvansList = [];
+        snapshot.forEach(doc => cashvansList.push({ id: doc.id, isCashvan: true, ...doc.data() } as any));
+        updateCombinedReps();
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvans');
       }
     );
 
@@ -55,6 +84,7 @@ export default function AdminScheduleView() {
 
     return () => {
       unsubReps();
+      unsubCashvans();
       unsubMarkets();
     };
   }, []);
@@ -110,15 +140,38 @@ export default function AdminScheduleView() {
   const handleSave = async () => {
     if (!selectedRep) return;
     setSaving(true);
+    setSaveSuccess(null);
+    setSaveError(null);
     try {
+      const repObj = reps.find(r => r.id === selectedRep);
+      const repDisplayName = repObj?.name || 'مەندووب';
+
       await setDoc(doc(db, 'schedules', selectedRep), {
         repId: selectedRep,
-        schedule
-      });
-      alert('خشتەی سەردان بە سەرکەوتوویی پاشەکەوت کرا');
+        repName: repDisplayName,
+        schedule,
+        updatedAt: Date.now()
+      }, { merge: true });
+
+      if (repObj?.name && repObj.name !== selectedRep) {
+        await setDoc(doc(db, 'schedules', repObj.name), {
+          repId: selectedRep,
+          repName: repObj.name,
+          schedule,
+          updatedAt: Date.now()
+        }, { merge: true });
+      }
+
+      setSaveSuccess(`خشتەی سەردانی (${repDisplayName}) بە سەرکەوتوویی لە سیستم پاشەکەوت کرا.`);
+      setTimeout(() => {
+        setSaveSuccess(null);
+      }, 5000);
     } catch (error) {
       console.error(error);
-      alert('کێشەیەک ڕوویدا لە پاشەکەوتکردن');
+      setSaveError('کێشەیەک لە پاشەکەوتکردنی خشتە ڕوویدا، تکایە دووبارە هەوڵبدەرەوە.');
+      setTimeout(() => {
+        setSaveError(null);
+      }, 5000);
     } finally {
       setSaving(false);
     }
@@ -148,13 +201,68 @@ export default function AdminScheduleView() {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 active:scale-98 transition flex items-center gap-2 shadow-xs disabled:opacity-60 text-xs sm:text-sm"
+              className={`px-6 py-2.5 rounded-xl font-bold active:scale-98 transition flex items-center gap-2 shadow-xs disabled:opacity-60 text-xs sm:text-sm ${
+                saveSuccess
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-700 ring-2 ring-emerald-300'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              }`}
             >
-              <Save size={18} />
-              <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی خشتە'}</span>
+              {saveSuccess ? (
+                <>
+                  <CheckCircle2 size={18} className="animate-bounce" />
+                  <span>پاشەکەوت کرا!</span>
+                </>
+              ) : (
+                <>
+                  <Save size={18} />
+                  <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی خشتە'}</span>
+                </>
+              )}
             </button>
           )}
         </div>
+
+        {/* Success / Error Notification Banners */}
+        {saveSuccess && (
+          <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-300 rounded-2xl flex items-center gap-3 text-emerald-900 shadow-sm animate-fade-in">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <CheckCircle2 size={24} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-black flex items-center gap-2">
+                <span>سەرکەوتوو بوو!</span>
+                <Sparkles size={16} className="text-emerald-600" />
+              </div>
+              <div className="text-xs text-emerald-800 font-medium mt-0.5">
+                {saveSuccess}
+              </div>
+            </div>
+            <button
+              onClick={() => setSaveSuccess(null)}
+              className="text-emerald-600 hover:text-emerald-900 text-xs font-bold px-3 py-1 bg-emerald-100/80 rounded-lg hover:bg-emerald-200 transition shrink-0"
+            >
+              داخستن
+            </button>
+          </div>
+        )}
+
+        {saveError && (
+          <div className="mb-6 p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl flex items-center gap-3 text-rose-900 shadow-sm animate-fade-in">
+            <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+              <AlertCircle size={24} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-black">هەڵە لە پاشەکەوتکردن</div>
+              <div className="text-xs text-rose-800 font-medium mt-0.5">{saveError}</div>
+            </div>
+            <button
+              onClick={() => setSaveError(null)}
+              className="text-rose-600 hover:text-rose-900 text-xs font-bold px-3 py-1 bg-rose-100 rounded-lg hover:bg-rose-200 transition shrink-0"
+            >
+              داخستن
+            </button>
+          </div>
+        )}
 
         {/* Rep Selection Card */}
         <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
@@ -284,10 +392,23 @@ export default function AdminScheduleView() {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 active:scale-98 transition flex items-center justify-center gap-2 shadow-xs disabled:opacity-60 text-sm"
+                className={`w-full sm:w-auto px-8 py-3 rounded-xl font-bold active:scale-98 transition flex items-center justify-center gap-2 shadow-xs disabled:opacity-60 text-sm ${
+                  saveSuccess
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-700 ring-2 ring-emerald-300'
+                    : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                }`}
               >
-                <Save size={18} />
-                <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی سەرجەم گۆڕانکارییەکان'}</span>
+                {saveSuccess ? (
+                  <>
+                    <CheckCircle2 size={20} className="animate-bounce" />
+                    <span>خشتەکە بە سەرکەوتوویی پاشەکەوت کرا!</span>
+                  </>
+                ) : (
+                  <>
+                    <Save size={18} />
+                    <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی سەرجەم گۆڕانکارییەکان'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

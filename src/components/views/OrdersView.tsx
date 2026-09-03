@@ -10,6 +10,7 @@ import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
 import MarketDailyScheduleCard from '../common/MarketDailyScheduleCard';
 import { printDailyRepReceiptPopup, generateStatementHtml } from '../../lib/statementPrinter';
 import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
+import { getStoredSession } from '../../lib/authService';
 
 interface ActivityItem {
   id: string;
@@ -49,7 +50,10 @@ export default function OrdersView({
   const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
 
   // Active user / rep name
-  const [repName, setRepName] = useState('');
+  const [repName, setRepName] = useState(() => {
+    const session = getStoredSession();
+    return session?.name || session?.username || sessionStorage.getItem('active_rep_name') || '';
+  });
 
   // Main Tabs
   const [activeMainTab, setActiveMainTab] = useState<'schedule' | 'info'>(initialTab);
@@ -127,23 +131,29 @@ export default function OrdersView({
 
   const formSectionRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-fill rep name and sync live with users collection
+  // Auto-fill rep name and sync live with stored session & reps collection
   useEffect(() => {
-    if (!auth.currentUser) return;
-    // If in warehouse mode or warehouse role, allow selecting any rep manually
     if (isWarehouseMode || role === 'warehouse') return;
-    const unsubUser = onSnapshot(
-      doc(db, 'users', auth.currentUser.uid),
-      (docSnap) => {
-        if (docSnap.exists() && docSnap.data().name) {
-          setRepName(docSnap.data().name);
-        } else if (auth.currentUser?.displayName) {
-          setRepName(auth.currentUser.displayName);
-        }
-      },
-      (error) => handleFirestoreError(error, OperationType.GET, 'users')
-    );
-    return () => unsubUser();
+
+    const session = getStoredSession();
+    const currentName = session?.name || session?.username || sessionStorage.getItem('active_rep_name') || '';
+    if (currentName) {
+      setRepName(currentName);
+    }
+
+    const sessionRepId = session?.repId || session?.id || sessionStorage.getItem('active_rep_id');
+    if (sessionRepId) {
+      const unsubRep = onSnapshot(
+        doc(db, 'reps', sessionRepId),
+        (docSnap) => {
+          if (docSnap.exists() && docSnap.data().name) {
+            setRepName(docSnap.data().name);
+          }
+        },
+        (error) => handleFirestoreError(error, OperationType.GET, 'reps')
+      );
+      return () => unsubRep();
+    }
   }, [isWarehouseMode, role]);
 
   // When reps are loaded in warehouse mode, auto-select the first rep if not selected yet
@@ -381,15 +391,17 @@ export default function OrdersView({
   };
 
   const handleToggleMarketVisit = async (marketId: string, currentStatus: boolean) => {
-    const activeId = repName || auth.currentUser?.uid;
+    const session = getStoredSession();
+    const activeId = session?.repId || repName || session?.username || session?.id || '';
+    const activeName = repName || session?.name || session?.username || '';
     if (!activeId) return;
     const weekId = getWeekId();
-    const visitId = `${auth.currentUser?.uid || activeId}_${weekId}_${marketId}`;
+    const visitId = `${activeId}_${weekId}_${marketId}`;
     try {
       if (currentStatus) {
         await setDoc(
           doc(db, 'schedule_visits', visitId),
-          { repId: auth.currentUser?.uid || activeId, weekId, marketId, visitedAt: null, unvisited: true },
+          { repId: activeId, repName: activeName, weekId, marketId, visitedAt: null, unvisited: true },
           { merge: true }
         );
         if (activeActionMarket) {
@@ -398,7 +410,7 @@ export default function OrdersView({
       } else {
         await setDoc(
           doc(db, 'schedule_visits', visitId),
-          { repId: auth.currentUser?.uid || activeId, weekId, marketId, visitedAt: Date.now(), unvisited: false },
+          { repId: activeId, repName: activeName, weekId, marketId, visitedAt: Date.now(), unvisited: false },
           { merge: true }
         );
         if (activeActionMarket) {
@@ -428,14 +440,14 @@ export default function OrdersView({
   };
 
   // --- ORDER FORM HANDLERS ---
-  const handleAddItemToOrder = (item: Item) => {
+  const handleAddItemToOrder = (item: Item, initialQty: number = 1) => {
     const exists = orderSelectedItems.find(si => si.item.id === item.id);
     const defaultUnit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
     const stock = item.quantity || 0;
 
     if (isOrderGiftMode) {
       if (exists) {
-        const newGiftQty = (exists.giftQuantity || 0) + 1;
+        const newGiftQty = Math.round(((exists.giftQuantity || 0) + initialQty) * 100) / 100;
         if ((exists.quantity || 0) + newGiftQty > stock) {
           alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
           return;
@@ -444,15 +456,15 @@ export default function OrdersView({
           si.item.id === item.id ? { ...si, giftQuantity: newGiftQty } : si
         ));
       } else {
-        if (stock < 1) {
-          alert('بڕی داواکراو لە کۆگا بەردەست نییە');
+        if (stock < initialQty) {
+          alert(`بڕی داواکراو لە کۆگا بەردەست نییە (تەنها ${stock} بەردەستە)`);
           return;
         }
-        setOrderSelectedItems([...orderSelectedItems, { item, quantity: 0, giftQuantity: 1, unit: defaultUnit }]);
+        setOrderSelectedItems([...orderSelectedItems, { item, quantity: 0, giftQuantity: initialQty, unit: defaultUnit }]);
       }
     } else {
       if (exists) {
-        const newQty = (exists.quantity || 0) + 1;
+        const newQty = Math.round(((exists.quantity || 0) + initialQty) * 100) / 100;
         if (newQty + (exists.giftQuantity || 0) > stock) {
           alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
           return;
@@ -461,11 +473,11 @@ export default function OrdersView({
           si.item.id === item.id ? { ...si, quantity: newQty } : si
         ));
       } else {
-        if (stock < 1) {
-          alert('بڕی داواکراو لە کۆگا بەردەست نییە');
+        if (stock < initialQty) {
+          alert(`بڕی داواکراو لە کۆگا بەردەست نییە (تەنها ${stock} بەردەستە)`);
           return;
         }
-        setOrderSelectedItems([...orderSelectedItems, { item, quantity: 1, giftQuantity: 0, unit: defaultUnit }]);
+        setOrderSelectedItems([...orderSelectedItems, { item, quantity: initialQty, giftQuantity: 0, unit: defaultUnit }]);
       }
     }
   };
@@ -478,7 +490,7 @@ export default function OrdersView({
     const currentUnit = unit || itemObj.unit;
 
     if (isGiftUpdate || isOrderGiftMode) {
-      const newGiftQty = Math.max(0, qty);
+      const newGiftQty = Math.max(0, Math.round(qty * 100) / 100);
       if ((itemObj.quantity || 0) + newGiftQty > stock) {
         alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
         return;
@@ -491,7 +503,7 @@ export default function OrdersView({
         ));
       }
     } else {
-      const newQty = Math.max(0, qty);
+      const newQty = Math.max(0, Math.round(qty * 100) / 100);
       if (newQty + (itemObj.giftQuantity || 0) > stock) {
         alert(`بڕی داواکراو لە کۆگا بەردەست نییە. تەنها ${stock} بەردەستە.`);
         return;
@@ -687,7 +699,7 @@ export default function OrdersView({
       prev
         .map((it, idx) => {
           if (idx === index) {
-            const nextQty = it.quantity + delta;
+            const nextQty = Math.round((it.quantity + delta) * 100) / 100;
             if (nextQty <= 0) return null;
             return {
               ...it,
@@ -816,7 +828,7 @@ export default function OrdersView({
   };
 
   // --- CASHVAN SALE HANDLERS ---
-  const addToVanCart = (item: any) => {
+  const addToVanCart = (item: any, initialQty: number = 1) => {
     setVanCart(prev => {
       const existing = prev.find(p => p.id === item.id);
       const unit = item.unit || (item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton');
@@ -824,32 +836,32 @@ export default function OrdersView({
 
       if (isVanGiftMode) {
         if (existing) {
-          const newGiftQty = (existing.giftQty || 0) + 1;
+          const newGiftQty = Math.round(((existing.giftQty || 0) + initialQty) * 100) / 100;
           if ((existing.cartQty || 0) + newGiftQty > stock) {
             alert(`بڕی زیاتر لەناو ڤاندا بەردەست نییە. تەنها ${stock} بەردەستە.`);
             return prev;
           }
           return prev.map(p => p.id === item.id ? { ...p, giftQty: newGiftQty } : p);
         }
-        if (stock < 1) {
-          alert('بڕی بەردەست لەناو ڤان نەماوە');
+        if (stock < initialQty) {
+          alert(`بڕی بەردەست لەناو ڤان نەماوە (تەنها ${stock} بەردەستە)`);
           return prev;
         }
-        return [...prev, { ...item, cartQty: 0, giftQty: 1, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
+        return [...prev, { ...item, cartQty: 0, giftQty: initialQty, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
       } else {
         if (existing) {
-          const newCartQty = (existing.cartQty || 0) + 1;
+          const newCartQty = Math.round(((existing.cartQty || 0) + initialQty) * 100) / 100;
           if (newCartQty + (existing.giftQty || 0) > stock) {
             alert(`بڕی زیاتر لەناو ڤاندا بەردەست نییە. تەنها ${stock} بەردەستە.`);
             return prev;
           }
           return prev.map(p => p.id === item.id ? { ...p, cartQty: newCartQty } : p);
         }
-        if (stock < 1) {
-          alert('بڕی بەردەست لەناو ڤان نەماوە');
+        if (stock < initialQty) {
+          alert(`بڕی بەردەست لەناو ڤان نەماوە (تەنها ${stock} بەردەستە)`);
           return prev;
         }
-        return [...prev, { ...item, cartQty: 1, giftQty: 0, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
+        return [...prev, { ...item, cartQty: initialQty, giftQty: 0, finalPrice: calcPrice(item, unit, vanMarketName), unit }];
       }
     });
   };
@@ -867,7 +879,7 @@ export default function OrdersView({
       const price = calcPrice(item, newUnit, vanMarketName);
 
       if (isGiftUpdate || isVanGiftMode) {
-        const newGiftQty = Math.max(0, qty);
+        const newGiftQty = Math.max(0, Math.round(qty * 100) / 100);
         if ((cartItem.cartQty || 0) + newGiftQty > stock) {
           alert(`تەنها ${stock} لەناو ڤاندا بەردەستە`);
           return prev;
@@ -877,7 +889,7 @@ export default function OrdersView({
         }
         return prev.map(p => p.id === id ? { ...p, giftQty: newGiftQty, unit: newUnit, finalPrice: price } : p);
       } else {
-        const newCartQty = Math.max(0, qty);
+        const newCartQty = Math.max(0, Math.round(qty * 100) / 100);
         if (newCartQty + (cartItem.giftQty || 0) > stock) {
           alert(`تەنها ${stock} لەناو ڤاندا بەردەستە`);
           return prev;
@@ -966,7 +978,7 @@ export default function OrdersView({
           const itemSnap = await getDoc(itemRef);
           if (itemSnap.exists()) {
             const currentQty = itemSnap.data().quantity || 0;
-            const newQty = Math.max(0, currentQty - totalDeduct);
+            const newQty = Math.max(0, Math.round((currentQty - totalDeduct) * 1000) / 1000);
             await updateDoc(itemRef, { quantity: newQty });
           }
         }
@@ -1490,7 +1502,7 @@ export default function OrdersView({
           market={debtTargetMarketObj}
           currentDebt={debtTargetAmount || (marketDebtMap.get(debtTargetMarket) || 0)}
           collectorName={repName || (role === 'sales_rep' ? 'مەندووب' : 'کارمەند')}
-          repId={auth.currentUser?.uid}
+          repId={getStoredSession()?.repId || getStoredSession()?.id || repName || ''}
         />
       </div>
     );
@@ -1730,69 +1742,103 @@ export default function OrdersView({
                             <span className="flex items-center gap-1"><Gift size={12} /> بڕی هەدیە (نرخ: ٠):</span>
                             <span>{currentGiftQty} دانە</span>
                           </div>
-                          <div className="flex items-center justify-between gap-1.5 bg-yellow-100/70 border border-yellow-400 rounded-xl p-1 shadow-2xs">
+                          <div className="flex items-center justify-between gap-1 bg-yellow-100/70 border border-yellow-400 rounded-xl p-1 shadow-2xs">
                             <button
                               type="button"
-                              onClick={() => handleUpdateOrderItemQty(item.id, currentGiftQty - 1, currentUnit, true)}
-                              className="w-8 h-8 rounded-lg bg-yellow-200 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="کەمکردنەوەی هەدیە"
+                              onClick={() => handleUpdateOrderItemQty(item.id, Math.max(0, currentGiftQty - 1), currentUnit, true)}
+                              className="w-7 h-7 rounded-lg bg-yellow-200 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="کەمکردنەوەی ١"
                             >
-                              -
+                              -1
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, Math.max(0, Math.round((currentGiftQty - 0.5) * 10) / 10), currentUnit, true)}
+                              className="px-1.5 h-7 rounded-lg bg-yellow-200/80 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="کەمکردنەوەی نیو (٠.٥)"
+                            >
+                              -½
                             </button>
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               max={item.quantity || 999}
                               value={currentGiftQty}
                               onChange={(e) => {
-                                const val = parseInt(e.target.value);
+                                const val = parseFloat(e.target.value);
                                 if (!isNaN(val)) {
                                   handleUpdateOrderItemQty(item.id, val, currentUnit, true);
                                 }
                               }}
-                              className="w-16 h-8 text-center font-mono font-bold text-sm text-yellow-950 outline-none bg-transparent"
+                              className="w-12 h-7 text-center font-mono font-bold text-xs text-yellow-950 outline-none bg-transparent"
                             />
                             <button
                               type="button"
-                              onClick={() => handleUpdateOrderItemQty(item.id, currentGiftQty + 1, currentUnit, true)}
-                              className="w-8 h-8 rounded-lg bg-yellow-400 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="زیادکردنی هەدیە"
+                              onClick={() => handleUpdateOrderItemQty(item.id, Math.round((currentGiftQty + 0.5) * 10) / 10, currentUnit, true)}
+                              className="px-1.5 h-7 rounded-lg bg-yellow-400/90 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="زیادکردنی نیو (٠.٥)"
                             >
-                              +
+                              +½
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, currentGiftQty + 1, currentUnit, true)}
+                              className="w-7 h-7 rounded-lg bg-yellow-400 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="زیادکردنی ١"
+                            >
+                              +1
                             </button>
                           </div>
                         </div>
                       ) : (
                         <div className="space-y-1">
-                          <div className="flex items-center justify-between gap-1.5 bg-white border border-indigo-300 rounded-xl p-1 shadow-2xs">
+                          <div className="flex items-center justify-between gap-1 bg-white border border-indigo-300 rounded-xl p-1 shadow-2xs">
                             <button
                               type="button"
-                              onClick={() => handleUpdateOrderItemQty(item.id, currentQty - 1, currentUnit, false)}
-                              className="w-8 h-8 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="کەمکردنەوە"
+                              onClick={() => handleUpdateOrderItemQty(item.id, Math.max(0, currentQty - 1), currentUnit, false)}
+                              className="w-7 h-7 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="کەمکردنەوەی ١"
                             >
-                              -
+                              -1
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, Math.max(0, Math.round((currentQty - 0.5) * 10) / 10), currentUnit, false)}
+                              className="px-1.5 h-7 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="کەمکردنەوەی نیو (٠.٥)"
+                            >
+                              -½
                             </button>
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               max={item.quantity || 999}
                               value={currentQty}
                               onChange={(e) => {
-                                const val = parseInt(e.target.value);
+                                const val = parseFloat(e.target.value);
                                 if (!isNaN(val)) {
                                   handleUpdateOrderItemQty(item.id, val, currentUnit, false);
                                 }
                               }}
-                              className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
+                              className="w-12 h-7 text-center font-mono font-bold text-xs text-slate-800 outline-none bg-transparent"
                             />
                             <button
                               type="button"
-                              onClick={() => handleUpdateOrderItemQty(item.id, currentQty + 1, currentUnit, false)}
-                              className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="زیادکردن"
+                              onClick={() => handleUpdateOrderItemQty(item.id, Math.round((currentQty + 0.5) * 10) / 10, currentUnit, false)}
+                              className="px-1.5 h-7 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="زیادکردنی نیو (٠.٥)"
                             >
-                              +
+                              +½
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderItemQty(item.id, currentQty + 1, currentUnit, false)}
+                              className="w-7 h-7 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="زیادکردنی ١"
+                            >
+                              +1
                             </button>
                           </div>
                         </div>
@@ -2043,69 +2089,103 @@ export default function OrdersView({
                             <span className="flex items-center gap-1"><Gift size={12} /> بڕی هەدیە (نرخ: ٠):</span>
                             <span>{currentGiftQty} دانە</span>
                           </div>
-                          <div className="flex items-center justify-between gap-1.5 bg-yellow-100/70 border border-yellow-400 rounded-xl p-1 shadow-2xs">
+                          <div className="flex items-center justify-between gap-1 bg-yellow-100/70 border border-yellow-400 rounded-xl p-1 shadow-2xs">
                             <button
                               type="button"
-                              onClick={() => updateVanCartQty(item.id, currentGiftQty - 1, item.unit, true)}
-                              className="w-8 h-8 rounded-lg bg-yellow-200 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="کەمکردنەوەی هەدیە"
+                              onClick={() => updateVanCartQty(item.id, Math.max(0, currentGiftQty - 1), item.unit, true)}
+                              className="w-7 h-7 rounded-lg bg-yellow-200 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="کەمکردنەوەی ١"
                             >
-                              -
+                              -1
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, Math.max(0, Math.round((currentGiftQty - 0.5) * 10) / 10), item.unit, true)}
+                              className="px-1.5 h-7 rounded-lg bg-yellow-200/80 hover:bg-yellow-300 text-yellow-950 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="کەمکردنەوەی نیو (٠.٥)"
+                            >
+                              -½
                             </button>
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               max={item.quantity || 999}
                               value={currentGiftQty}
                               onChange={(e) => {
-                                const val = parseInt(e.target.value);
+                                const val = parseFloat(e.target.value);
                                 if (!isNaN(val)) {
                                   updateVanCartQty(item.id, val, item.unit, true);
                                 }
                               }}
-                              className="w-16 h-8 text-center font-mono font-bold text-sm text-yellow-950 outline-none bg-transparent"
+                              className="w-12 h-7 text-center font-mono font-bold text-xs text-yellow-950 outline-none bg-transparent"
                             />
                             <button
                               type="button"
-                              onClick={() => updateVanCartQty(item.id, currentGiftQty + 1, item.unit, true)}
-                              className="w-8 h-8 rounded-lg bg-yellow-400 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="زیادکردنی هەدیە"
+                              onClick={() => updateVanCartQty(item.id, Math.round((currentGiftQty + 0.5) * 10) / 10, item.unit, true)}
+                              className="px-1.5 h-7 rounded-lg bg-yellow-400/90 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="زیادکردنی نیو (٠.٥)"
                             >
-                              +
+                              +½
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, currentGiftQty + 1, item.unit, true)}
+                              className="w-7 h-7 rounded-lg bg-yellow-400 hover:bg-yellow-500 text-yellow-950 flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="زیادکردنی ١"
+                            >
+                              +1
                             </button>
                           </div>
                         </div>
                       ) : (
                         <div className="space-y-1">
-                          <div className="flex items-center justify-between gap-1.5 bg-white border border-amber-300 rounded-xl p-1 shadow-2xs">
+                          <div className="flex items-center justify-between gap-1 bg-white border border-amber-300 rounded-xl p-1 shadow-2xs">
                             <button
                               type="button"
-                              onClick={() => updateVanCartQty(item.id, currentQty - 1, item.unit, false)}
-                              className="w-8 h-8 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="کەمکردنەوە"
+                              onClick={() => updateVanCartQty(item.id, Math.max(0, currentQty - 1), item.unit, false)}
+                              className="w-7 h-7 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="کەمکردنەوەی ١"
                             >
-                              -
+                              -1
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, Math.max(0, Math.round((currentQty - 0.5) * 10) / 10), item.unit, false)}
+                              className="px-1.5 h-7 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="کەمکردنەوەی نیو (٠.٥)"
+                            >
+                              -½
                             </button>
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               max={item.quantity || 999}
                               value={currentQty}
                               onChange={(e) => {
-                                const val = parseInt(e.target.value);
+                                const val = parseFloat(e.target.value);
                                 if (!isNaN(val)) {
                                   updateVanCartQty(item.id, val, item.unit, false);
                                 }
                               }}
-                              className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
+                              className="w-12 h-7 text-center font-mono font-bold text-xs text-slate-800 outline-none bg-transparent"
                             />
                             <button
                               type="button"
-                              onClick={() => updateVanCartQty(item.id, currentQty + 1, item.unit, false)}
-                              className="w-8 h-8 rounded-lg bg-amber-600 hover:bg-amber-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
-                              title="زیادکردن"
+                              onClick={() => updateVanCartQty(item.id, Math.round((currentQty + 0.5) * 10) / 10, item.unit, false)}
+                              className="px-1.5 h-7 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                              title="زیادکردنی نیو (٠.٥)"
                             >
-                              +
+                              +½
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateVanCartQty(item.id, currentQty + 1, item.unit, false)}
+                              className="w-7 h-7 rounded-lg bg-amber-600 hover:bg-amber-700 text-white flex items-center justify-center font-bold text-xs transition active:scale-95"
+                              title="زیادکردنی ١"
+                            >
+                              +1
                             </button>
                           </div>
                         </div>
@@ -2627,43 +2707,65 @@ export default function OrdersView({
                             </select>
                           </td>
                           <td className="p-2.5 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
+                            <div className="flex items-center justify-center gap-1">
                               <button
                                 type="button"
                                 onClick={() => handleUpdateEditOrderItemQty(idx, -1)}
-                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-black flex items-center justify-center"
+                                className="w-6 h-6 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-bold text-[11px] flex items-center justify-center"
+                                title="-1"
                               >
-                                -
+                                -1
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, -0.5)}
+                                className="px-1 h-6 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-bold text-[10px] flex items-center justify-center"
+                                title="-0.5"
+                              >
+                                -½
                               </button>
                               <input
                                 type="number"
-                                min="1"
+                                step="any"
+                                min="0"
                                 value={item.quantity}
                                 onChange={(e) => {
-                                  const val = parseInt(e.target.value) || 1;
-                                  setEditOrderItems(prev => prev.map((it, i) => i === idx ? {
-                                    ...it,
-                                    quantity: Math.max(1, val),
-                                    totalPrice: Math.max(1, val) * (it.price || 0)
-                                  } : it));
+                                  const val = parseFloat(e.target.value);
+                                  if (!isNaN(val)) {
+                                    setEditOrderItems(prev => prev.map((it, i) => i === idx ? {
+                                      ...it,
+                                      quantity: Math.max(0, val),
+                                      totalPrice: Math.max(0, val) * (it.price || 0)
+                                    } : it));
+                                  }
                                 }}
-                                className="w-14 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs"
+                                className="w-12 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs"
                               />
                               <button
                                 type="button"
-                                onClick={() => handleUpdateEditOrderItemQty(idx, 1)}
-                                className="w-7 h-7 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-black flex items-center justify-center"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, 0.5)}
+                                className="px-1 h-6 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md font-bold text-[10px] flex items-center justify-center"
+                                title="+0.5"
                               >
-                                +
+                                +½
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, 1)}
+                                className="w-6 h-6 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md font-bold text-[11px] flex items-center justify-center"
+                                title="+1"
+                              >
+                                +1
                               </button>
                             </div>
                           </td>
                           <td className="p-2.5 text-center">
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               value={item.giftQuantity || 0}
-                              onChange={(e) => handleUpdateEditOrderItemGiftQty(idx, parseInt(e.target.value) || 0)}
+                              onChange={(e) => handleUpdateEditOrderItemGiftQty(idx, parseFloat(e.target.value) || 0)}
                               className="w-14 text-center font-bold font-mono py-1 border border-yellow-300 bg-yellow-50/50 rounded-lg text-xs"
                             />
                           </td>
@@ -2832,7 +2934,7 @@ export default function OrdersView({
         market={debtTargetMarketObj}
         currentDebt={debtTargetAmount || (marketDebtMap.get(debtTargetMarket) || 0)}
         collectorName={repName || (role === 'sales_rep' ? 'مەندووب' : 'کارمەند')}
-        repId={auth.currentUser?.uid}
+        repId={getStoredSession()?.repId || getStoredSession()?.id || repName || ''}
       />
     </div>
   );

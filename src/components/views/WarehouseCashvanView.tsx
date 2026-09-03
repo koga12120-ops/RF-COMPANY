@@ -173,14 +173,15 @@ export default function WarehouseCashvanView() {
     if (!item) return;
     
     setCart(prev => {
-      if (qty < 1) {
+      const cleanQty = Math.round(qty * 100) / 100;
+      if (cleanQty <= 0) {
         return prev.filter(p => p.item.id !== itemId);
       }
-      if (qty > (item.quantity || 0)) {
+      if (cleanQty > (item.quantity || 0)) {
         alert(`بڕی داواکراو لە کۆگا بەردەست نییە (تەنها ${item.quantity || 0} هەیە)`);
         return prev;
       }
-      return prev.map(p => p.item.id === itemId ? { ...p, quantity: qty, unit: unit || p.unit } : p);
+      return prev.map(p => p.item.id === itemId ? { ...p, quantity: cleanQty, unit: unit || p.unit } : p);
     });
   };
 
@@ -1108,27 +1109,46 @@ export default function WarehouseCashvanView() {
                         <option value="packet">پاکەت</option>
                       </select>
 
-                      <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden">
+                      <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden p-0.5 gap-0.5">
                         <button 
                           type="button" 
-                          onClick={() => updateQuantity(c.item.id, c.quantity - 1, c.unit)} 
-                          className="px-2.5 py-1 text-base font-bold text-slate-600 hover:bg-slate-100"
+                          onClick={() => updateQuantity(c.item.id, Math.max(0, c.quantity - 1), c.unit)} 
+                          className="px-1.5 py-0.5 text-xs font-bold text-slate-700 hover:bg-slate-100 rounded"
+                          title="-1"
                         >
-                          -
+                          -1
+                        </button>
+                        <button 
+                          type="button" 
+                          onClick={() => updateQuantity(c.item.id, Math.max(0, Math.round((c.quantity - 0.5) * 10) / 10), c.unit)} 
+                          className="px-1 py-0.5 text-[10px] font-bold text-slate-700 hover:bg-slate-100 rounded"
+                          title="-0.5"
+                        >
+                          -½
                         </button>
                         <input
                           type="number"
-                          min="1"
-                          className="w-12 text-center text-xs font-bold font-mono outline-none border-none py-1"
+                          step="any"
+                          min="0"
+                          className="w-11 text-center text-xs font-bold font-mono outline-none border-none py-0.5"
                           value={c.quantity}
-                          onChange={(e) => updateQuantity(c.item.id, parseInt(e.target.value) || 1, c.unit)}
+                          onChange={(e) => updateQuantity(c.item.id, parseFloat(e.target.value) || 0, c.unit)}
                         />
                         <button 
                           type="button" 
-                          onClick={() => updateQuantity(c.item.id, c.quantity + 1, c.unit)} 
-                          className="px-2.5 py-1 text-base font-bold text-slate-600 hover:bg-slate-100"
+                          onClick={() => updateQuantity(c.item.id, Math.round((c.quantity + 0.5) * 10) / 10, c.unit)} 
+                          className="px-1 py-0.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-50 rounded"
+                          title="+0.5"
                         >
-                          +
+                          +½
+                        </button>
+                        <button 
+                          type="button" 
+                          onClick={() => updateQuantity(c.item.id, c.quantity + 1, c.unit)} 
+                          className="px-1.5 py-0.5 text-xs font-bold text-indigo-700 hover:bg-indigo-50 rounded"
+                          title="+1"
+                        >
+                          +1
                         </button>
                       </div>
                     </div>
@@ -1529,9 +1549,10 @@ export default function WarehouseCashvanView() {
                           <td className="p-2.5 text-center">
                             <input
                               type="number"
-                              min="1"
+                              step="any"
+                              min="0"
                               value={item.quantity}
-                              onChange={(e) => handleUpdateEditItemQuantity(idx, parseInt(e.target.value) || 0)}
+                              onChange={(e) => handleUpdateEditItemQuantity(idx, parseFloat(e.target.value) || 0)}
                               className="w-20 border border-slate-300 rounded-lg p-1.5 text-center font-bold text-slate-800 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                             />
                           </td>
@@ -1845,24 +1866,43 @@ export default function WarehouseCashvanView() {
                             <div className="flex items-center justify-center gap-1">
                               <button
                                 type="button"
-                                onClick={() => handleUpdateEditReqItemQty(idx, it.quantity - 1)}
-                                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center"
+                                onClick={() => handleUpdateEditReqItemQty(idx, Math.max(0, it.quantity - 1))}
+                                className="w-6 h-6 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center justify-center"
+                                title="-1"
                               >
-                                -
+                                -1
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditReqItemQty(idx, Math.max(0, Math.round((it.quantity - 0.5) * 10) / 10))}
+                                className="px-1 h-6 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] flex items-center justify-center"
+                                title="-0.5"
+                              >
+                                -½
                               </button>
                               <input
                                 type="number"
-                                min="1"
+                                step="any"
+                                min="0"
                                 value={it.quantity}
-                                onChange={(e) => handleUpdateEditReqItemQty(idx, parseInt(e.target.value) || 1)}
-                                className="w-12 text-center font-bold border border-slate-200 rounded-lg py-1 text-xs"
+                                onChange={(e) => handleUpdateEditReqItemQty(idx, parseFloat(e.target.value) || 0)}
+                                className="w-11 text-center font-bold border border-slate-200 rounded-lg py-1 text-xs"
                               />
                               <button
                                 type="button"
-                                onClick={() => handleUpdateEditReqItemQty(idx, it.quantity + 1)}
-                                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center"
+                                onClick={() => handleUpdateEditReqItemQty(idx, Math.round((it.quantity + 0.5) * 10) / 10)}
+                                className="px-1 h-6 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] flex items-center justify-center"
+                                title="+0.5"
                               >
-                                +
+                                +½
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditReqItemQty(idx, it.quantity + 1)}
+                                className="w-6 h-6 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[11px] flex items-center justify-center"
+                                title="+1"
+                              >
+                                +1
                               </button>
                             </div>
                           </td>

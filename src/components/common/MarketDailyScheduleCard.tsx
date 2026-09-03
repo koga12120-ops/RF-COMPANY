@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
+import { getStoredSession } from '../../lib/authService';
 import { Market } from '../../types';
 import {
   Calendar,
@@ -71,7 +72,10 @@ export default function MarketDailyScheduleCard({
   const [actionMarket, setActionMarket] = useState<{ market: Market; isVisited: boolean; debt: number } | null>(null);
 
   const weekId = getWeekId();
-  const effectiveName = activeRepName || activeCashvanName || auth.currentUser?.displayName || '';
+  const storedSession = getStoredSession();
+  const sessionRepId = storedSession?.repId || storedSession?.id || sessionStorage.getItem('active_rep_id') || '';
+  const sessionRepName = storedSession?.name || storedSession?.username || sessionStorage.getItem('active_rep_name') || '';
+  const effectiveName = activeRepName || activeCashvanName || sessionRepName || '';
 
   // Calculate week days with dates for header pills (like the screenshot)
   const weekDays = useMemo(() => {
@@ -101,65 +105,65 @@ export default function MarketDailyScheduleCard({
     });
   }, [schedule, currentDayIndex, selectedDay]);
 
-  // 1. Locate rep/cashvan doc id in Firestore
+  // 1. Locate rep/cashvan doc id in Firestore (from reps or cashvans collection, or session)
   useEffect(() => {
-    const findRepId = async () => {
-      const userUid = auth.currentUser?.uid;
-      if (!userUid) {
-        setRepDocId(null);
-        return;
-      }
+    let activeId = sessionRepId || effectiveName || null;
+    if (activeId) {
+      setRepDocId(activeId);
+    }
 
-      const unsubReps = onSnapshot(
-        collection(db, 'reps'),
-        (snap) => {
-          let foundId: string | null = null;
-          snap.forEach((d) => {
-            const data = d.data();
-            if (
-              d.id === userUid ||
-              data.uid === userUid ||
-              (effectiveName && data.name === effectiveName)
-            ) {
-              foundId = d.id;
-            }
-          });
-          if (foundId) {
-            setRepDocId(foundId);
-          } else {
-            const unsubCV = onSnapshot(
-              collection(db, 'cashvans'),
-              (cvSnap) => {
-                let cvFoundId: string | null = null;
-                cvSnap.forEach((cvDoc) => {
-                  const cvData = cvDoc.data();
-                  if (
-                    cvDoc.id === userUid ||
-                    cvData.uid === userUid ||
-                    (effectiveName && cvData.name === effectiveName)
-                  ) {
-                    cvFoundId = cvDoc.id;
-                  }
-                });
-                setRepDocId(cvFoundId || userUid);
-              },
-              (err) => {
-                handleFirestoreError(err, OperationType.GET, 'cashvans');
-              }
-            );
-            return () => unsubCV();
+    const unsubReps = onSnapshot(
+      collection(db, 'reps'),
+      (snap) => {
+        let foundId: string | null = null;
+        snap.forEach((d) => {
+          const data = d.data();
+          if (
+            (sessionRepId && d.id === sessionRepId) ||
+            (effectiveName && (data.name === effectiveName || data.username === effectiveName || d.id === effectiveName))
+          ) {
+            foundId = d.id;
           }
-        },
-        (err) => {
-          handleFirestoreError(err, OperationType.GET, 'reps');
+        });
+
+        if (foundId) {
+          setRepDocId(foundId);
+        } else {
+          const unsubCV = onSnapshot(
+            collection(db, 'cashvans'),
+            (cvSnap) => {
+              let cvFoundId: string | null = null;
+              cvSnap.forEach((cvDoc) => {
+                const cvData = cvDoc.data();
+                if (
+                  (sessionRepId && cvDoc.id === sessionRepId) ||
+                  (effectiveName && (cvData.name === effectiveName || cvData.username === effectiveName || cvDoc.id === effectiveName))
+                ) {
+                  cvFoundId = cvDoc.id;
+                }
+              });
+              if (cvFoundId) {
+                setRepDocId(cvFoundId);
+              } else if (sessionRepId) {
+                setRepDocId(sessionRepId);
+              } else if (effectiveName) {
+                setRepDocId(effectiveName);
+              }
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.GET, 'cashvans');
+            }
+          );
+          return () => unsubCV();
         }
-      );
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.GET, 'reps');
+      }
+    );
 
-      return () => unsubReps();
-    };
-
-    findRepId();
-  }, [effectiveName]);
+    return () => unsubReps();
+  }, [effectiveName, sessionRepId]);
 
   // 2. Fetch schedule, visits, and markets
   useEffect(() => {
@@ -178,61 +182,102 @@ export default function MarketDailyScheduleCard({
       }
     );
 
-    let unsubSchedule = () => {};
-    if (repDocId) {
-      unsubSchedule = onSnapshot(
-        doc(db, 'schedules', repDocId),
+    // Multi-way schedule lookup: by repDocId, sessionRepId, effectiveName, or schedules collection query
+    const activeTargetId = repDocId || sessionRepId || effectiveName;
+    let unsubSchedule1 = () => {};
+    let unsubSchedule2 = () => {};
+    let unsubAllSchedules = () => {};
+
+    if (activeTargetId) {
+      unsubSchedule1 = onSnapshot(
+        doc(db, 'schedules', activeTargetId),
         (docSnap) => {
-          if (docSnap.exists()) {
-            setSchedule(docSnap.data().schedule || {});
-          } else {
-            if (auth.currentUser?.uid && auth.currentUser.uid !== repDocId) {
-              onSnapshot(doc(db, 'schedules', auth.currentUser.uid), (uSnap) => {
-                if (uSnap.exists()) {
-                  setSchedule(uSnap.data().schedule || {});
-                }
-              });
-            } else {
-              setSchedule({});
-            }
+          if (docSnap.exists() && docSnap.data().schedule) {
+            setSchedule(docSnap.data().schedule);
           }
         },
         (error) => {
           handleFirestoreError(error, OperationType.GET, 'schedules');
         }
       );
+
+      if (effectiveName && effectiveName !== activeTargetId) {
+        unsubSchedule2 = onSnapshot(
+          doc(db, 'schedules', effectiveName),
+          (docSnap) => {
+            if (docSnap.exists() && docSnap.data().schedule) {
+              setSchedule(docSnap.data().schedule);
+            }
+          },
+          (error) => {
+            handleFirestoreError(error, OperationType.GET, 'schedules');
+          }
+        );
+      }
     }
 
-    let unsubVisits = () => {};
-    if (repDocId) {
-      const qVisits = query(
-        collection(db, 'schedule_visits'),
-        where('weekId', '==', weekId)
-      );
-      unsubVisits = onSnapshot(
-        qVisits,
-        (snap) => {
-          const vMap: Record<string, boolean> = {};
-          snap.forEach((d) => {
-            const data = d.data();
-            if (data.repId === repDocId || data.repId === auth.currentUser?.uid) {
+    // Also listen to all schedules in case rep is referenced inside the document
+    unsubAllSchedules = onSnapshot(
+      collection(db, 'schedules'),
+      (snap) => {
+        snap.forEach((d) => {
+          const data = d.data();
+          if (
+            d.id === activeTargetId ||
+            d.id === effectiveName ||
+            d.id === sessionRepId ||
+            data.repId === activeTargetId ||
+            data.repId === sessionRepId ||
+            (effectiveName && data.repName === effectiveName)
+          ) {
+            if (data.schedule && Object.keys(data.schedule).length > 0) {
+              setSchedule(data.schedule);
+            }
+          }
+        });
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'schedules');
+      }
+    );
+
+    const qVisits = query(
+      collection(db, 'schedule_visits'),
+      where('weekId', '==', weekId)
+    );
+    const unsubVisits = onSnapshot(
+      qVisits,
+      (snap) => {
+        const vMap: Record<string, boolean> = {};
+        snap.forEach((d) => {
+          const data = d.data();
+          if (
+            data.repId === activeTargetId ||
+            data.repId === repDocId ||
+            data.repId === sessionRepId ||
+            data.repId === effectiveName ||
+            (effectiveName && (data.repName === effectiveName || data.name === effectiveName))
+          ) {
+            if (!data.unvisited) {
               vMap[data.marketId] = true;
             }
-          });
-          setVisits(vMap);
-        },
-        (error) => {
-          handleFirestoreError(error, OperationType.GET, 'schedule_visits');
-        }
-      );
-    }
+          }
+        });
+        setVisits(vMap);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'schedule_visits');
+      }
+    );
 
     return () => {
       unsubMarkets();
-      unsubSchedule();
+      unsubSchedule1();
+      unsubSchedule2();
+      unsubAllSchedules();
       unsubVisits();
     };
-  }, [repDocId, weekId]);
+  }, [repDocId, sessionRepId, effectiveName, weekId]);
 
   const marketMap = useMemo(() => {
     const map = new Map<string, Market>();
@@ -242,7 +287,7 @@ export default function MarketDailyScheduleCard({
 
   const handleToggleVisit = async (marketId: string, currentStatus: boolean, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    const activeId = repDocId || auth.currentUser?.uid;
+    const activeId = repDocId || sessionRepId || effectiveName;
     if (!activeId) return;
 
     const visitId = `${activeId}_${weekId}_${marketId}`;
@@ -250,14 +295,14 @@ export default function MarketDailyScheduleCard({
       if (currentStatus) {
         await setDoc(
           doc(db, 'schedule_visits', visitId),
-          { repId: activeId, weekId, marketId, visitedAt: null, unvisited: true },
+          { repId: activeId, repName: effectiveName, weekId, marketId, visitedAt: null, unvisited: true },
           { merge: true }
         );
         setVisits(prev => ({ ...prev, [marketId]: false }));
       } else {
         await setDoc(
           doc(db, 'schedule_visits', visitId),
-          { repId: activeId, weekId, marketId, visitedAt: Date.now() },
+          { repId: activeId, repName: effectiveName, weekId, marketId, visitedAt: Date.now(), unvisited: false },
           { merge: true }
         );
         setVisits(prev => ({ ...prev, [marketId]: true }));

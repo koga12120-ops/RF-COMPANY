@@ -401,7 +401,7 @@ export default function WarehouseOrdersView() {
       prev
         .map((it, idx) => {
           if (idx === index) {
-            const nextQty = it.quantity + delta;
+            const nextQty = Math.round((it.quantity + delta) * 100) / 100;
             if (nextQty <= 0) return null;
             return {
               ...it,
@@ -457,13 +457,14 @@ export default function WarehouseOrdersView() {
 
   // Update Edit Order Gift Qty
   const handleUpdateEditOrderItemGiftQty = (index: number, giftQty: number) => {
+    const cleanGiftQty = Math.round(giftQty * 100) / 100;
     setEditOrderItems((prev) =>
       prev.map((it, idx) => {
         if (idx === index) {
           return {
             ...it,
-            giftQuantity: Math.max(0, giftQty),
-            isGift: giftQty > 0
+            giftQuantity: Math.max(0, cleanGiftQty),
+            isGift: cleanGiftQty > 0
           };
         }
         return it;
@@ -1887,27 +1888,46 @@ export default function WarehouseOrdersView() {
                         <option value="packet">پاکەت</option>
                       </select>
 
-                      <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden">
+                      <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden p-0.5 gap-0.5">
                         <button
                           type="button"
-                          onClick={() => updateQuantity(c.item.id, c.quantity - 1, c.unit)}
-                          className="px-2.5 py-1 text-base font-bold text-slate-600 hover:bg-slate-100"
+                          onClick={() => updateQuantity(c.item.id, Math.max(0, c.quantity - 1), c.unit)}
+                          className="px-1.5 py-0.5 text-xs font-bold text-slate-700 hover:bg-slate-100 rounded"
+                          title="-1"
                         >
-                          -
+                          -1
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(c.item.id, Math.max(0, Math.round((c.quantity - 0.5) * 10) / 10), c.unit)}
+                          className="px-1 py-0.5 text-[10px] font-bold text-slate-700 hover:bg-slate-100 rounded"
+                          title="-0.5"
+                        >
+                          -½
                         </button>
                         <input
                           type="number"
-                          min="1"
-                          className="w-12 text-center text-xs font-bold font-mono outline-none border-none py-1"
+                          step="any"
+                          min="0"
+                          className="w-11 text-center text-xs font-bold font-mono outline-none border-none py-0.5"
                           value={c.quantity}
-                          onChange={(e) => updateQuantity(c.item.id, parseInt(e.target.value) || 1, c.unit)}
+                          onChange={(e) => updateQuantity(c.item.id, parseFloat(e.target.value) || 0, c.unit)}
                         />
                         <button
                           type="button"
-                          onClick={() => updateQuantity(c.item.id, c.quantity + 1, c.unit)}
-                          className="px-2.5 py-1 text-base font-bold text-slate-600 hover:bg-slate-100"
+                          onClick={() => updateQuantity(c.item.id, Math.round((c.quantity + 0.5) * 10) / 10, c.unit)}
+                          className="px-1 py-0.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-50 rounded"
+                          title="+0.5"
                         >
-                          +
+                          +½
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(c.item.id, c.quantity + 1, c.unit)}
+                          className="px-1.5 py-0.5 text-xs font-bold text-indigo-700 hover:bg-indigo-50 rounded"
+                          title="+1"
+                        >
+                          +1
                         </button>
                       </div>
                     </div>
@@ -2300,45 +2320,84 @@ export default function WarehouseOrdersView() {
                             </select>
                           </td>
                           <td className="p-2.5 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
+                            <div className="flex items-center justify-center gap-1">
                               <button
                                 type="button"
                                 onClick={() => handleUpdateEditOrderItemQty(idx, -1)}
-                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-black flex items-center justify-center"
+                                className="w-6 h-6 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-bold text-[11px] flex items-center justify-center"
+                                title="-1"
                               >
-                                -
+                                -1
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, -0.5)}
+                                className="px-1 h-6 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-bold text-[10px] flex items-center justify-center"
+                                title="-0.5"
+                              >
+                                -½
                               </button>
                               <input
                                 type="number"
-                                min="1"
+                                step="any"
+                                min="0"
                                 value={item.quantity}
                                 onChange={(e) => {
-                                  const val = parseInt(e.target.value) || 1;
+                                  const val = parseFloat(e.target.value);
+                                  const clean = isNaN(val) ? 0 : Math.max(0, Math.round(val * 100) / 100);
                                   setEditOrderItems(prev => prev.map((it, i) => i === idx ? {
                                     ...it,
-                                    quantity: Math.max(1, val),
-                                    totalPrice: Math.max(1, val) * (it.price || 0)
+                                    quantity: clean,
+                                    totalPrice: clean * (it.price || 0)
                                   } : it));
                                 }}
-                                className="w-14 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs"
+                                className="w-11 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs"
                               />
                               <button
                                 type="button"
-                                onClick={() => handleUpdateEditOrderItemQty(idx, 1)}
-                                className="w-7 h-7 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-black flex items-center justify-center"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, 0.5)}
+                                className="px-1 h-6 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-bold text-[10px] flex items-center justify-center"
+                                title="+0.5"
                               >
-                                +
+                                +½
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemQty(idx, 1)}
+                                className="w-6 h-6 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-bold text-[11px] flex items-center justify-center"
+                                title="+1"
+                              >
+                                +1
                               </button>
                             </div>
                           </td>
                           <td className="p-2.5 text-center">
-                            <input
-                              type="number"
-                              min="0"
-                              value={item.giftQuantity || 0}
-                              onChange={(e) => handleUpdateEditOrderItemGiftQty(idx, parseInt(e.target.value) || 0)}
-                              className="w-14 text-center font-bold font-mono py-1 border border-yellow-300 bg-yellow-50/50 rounded-lg text-xs"
-                            />
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemGiftQty(idx, Math.max(0, (item.giftQuantity || 0) - 0.5))}
+                                className="px-1 h-6 bg-yellow-100 hover:bg-yellow-200 text-amber-900 rounded font-bold text-[10px]"
+                                title="-0.5"
+                              >
+                                -½
+                              </button>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                value={item.giftQuantity || 0}
+                                onChange={(e) => handleUpdateEditOrderItemGiftQty(idx, parseFloat(e.target.value) || 0)}
+                                className="w-11 text-center font-bold font-mono py-1 border border-yellow-300 bg-yellow-50/50 rounded-lg text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditOrderItemGiftQty(idx, (item.giftQuantity || 0) + 0.5)}
+                                className="px-1 h-6 bg-yellow-100 hover:bg-yellow-200 text-amber-900 rounded font-bold text-[10px]"
+                                title="+0.5"
+                              >
+                                +½
+                              </button>
+                            </div>
                           </td>
                           <td className="p-2.5 text-center">
                             <input

@@ -83,8 +83,6 @@ export default function InventoryView({ role }: { role: Role }) {
 
   const formatStock = (item: Item) => {
     const parts = [];
-    const cQty = item.cartonQuantity ?? (item.ratio ? Math.floor((item.quantity || 0) / item.ratio) : (item.cartonSellingPrice || item.cartonCostPrice ? item.quantity : 0));
-    const pQty = item.packetQuantity ?? (item.packetRatio ? Math.floor((item.quantity || 0) / item.packetRatio) : (item.packetSellingPrice || item.packetCostPrice ? item.quantity : 0));
 
     if (item.cartonQuantity !== undefined || item.packetQuantity !== undefined) {
       if (item.cartonQuantity !== undefined && item.cartonQuantity > 0) parts.push(`${item.cartonQuantity} کارتۆن`);
@@ -93,7 +91,7 @@ export default function InventoryView({ role }: { role: Role }) {
         return `${item.quantity || 0} ${item.packetSellingPrice && !item.cartonSellingPrice ? 'پاکەت' : 'کارتۆن'}`;
       }
     } else {
-      if (item.quantity > 0) {
+      if ((item.quantity || 0) > 0) {
         if (item.packetSellingPrice && !item.cartonSellingPrice) {
           parts.push(`${item.quantity} پاکەت`);
         } else {

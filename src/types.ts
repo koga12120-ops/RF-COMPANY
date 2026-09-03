@@ -77,15 +77,31 @@ export interface Transaction {
 export interface SalesRep {
   id: string;
   name: string;
+  username?: string; // ناوی بەکارهێنەر بۆ چوونەژوورەوە
+  password?: string; // تێپەڕەوشە / پاسوۆرد
   phone: string;
   email?: string;
   uid?: string;
-  accessCode?: string; // کۆدی ئەمنی تایبەت کە بەڕێوەبەر دایناوە
+  accessCode?: string; // کۆدی ئەمنی تایبەت یان پاسوۆرد
   status?: 'active' | 'pending' | 'disabled';
   totalSales: number;
   totalProfit: number;
   createdAt?: number;
 }
+
+export interface CashvanAccount {
+  id: string;
+  name: string;
+  username?: string;
+  password?: string;
+  accessCode?: string;
+  phone?: string;
+  status?: 'active' | 'pending' | 'disabled';
+  totalSales?: number;
+  totalProfit?: number;
+  createdAt?: number;
+}
+
 
 export interface OrderItem {
   itemId: string;

@@ -9,11 +9,24 @@ import ConfirmModal from '../common/ConfirmModal';
 import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
 import { printStatementPopup } from '../../lib/statementPrinter';
 
+export interface ProcessedDebtItem {
+  id: string;
+  relatedEntityId: string;
+  description: string;
+  invoiceNo?: string;
+  date: number;
+  originalAmount: number;
+  paidAmount: number;
+  remainingAmount: number;
+  isPartiallyPaid: boolean;
+  rawTransaction: Transaction;
+}
+
 export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }: { type?: 'debt' | 'company_debt', targetName?: string }) {
   const [debts, setDebts] = useState<Transaction[]>([]);
   const [paidDebts, setPaidDebts] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
-  const [deletingDebt, setDeletingDebt] = useState<Transaction | null>(null);
+  const [deletingDebt, setDeletingDebt] = useState<ProcessedDebtItem | null>(null);
 
   // Pay Modal States
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
@@ -91,6 +104,108 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
     };
   }, [type]);
 
+  // Calculate active debts with remaining unpaid balance per debt / invoice
+  const processedDebts = useMemo(() => {
+    // 1. Group debts and payments by entity
+    const entityMap = new Map<string, { debts: Transaction[]; paids: Transaction[] }>();
+
+    debts.forEach((d) => {
+      const entity = (d.relatedEntityId || '').trim();
+      if (!entityMap.has(entity)) {
+        entityMap.set(entity, { debts: [], paids: [] });
+      }
+      entityMap.get(entity)!.debts.push(d);
+    });
+
+    paidDebts.forEach((p) => {
+      const entity = (p.relatedEntityId || '').trim();
+      if (!entityMap.has(entity)) {
+        entityMap.set(entity, { debts: [], paids: [] });
+      }
+      entityMap.get(entity)!.paids.push(p);
+    });
+
+    const activeList: ProcessedDebtItem[] = [];
+
+    entityMap.forEach(({ debts: entDebts, paids: entPaids }, entity) => {
+      // Sort debts by date ascending for chronological FIFO allocation
+      const sortedDebts = [...entDebts].sort((a, b) => a.date - b.date);
+      const sortedPaids = [...entPaids].sort((a, b) => a.date - b.date);
+
+      // Track paid amounts applied to each debt
+      const debtPaidMap = new Map<string, number>();
+      sortedDebts.forEach((d) => debtPaidMap.set(d.id, 0));
+
+      // Track unallocated payments (payments without matching invoice)
+      const remainingPayments: { id: string; availableAmount: number }[] = [];
+
+      // Step 1: Allocate payments that have explicit matching invoiceNo
+      sortedPaids.forEach((p) => {
+        const cleanInv = p.invoiceNo?.trim();
+        let matchedDebt = cleanInv
+          ? sortedDebts.find((d) => d.invoiceNo?.trim() === cleanInv && (debtPaidMap.get(d.id) || 0) < (d.amount || 0))
+          : null;
+
+        if (matchedDebt) {
+          const currentPaid = debtPaidMap.get(matchedDebt.id) || 0;
+          const needed = (matchedDebt.amount || 0) - currentPaid;
+          const payAmt = p.amount || 0;
+          if (payAmt <= needed) {
+            debtPaidMap.set(matchedDebt.id, currentPaid + payAmt);
+          } else {
+            debtPaidMap.set(matchedDebt.id, matchedDebt.amount || 0);
+            remainingPayments.push({ id: p.id, availableAmount: payAmt - needed });
+          }
+        } else {
+          remainingPayments.push({ id: p.id, availableAmount: p.amount || 0 });
+        }
+      });
+
+      // Step 2: Allocate general / remaining payments FIFO to oldest unpaid debts
+      remainingPayments.forEach((rp) => {
+        let amt = rp.availableAmount;
+        for (const d of sortedDebts) {
+          if (amt <= 0) break;
+          const currentPaid = debtPaidMap.get(d.id) || 0;
+          const debtAmount = d.amount || 0;
+          const unpaid = debtAmount - currentPaid;
+          if (unpaid > 0) {
+            const allocate = Math.min(amt, unpaid);
+            debtPaidMap.set(d.id, currentPaid + allocate);
+            amt -= allocate;
+          }
+        }
+      });
+
+      // Step 3: Build processed items and keep ONLY those with remainingAmount > 0
+      sortedDebts.forEach((d) => {
+        const originalAmount = d.amount || 0;
+        const paidAmount = debtPaidMap.get(d.id) || 0;
+        const remainingAmount = Math.max(0, originalAmount - paidAmount);
+
+        // If completely paid (remaining <= 0), it is removed from active debts list!
+        if (remainingAmount > 0) {
+          activeList.push({
+            id: d.id,
+            relatedEntityId: d.relatedEntityId || entity || '',
+            description: d.description || '',
+            invoiceNo: d.invoiceNo,
+            date: d.date,
+            originalAmount,
+            paidAmount,
+            remainingAmount,
+            isPartiallyPaid: paidAmount > 0,
+            rawTransaction: d
+          });
+        }
+      });
+    });
+
+    // Sort active debts by date descending
+    activeList.sort((a, b) => b.date - a.date);
+    return activeList;
+  }, [debts, paidDebts]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || !description) return;
@@ -120,16 +235,6 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
       setDescription('');
       setInvoiceNo('');
       setRelatedEntityId('');
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const handleMarkAsPaid = async (id: string) => {
-    try {
-      await updateDoc(doc(db, 'transactions', id), {
-        type: type === 'debt' ? 'paid_debt' : 'company_paid_debt'
-      });
     } catch (error) {
       console.error(error);
     }
@@ -273,7 +378,7 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
   };
 
   const filteredDebts = useMemo(() => {
-    return debts.filter(d => {
+    return processedDebts.filter(d => {
       const matchDate = isDateInFilter(d.date);
       const matchSearch = !searchQuery.trim() || 
         (d.relatedEntityId && d.relatedEntityId.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -281,7 +386,7 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
         (d.invoiceNo && d.invoiceNo.toLowerCase().includes(searchQuery.toLowerCase()));
       return matchDate && matchSearch;
     });
-  }, [debts, filterPeriod, selectedDay, startDate, endDate, searchQuery]);
+  }, [processedDebts, filterPeriod, selectedDay, startDate, endDate, searchQuery]);
 
   const filteredPaidDebts = useMemo(() => {
     return paidDebts.filter(p => {
@@ -294,15 +399,17 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
     });
   }, [paidDebts, filterPeriod, selectedDay, startDate, endDate, searchQuery]);
 
-  const totalFilteredDebt = useMemo(() => {
-    return filteredDebts.reduce((sum, d) => sum + (d.amount || 0), 0);
+  const totalFilteredRemainingDebt = useMemo(() => {
+    return filteredDebts.reduce((sum, d) => sum + d.remainingAmount, 0);
+  }, [filteredDebts]);
+
+  const totalFilteredOriginalDebt = useMemo(() => {
+    return filteredDebts.reduce((sum, d) => sum + d.originalAmount, 0);
   }, [filteredDebts]);
 
   const totalFilteredPaid = useMemo(() => {
     return filteredPaidDebts.reduce((sum, p) => sum + (p.amount || 0), 0);
   }, [filteredPaidDebts]);
-
-  const netBalance = totalFilteredDebt - totalFilteredPaid;
 
   return (
     <div className="space-y-6">
@@ -451,17 +558,17 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
 
       {/* Summary Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* 1. Total Debt */}
+        {/* 1. Remaining Active Debt */}
         <div className="bg-white p-4 rounded-2xl border border-amber-200/80 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
           <div className="p-3.5 bg-amber-100 text-amber-700 rounded-xl shrink-0">
             <CreditCard size={22} />
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">
-              کۆی قەرز ({filterPeriod === 'all' ? 'هەموو کات' : 'بەپێی بەروار'})
+              کۆی قەرزی ماوە (نەدراوە)
             </div>
             <div className="text-xl font-bold text-amber-600 tracking-tight" dir="ltr">
-              {totalFilteredDebt.toLocaleString()}
+              {totalFilteredRemainingDebt.toLocaleString()}
             </div>
             <div className="text-[11px] text-slate-400 mt-0.5 truncate">د.ع</div>
           </div>
@@ -483,30 +590,30 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
           </div>
         </div>
 
-        {/* 3. Net Remaining Balance */}
+        {/* 3. Original Debt Amount */}
         <div className="bg-white p-4 rounded-2xl border border-indigo-200/80 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
           <div className="p-3.5 bg-indigo-100 text-indigo-700 rounded-xl shrink-0">
             <TrendingDown size={22} />
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">
-              ماوەی قەرز (باڵانس)
+              کۆی سەرەتایی قەرزە ماوەکان
             </div>
             <div className="text-xl font-bold text-indigo-700 tracking-tight" dir="ltr">
-              {netBalance.toLocaleString()}
+              {totalFilteredOriginalDebt.toLocaleString()}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5 truncate">قەرز - دراوە</div>
+            <div className="text-[11px] text-slate-400 mt-0.5 truncate">پێش کەمکردنەوە</div>
           </div>
         </div>
 
-        {/* 4. Count of Records */}
+        {/* 4. Count of Active Debts */}
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
           <div className="p-3.5 bg-slate-100 text-slate-700 rounded-xl shrink-0">
             <Clock size={22} />
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">
-              ژمارەی تۆمارەکان
+              ژمارەی قەرزە ماوەکان
             </div>
             <div className="text-xl font-bold text-slate-800 tracking-tight" dir="ltr">
               {filteredDebts.length}
@@ -518,7 +625,10 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
 
       {/* Add Debt Form */}
       <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-        <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">تۆمارکردنی قەرز</h3>
+        <h3 className="text-lg font-bold mb-4 text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">
+          <Plus size={18} className="text-amber-600" />
+          {`تۆمارکردنی قەرزی نوێ`}
+        </h3>
         <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
           <div>
             <label className="block text-sm text-slate-600 mb-1">{`ناوی ${targetName}`}</label>
@@ -529,6 +639,7 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
               className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
               value={relatedEntityId}
               onChange={(e) => setRelatedEntityId(e.target.value)}
+              placeholder={`ناوی ${targetName}...`}
             />
             <datalist id={`suggestions-${type}`}>
               {suggestions.map(s => <option key={s.id} value={s.name} />)}
@@ -582,9 +693,14 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
       {/* Debts Table */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-          <h4 className="font-bold text-slate-700 flex items-center gap-2">📝 لیستی قەرزەکان</h4>
-          <span className="text-xs text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
-            پیشاندانی {filteredDebts.length} لە {debts.length} تۆمار
+          <div>
+            <h4 className="font-bold text-slate-700 flex items-center gap-2">📝 لیستی قەرزە نەدراوەکان (ماوەی قەرز)</h4>
+            <p className="text-xs text-slate-400 mt-0.5">
+              تەنها ئەو قەرزانە پیشاندەدرێن کە ماون؛ بە دانەوەی بەشێک لە قەرز بڕەکەی کەم دەبێتەوە و بە تەواوبوونی لە لیست نامێنێت.
+            </p>
+          </div>
+          <span className="text-xs font-medium text-slate-600 bg-slate-100 px-3 py-1 rounded-lg">
+            پیشاندانی {filteredDebts.length} قەرزی ماوە
           </span>
         </div>
         {loading ? (
@@ -595,10 +711,11 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                 <tr>
                   <th className="px-4 py-3 font-semibold">ناو</th>
-                  <th className="px-4 py-3 font-semibold">وردەکاری</th>
-                  <th className="px-4 py-3 font-semibold">بڕی پارە</th>
+                  <th className="px-4 py-3 font-semibold">وردەکاری و وەسڵ</th>
+                  <th className="px-4 py-3 font-semibold">بڕی ماوەی قەرز</th>
+                  <th className="px-4 py-3 font-semibold">دۆخی پارەدان</th>
                   <th className="px-4 py-3 font-semibold">بەروار</th>
-                  <th className="px-4 py-3 font-semibold">کردارەکان</th>
+                  <th className="px-4 py-3 font-semibold text-center">کردارەکان</th>
                 </tr>
               </thead>
               <tbody className="text-sm divide-y divide-slate-50">
@@ -613,23 +730,44 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-4 font-bold text-amber-600" dir="ltr">{debt.amount.toLocaleString()}</td>
+                    <td className="px-4 py-4">
+                      <div className="font-bold text-amber-600 text-base" dir="ltr">
+                        {debt.remainingAmount.toLocaleString()} د.ع
+                      </div>
+                    </td>
+                    <td className="px-4 py-4">
+                      {debt.isPartiallyPaid ? (
+                        <div className="space-y-1 text-xs">
+                          <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 px-2 py-0.5 rounded-md font-medium border border-green-200">
+                            دراوە: {debt.paidAmount.toLocaleString()} د.ع
+                          </span>
+                          <div className="text-[11px] text-slate-400" dir="ltr">
+                            سەرەتایی: {debt.originalAmount.toLocaleString()}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="inline-block bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">
+                          تەواوی بڕ نەدراوە
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">{format(debt.date, 'yyyy-MM-dd HH:mm')}</td>
                     <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-center gap-1.5">
                         <button
                           onClick={() => {
-                            setPayModalDebt(debt);
+                            setPayModalDebt(debt.rawTransaction);
                             setPayModalCompany(debt.relatedEntityId || '');
                             setIsPayModalOpen(true);
                           }}
-                          className="p-1.5 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition"
-                          title="دانەوەی قەرز (بە وەسڵ یان بڕی دیاریکراو)"
+                          className="px-2.5 py-1.5 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-xs font-bold transition flex items-center gap-1 border border-green-200"
+                          title="دانەوەی قەرز (تەواوەتی یان بەشەکی)"
                         >
-                          <Check size={16} />
+                          <Check size={14} />
+                          <span>دانەوە</span>
                         </button>
                         <button
-                          onClick={() => printTransaction(debt)}
+                          onClick={() => printTransaction(debt.rawTransaction)}
                           className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
                           title="چاپکردنی تەنها ئەمە"
                         >
@@ -655,8 +793,12 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
                 ))}
                 {filteredDebts.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="text-center py-8 text-slate-500">
-                      هیچ قەرزێک بەپێی ئەم فلتەرە نەدۆزرایەوە
+                    <td colSpan={6} className="text-center py-10 text-slate-500">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <CheckCircle2 size={32} className="text-green-500" />
+                        <span className="font-bold text-slate-700">هیچ قەرزێکی ماوە بوونی نییە</span>
+                        <span className="text-xs text-slate-400">هەموو قەرزەکان دراونەتەوە یان هیچ تۆمارێک بەپێی ئەم فلتەرە نییە.</span>
+                      </div>
                     </td>
                   </tr>
                 )}
@@ -675,7 +817,8 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
         message="ئایا دڵنیایت لە سڕینەوەی ئەم تۆمارەی قەرز؟"
         details={deletingDebt ? [
           { label: targetName, value: deletingDebt.relatedEntityId || '-' },
-          { label: 'بڕی قەرز', value: `${(deletingDebt.amount || 0).toLocaleString()} د.ع` },
+          { label: 'بڕی ماوەی قەرز', value: `${(deletingDebt.remainingAmount || 0).toLocaleString()} د.ع` },
+          { label: 'بڕی سەرەتایی', value: `${(deletingDebt.originalAmount || 0).toLocaleString()} د.ع` },
           { label: 'وردەکاری', value: deletingDebt.description || '-' }
         ] : []}
       />

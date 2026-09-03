@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, deleteDoc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
+import { getStoredSession } from '../../lib/authService';
 import { CashvanRequisition, Item, CashvanReturn, CashvanReturnItem } from '../../types';
 import { Search, Plus, Send, Clock, CheckCircle2, Truck, ClipboardList, Package, Layers, RotateCcw, Printer, Edit2, Trash2, X, AlertTriangle, Check } from 'lucide-react';
 import { format } from 'date-fns';
@@ -41,23 +42,33 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
   const [deletingReturn, setDeletingReturn] = useState<CashvanReturn | null>(null);
 
   // Identify driver / cashvan
-  const defaultUserName = auth.currentUser?.displayName || auth.currentUser?.email?.split('@')[0] || 'کاشڤان';
+  const storedSession = getStoredSession();
+  const defaultUserName = storedSession?.name || storedSession?.username || sessionStorage.getItem('active_cashvan_name') || 'کاشڤان';
   const [activeCashvanName, setActiveCashvanName] = useState<string>(defaultUserName);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const unsubUser = onSnapshot(
-      doc(db, 'users', auth.currentUser.uid),
-      (docSnap) => {
-        if (docSnap.exists() && docSnap.data().name) {
-          setActiveCashvanName(docSnap.data().name);
+    const session = getStoredSession();
+    if (session?.name) {
+      setActiveCashvanName(session.name);
+    } else if (session?.username) {
+      setActiveCashvanName(session.username);
+    }
+
+    const sessionCashvanId = session?.id || session?.repId;
+    if (sessionCashvanId) {
+      const unsubCV = onSnapshot(
+        doc(db, 'cashvans', sessionCashvanId),
+        (docSnap) => {
+          if (docSnap.exists() && docSnap.data().name) {
+            setActiveCashvanName(docSnap.data().name);
+          }
+        },
+        (err) => {
+          handleFirestoreError(err, OperationType.GET, 'cashvans');
         }
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.GET, 'users');
-      }
-    );
-    return () => unsubUser();
+      );
+      return () => unsubCV();
+    }
   }, []);
 
   useEffect(() => {
@@ -147,21 +158,23 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
   }, [inventory, returnSearch]);
 
   // Pre-order helpers
-  const addPreOrderItem = (item: Item) => {
+  const addPreOrderItem = (item: Item, initialQty: number = 1) => {
     const existing = preOrderCart.find(c => c.item.id === item.id);
     if (existing) {
-      setPreOrderCart(preOrderCart.map(c => c.item.id === item.id ? { ...c, quantity: c.quantity + 1 } : c));
+      const nextQty = Math.round((existing.quantity + initialQty) * 100) / 100;
+      setPreOrderCart(preOrderCart.map(c => c.item.id === item.id ? { ...c, quantity: nextQty } : c));
     } else {
       const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
-      setPreOrderCart([...preOrderCart, { item, quantity: 1, unit: defaultUnit }]);
+      setPreOrderCart([...preOrderCart, { item, quantity: initialQty, unit: defaultUnit }]);
     }
   };
 
   const updatePreOrderQty = (itemId: string, quantity: number, unit?: 'carton' | 'packet') => {
-    if (quantity <= 0) {
+    const cleanQty = Math.round(quantity * 100) / 100;
+    if (cleanQty <= 0) {
       setPreOrderCart(preOrderCart.filter(c => c.item.id !== itemId));
     } else {
-      setPreOrderCart(preOrderCart.map(c => c.item.id === itemId ? { ...c, quantity, unit: unit || c.unit } : c));
+      setPreOrderCart(preOrderCart.map(c => c.item.id === itemId ? { ...c, quantity: cleanQty, unit: unit || c.unit } : c));
     }
   };
 
@@ -220,13 +233,14 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
   const updateReturnQty = (itemId: string, quantity: number, unit?: 'carton' | 'packet') => {
     const itemInVan = inventory.find(i => (i.itemId || i.id) === itemId);
     const maxQty = itemInVan?.quantity || 9999;
-    if (quantity <= 0) {
+    const cleanQty = Math.round(quantity * 100) / 100;
+    if (cleanQty <= 0) {
       setReturnCart(returnCart.filter(c => (c.vanItem.itemId || c.vanItem.id) !== itemId));
-    } else if (quantity > maxQty) {
+    } else if (cleanQty > maxQty) {
       alert(`بڕی بەردەست لەناو ڤان تەنها ${maxQty} دانەیە`);
       setReturnCart(returnCart.map(c => (c.vanItem.itemId || c.vanItem.id) === itemId ? { ...c, quantity: maxQty, unit: unit || c.unit } : c));
     } else {
-      setReturnCart(returnCart.map(c => (c.vanItem.itemId || c.vanItem.id) === itemId ? { ...c, quantity, unit: unit || c.unit } : c));
+      setReturnCart(returnCart.map(c => (c.vanItem.itemId || c.vanItem.id) === itemId ? { ...c, quantity: cleanQty, unit: unit || c.unit } : c));
     }
   };
 
@@ -976,34 +990,51 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                       </button>
                     ) : (
                       <div>
-                        <div className="flex items-center justify-between gap-1.5 bg-white border border-indigo-300 rounded-xl p-1 shadow-2xs">
+                        <div className="flex items-center justify-between gap-1 bg-white border border-indigo-300 rounded-xl p-1 shadow-2xs">
                           <button
                             type="button"
-                            onClick={() => updatePreOrderQty(item.id, currentQty - 1, currentUnit)}
-                            className="w-8 h-8 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm transition active:scale-95"
-                            title="کەمکردنەوە"
+                            onClick={() => updatePreOrderQty(item.id, Math.max(0, currentQty - 1), currentUnit)}
+                            className="w-7 h-7 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs transition active:scale-95"
+                            title="کەمکردنەوەی ١"
                           >
-                            -
+                            -1
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updatePreOrderQty(item.id, Math.max(0, Math.round((currentQty - 0.5) * 10) / 10), currentUnit)}
+                            className="px-1.5 h-7 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                            title="کەمکردنەوەی نیو (٠.٥)"
+                          >
+                            -½
                           </button>
                           <input
                             type="number"
-                            min="1"
+                            step="any"
+                            min="0"
                             value={currentQty}
                             onChange={(e) => {
-                              const val = parseInt(e.target.value);
+                              const val = parseFloat(e.target.value);
                               if (!isNaN(val)) {
                                 updatePreOrderQty(item.id, val, currentUnit);
                               }
                             }}
-                            className="w-16 h-8 text-center font-mono font-bold text-sm text-slate-800 outline-none bg-transparent"
+                            className="w-12 h-7 text-center font-mono font-bold text-xs text-slate-800 outline-none bg-transparent"
                           />
                           <button
                             type="button"
-                            onClick={() => updatePreOrderQty(item.id, currentQty + 1, currentUnit)}
-                            className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center font-bold text-sm transition active:scale-95"
-                            title="زیادکردن"
+                            onClick={() => updatePreOrderQty(item.id, Math.round((currentQty + 0.5) * 10) / 10, currentUnit)}
+                            className="px-1.5 h-7 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 flex items-center justify-center font-bold text-[11px] transition active:scale-95"
+                            title="زیادکردنی نیو (٠.٥)"
                           >
-                            +
+                            +½
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updatePreOrderQty(item.id, currentQty + 1, currentUnit)}
+                            className="w-7 h-7 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center font-bold text-xs transition active:scale-95"
+                            title="زیادکردنی ١"
+                          >
+                            +1
                           </button>
                         </div>
 
@@ -1238,25 +1269,44 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                               <div className="flex items-center justify-center gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => updateReturnQty(c.vanItem.itemId || c.vanItem.id, c.quantity - 1)}
-                                  className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center"
+                                  onClick={() => updateReturnQty(c.vanItem.itemId || c.vanItem.id, Math.max(0, c.quantity - 1))}
+                                  className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center justify-center"
+                                  title="-1"
                                 >
-                                  -
+                                  -1
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateReturnQty(c.vanItem.itemId || c.vanItem.id, Math.max(0, Math.round((c.quantity - 0.5) * 10) / 10))}
+                                  className="px-1 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] flex items-center justify-center"
+                                  title="-0.5"
+                                >
+                                  -½
                                 </button>
                                 <input
                                   type="number"
-                                  min="1"
+                                  step="any"
+                                  min="0"
                                   max={maxQty}
                                   value={c.quantity}
-                                  onChange={(e) => updateReturnQty(c.vanItem.itemId || c.vanItem.id, parseInt(e.target.value) || 1)}
-                                  className="w-12 text-center font-bold border border-slate-200 rounded py-0.5 text-xs"
+                                  onChange={(e) => updateReturnQty(c.vanItem.itemId || c.vanItem.id, parseFloat(e.target.value) || 0)}
+                                  className="w-11 text-center font-bold border border-slate-200 rounded py-0.5 text-xs"
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => updateReturnQty(c.vanItem.itemId || c.vanItem.id, c.quantity + 1)}
-                                  className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center"
+                                  onClick={() => updateReturnQty(c.vanItem.itemId || c.vanItem.id, Math.round((c.quantity + 0.5) * 10) / 10)}
+                                  className="px-1 h-6 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] flex items-center justify-center"
+                                  title="+0.5"
                                 >
-                                  +
+                                  +½
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateReturnQty(c.vanItem.itemId || c.vanItem.id, c.quantity + 1)}
+                                  className="w-6 h-6 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[11px] flex items-center justify-center"
+                                  title="+1"
+                                >
+                                  +1
                                 </button>
                               </div>
                             </td>
@@ -1378,24 +1428,43 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                             <div className="flex items-center justify-center gap-1">
                               <button
                                 type="button"
-                                onClick={() => handleUpdateEditReturnItemQty(idx, it.quantity - 1)}
-                                className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center"
+                                onClick={() => handleUpdateEditReturnItemQty(idx, Math.max(0, it.quantity - 1))}
+                                className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center justify-center"
+                                title="-1"
                               >
-                                -
+                                -1
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditReturnItemQty(idx, Math.max(0, Math.round((it.quantity - 0.5) * 10) / 10))}
+                                className="px-1 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] flex items-center justify-center"
+                                title="-0.5"
+                              >
+                                -½
                               </button>
                               <input
                                 type="number"
-                                min="1"
+                                step="any"
+                                min="0"
                                 value={it.quantity}
-                                onChange={(e) => handleUpdateEditReturnItemQty(idx, parseInt(e.target.value) || 1)}
-                                className="w-12 text-center font-bold border border-slate-200 rounded py-0.5 text-xs"
+                                onChange={(e) => handleUpdateEditReturnItemQty(idx, parseFloat(e.target.value) || 0)}
+                                className="w-11 text-center font-bold border border-slate-200 rounded py-0.5 text-xs"
                               />
                               <button
                                 type="button"
-                                onClick={() => handleUpdateEditReturnItemQty(idx, it.quantity + 1)}
-                                className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center"
+                                onClick={() => handleUpdateEditReturnItemQty(idx, Math.round((it.quantity + 0.5) * 10) / 10)}
+                                className="px-1 h-6 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] flex items-center justify-center"
+                                title="+0.5"
                               >
-                                +
+                                +½
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateEditReturnItemQty(idx, it.quantity + 1)}
+                                className="w-6 h-6 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[11px] flex items-center justify-center"
+                                title="+1"
+                              >
+                                +1
                               </button>
                             </div>
                           </td>

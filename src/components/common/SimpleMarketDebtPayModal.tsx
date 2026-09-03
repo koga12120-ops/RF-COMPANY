@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, addDoc, doc, setDoc, query, where, onSnapshot, getDocs, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
+import { getStoredSession } from '../../lib/authService';
 import { Market, Order, CashvanSale, Transaction } from '../../types';
 import { printMarketDebtReceiptPopup } from '../../lib/statementPrinter';
 import { X, CreditCard, Printer, CheckCircle2, DollarSign, FileText, User, PieChart, TrendingUp, PackageCheck, AlertCircle } from 'lucide-react';
@@ -160,7 +161,8 @@ export default function SimpleMarketDebtPayModal({
   const remainingDebt = Math.max(0, computedDebt - parsedAmount);
   const costAmount = Math.round(parsedAmount * costRatio);
   const profitAmount = parsedAmount - costAmount;
-  const activeCollector = collectorName || auth.currentUser?.displayName || 'مەندووب / کاشڤان';
+  const storedSession = getStoredSession();
+  const activeCollector = collectorName || storedSession?.name || storedSession?.username || sessionStorage.getItem('active_rep_name') || 'مەندووب / کاشڤان';
 
   const handleQuickAmount = (val: number) => {
     setAmount(val.toString());
@@ -256,7 +258,7 @@ export default function SimpleMarketDebtPayModal({
       }
 
       // 4. If rep or cashvan has a schedule, mark as visited
-      const activeRepId = repId || auth.currentUser?.uid;
+      const activeRepId = repId || storedSession?.repId || storedSession?.id || activeCollector;
       if (activeRepId && market?.id) {
         const weekId = getWeekId();
         const visitId = `${activeRepId}_${weekId}_${market.id}`;

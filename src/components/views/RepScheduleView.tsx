@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { collection, query, where, getDocs, onSnapshot, doc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
+import { getStoredSession } from '../../lib/authService';
 import { Calendar, CheckCircle2, Clock, MapPin, Menu, ShoppingCart, CreditCard, Phone, DollarSign } from 'lucide-react';
 import { Market, Transaction } from '../../types';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
@@ -21,8 +22,12 @@ const getWeekId = () => {
 };
 
 export default function RepScheduleView() {
-  const [repId, setRepId] = useState<string | null>(null);
-  const [repName, setRepName] = useState<string>('');
+  const storedSession = getStoredSession();
+  const initialRepId = storedSession?.repId || storedSession?.id || sessionStorage.getItem('active_rep_id') || '';
+  const initialRepName = storedSession?.name || storedSession?.username || sessionStorage.getItem('active_rep_name') || 'مەندووب';
+
+  const [repId, setRepId] = useState<string | null>(initialRepId || null);
+  const [repName, setRepName] = useState<string>(initialRepName);
   const [schedule, setSchedule] = useState<Record<string, string[]>>({});
   const [visits, setVisits] = useState<Record<string, boolean>>({});
   const [markets, setMarkets] = useState<Record<string, Market>>({});
@@ -50,38 +55,84 @@ export default function RepScheduleView() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // 1. Resolve Rep ID & Name from session or reps collection
   useEffect(() => {
-    const init = async () => {
-      if (!auth.currentUser) return;
-      setRepId(auth.currentUser.uid);
-      setRepName(auth.currentUser.displayName || 'مەندووب');
+    const session = getStoredSession();
+    const sessionRepId = session?.repId || session?.id || sessionStorage.getItem('active_rep_id');
+    const sessionRepName = session?.name || session?.username || sessionStorage.getItem('active_rep_name');
 
-      const unsubUser = onSnapshot(
-        doc(db, 'users', auth.currentUser.uid),
-        (docSnap) => {
-          if (docSnap.exists() && docSnap.data().name) {
-            setRepName(docSnap.data().name);
-          }
-        },
-        (error) => handleFirestoreError(error, OperationType.GET, 'users')
-      );
-      return () => unsubUser();
-    };
-    init();
+    if (sessionRepId) setRepId(sessionRepId);
+    if (sessionRepName) setRepName(sessionRepName);
+
+    const unsubReps = onSnapshot(collection(db, 'reps'), (snap) => {
+      snap.forEach((d) => {
+        const data = d.data();
+        if (
+          (sessionRepId && d.id === sessionRepId) ||
+          (sessionRepName && (data.name === sessionRepName || data.username === sessionRepName || d.id === sessionRepName))
+        ) {
+          setRepId(d.id);
+          if (data.name) setRepName(data.name);
+        }
+      });
+    }, (err) => handleFirestoreError(err, OperationType.GET, 'reps'));
+
+    return () => unsubReps();
   }, []);
 
   useEffect(() => {
-    if (!repId) return;
+    const activeTargetId = repId || initialRepId;
+    const activeTargetName = repName || initialRepName;
 
-    // 1. Listen to template schedule
-    const unsubSchedule = onSnapshot(
-      doc(db, 'schedules', repId),
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setSchedule(docSnap.data().schedule || {});
-        } else {
-          setSchedule({});
+    // 1. Listen to template schedule (by repId, by repName, and all schedules fallback)
+    let unsubSchedule1 = () => {};
+    let unsubSchedule2 = () => {};
+    let unsubAllSchedules = () => {};
+
+    if (activeTargetId) {
+      unsubSchedule1 = onSnapshot(
+        doc(db, 'schedules', activeTargetId),
+        (docSnap) => {
+          if (docSnap.exists() && docSnap.data().schedule) {
+            setSchedule(docSnap.data().schedule);
+          }
+        },
+        (error) => {
+          handleFirestoreError(error, OperationType.GET, 'schedules');
         }
+      );
+    }
+
+    if (activeTargetName && activeTargetName !== activeTargetId) {
+      unsubSchedule2 = onSnapshot(
+        doc(db, 'schedules', activeTargetName),
+        (docSnap) => {
+          if (docSnap.exists() && docSnap.data().schedule) {
+            setSchedule(docSnap.data().schedule);
+          }
+        },
+        (error) => {
+          handleFirestoreError(error, OperationType.GET, 'schedules');
+        }
+      );
+    }
+
+    unsubAllSchedules = onSnapshot(
+      collection(db, 'schedules'),
+      (snap) => {
+        snap.forEach((d) => {
+          const data = d.data();
+          if (
+            d.id === activeTargetId ||
+            d.id === activeTargetName ||
+            data.repId === activeTargetId ||
+            (activeTargetName && data.repName === activeTargetName)
+          ) {
+            if (data.schedule && Object.keys(data.schedule).length > 0) {
+              setSchedule(data.schedule);
+            }
+          }
+        });
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, 'schedules');
@@ -89,8 +140,8 @@ export default function RepScheduleView() {
     );
 
     // 2. Listen to this week's visits
-    const qVisits = query(collection(db, 'schedule_visits'), 
-      where('repId', '==', repId),
+    const qVisits = query(
+      collection(db, 'schedule_visits'),
       where('weekId', '==', weekId)
     );
     const unsubVisits = onSnapshot(
@@ -98,7 +149,16 @@ export default function RepScheduleView() {
       (snap) => {
         const visitedMap: Record<string, boolean> = {};
         snap.forEach(d => {
-          visitedMap[d.data().marketId] = true;
+          const data = d.data();
+          if (
+            data.repId === activeTargetId ||
+            data.repId === activeTargetName ||
+            (activeTargetName && data.repName === activeTargetName)
+          ) {
+            if (!data.unvisited) {
+              visitedMap[data.marketId] = true;
+            }
+          }
         });
         setVisits(visitedMap);
       },
@@ -139,12 +199,14 @@ export default function RepScheduleView() {
     );
 
     return () => {
-      unsubSchedule();
+      unsubSchedule1();
+      unsubSchedule2();
+      unsubAllSchedules();
       unsubVisits();
       unsubMarkets();
       unsubTrans();
     };
-  }, [repId, weekId]);
+  }, [repId, repName, weekId]);
 
   // Debt map
   const marketDebtMap = useMemo(() => {

@@ -39,7 +39,8 @@ import {
   Receipt,
   Store,
   Filter,
-  Gift
+  Gift,
+  Copy
 } from 'lucide-react';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { printDailyRepReceiptPopup, printStatementPopup } from '../../lib/statementPrinter';
@@ -47,7 +48,7 @@ import ConfirmModal from '../common/ConfirmModal';
 
 export default function AdminCashvanView() {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'rep_sales' | 'cashvan_sales' | 'transfers' | 'daily_statement'>('rep_sales');
+  const [activeTab, setActiveTab] = useState<'rep_sales' | 'cashvan_sales' | 'transfers' | 'cashvan_accounts' | 'daily_statement'>('rep_sales');
 
   // Core Data
   const [orders, setOrders] = useState<Order[]>([]);
@@ -59,6 +60,28 @@ export default function AdminCashvanView() {
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [cashvans, setCashvans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Cashvan Accounts Management States
+  const [showAddCVModal, setShowAddCVModal] = useState(false);
+  const [newCVName, setNewCVName] = useState('');
+  const [newCVUsername, setNewCVUsername] = useState('');
+  const [newCVPassword, setNewCVPassword] = useState('');
+  const [newCVPhone, setNewCVPhone] = useState('');
+  const [newCVVehicleNumber, setNewCVVehicleNumber] = useState('');
+
+  const [editingCVItem, setEditingCVItem] = useState<any | null>(null);
+  const [editCVName, setEditCVName] = useState('');
+  const [editCVUsername, setEditCVUsername] = useState('');
+  const [editCVPassword, setEditCVPassword] = useState('');
+  const [editCVPhone, setEditCVPhone] = useState('');
+  const [editCVStatus, setEditCVStatus] = useState<'active' | 'disabled'>('active');
+
+  const [codeCVModalItem, setCodeCVModalItem] = useState<any | null>(null);
+  const [inputCVCode, setInputCVCode] = useState('');
+  const [inputCVUsername, setInputCVUsername] = useState('');
+
+  const [deletingCVItem, setDeletingCVItem] = useState<any | null>(null);
+  const [copiedCVId, setCopiedCVId] = useState<string | null>(null);
 
   // Search & Sub-Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -499,6 +522,136 @@ export default function AdminCashvanView() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // --- Cashvan Accounts CRUD Handlers ---
+  const handleAddNewCashvan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCVName.trim()) return;
+    setIsProcessing(true);
+    try {
+      const nameTrimmed = newCVName.trim();
+      const userTrimmed = newCVUsername.trim() || nameTrimmed;
+      const passTrimmed = newCVPassword.trim() || Math.floor(10000 + Math.random() * 90000).toString();
+      const phoneTrimmed = newCVPhone.trim();
+      const vehicleTrimmed = newCVVehicleNumber.trim();
+
+      const docRef = await addDoc(collection(db, 'cashvans'), {
+        name: nameTrimmed,
+        username: userTrimmed,
+        accessCode: passTrimmed,
+        password: passTrimmed,
+        phone: phoneTrimmed,
+        vehicleNumber: vehicleTrimmed,
+        status: 'active',
+        createdAt: Date.now()
+      });
+
+      await updateDoc(doc(db, 'cashvans', docRef.id), { id: docRef.id });
+
+      setShowAddCVModal(false);
+      setNewCVName('');
+      setNewCVUsername('');
+      setNewCVPassword('');
+      setNewCVPhone('');
+      setNewCVVehicleNumber('');
+      alert(`کاشڤان (${nameTrimmed}) بە یوزەری [${userTrimmed}] و تێپەڕەوشەی [${passTrimmed}] زیادکرا.`);
+    } catch (e) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا لە زیادکردنی کاشڤان');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSaveEditCashvan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCVItem || !editCVName.trim()) return;
+    setIsProcessing(true);
+    try {
+      const nameTrimmed = editCVName.trim();
+      const userTrimmed = editCVUsername.trim() || nameTrimmed;
+      const phoneTrimmed = editCVPhone.trim();
+      const passTrimmed = editCVPassword.trim();
+
+      const updateData: any = {
+        name: nameTrimmed,
+        username: userTrimmed,
+        phone: phoneTrimmed,
+        status: editCVStatus
+      };
+      if (passTrimmed) {
+        updateData.accessCode = passTrimmed;
+        updateData.password = passTrimmed;
+      }
+
+      await updateDoc(doc(db, 'cashvans', editingCVItem.id), updateData);
+      setEditingCVItem(null);
+      alert(`زانیارییەکانی کاشڤان (${nameTrimmed}) نوێکرایەوە.`);
+    } catch (e) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSaveCVCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!codeCVModalItem || !inputCVCode.trim()) return;
+    setIsProcessing(true);
+    try {
+      const codeTrimmed = inputCVCode.trim();
+      const userTrimmed = inputCVUsername.trim() || codeCVModalItem.name;
+
+      await updateDoc(doc(db, 'cashvans', codeCVModalItem.id), {
+        username: userTrimmed,
+        accessCode: codeTrimmed,
+        password: codeTrimmed,
+        forceReauth: true
+      });
+
+      setCodeCVModalItem(null);
+      alert(`تێپەڕەوشەی چوونەژوورەوەی کاشڤان (${codeCVModalItem.name}) نوێکرایەوە بۆ: [${codeTrimmed}]`);
+    } catch (e) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleToggleCVStatus = async (item: any) => {
+    const nextStatus = item.status === 'disabled' ? 'active' : 'disabled';
+    try {
+      await updateDoc(doc(db, 'cashvans', item.id), {
+        status: nextStatus,
+        forceReauth: nextStatus === 'disabled'
+      });
+      alert(`دۆخی کاشڤان (${item.name}) گۆڕدرا بۆ: ${nextStatus === 'active' ? 'چالاک' : 'ڕاگیراو'}`);
+    } catch (e) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا');
+    }
+  };
+
+  const confirmDeleteCashvan = async () => {
+    if (!deletingCVItem) return;
+    try {
+      await deleteDoc(doc(db, 'cashvans', deletingCVItem.id));
+      setDeletingCVItem(null);
+      alert(`کاشڤان (${deletingCVItem.name}) سڕدرایەوە.`);
+    } catch (e) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا لە سڕینەوەی کاشڤان');
+    }
+  };
+
+  const handleCopyCVCredentials = (cv: any) => {
+    const text = `زانیاری چوونەژوورەوە بۆ کاشڤان: ${cv.name}\nیوزەرنەیم: ${cv.username || cv.name}\nتێپەڕەوشە: ${cv.accessCode || cv.password || '47953'}`;
+    navigator.clipboard.writeText(text);
+    setCopiedCVId(cv.id);
+    setTimeout(() => setCopiedCVId(null), 2000);
   };
 
   // --- Print Rep Order Voucher ---
@@ -1098,6 +1251,21 @@ export default function AdminCashvanView() {
         >
           <Layers size={18} />
           <span>بارکردنی کاڵا بۆ کاشڤان</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('cashvan_accounts')}
+          className={`py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+            activeTab === 'cashvan_accounts' 
+              ? 'bg-indigo-600 text-white shadow-sm' 
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
+        >
+          <User size={18} />
+          <span>هەژمارەکانی کاشڤان</span>
+          <span className="text-[11px] px-2 py-0.5 rounded-full font-mono bg-indigo-100 text-indigo-800">
+            {cashvans.length}
+          </span>
         </button>
 
         <button
@@ -1787,6 +1955,454 @@ export default function AdminCashvanView() {
           </section>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* TAB 5: CASHVAN ACCOUNTS & AUTHENTICATION MANAGEMENT                        */}
+      {/* ========================================================================= */}
+      {activeTab === 'cashvan_accounts' && (
+        <div className="space-y-6" dir="rtl">
+          {/* Header Bar */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50">
+            <div>
+              <h2 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                <Truck className="text-indigo-600" size={20} />
+                <span>هەژمار و تێپەڕەوشەی چوونەژوورەوەی کاشڤانەکان ({cashvans.length})</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                لێرە دەتوانیت ناوی بەکارهێنەر (یوزەرنەیم) و تێپەڕەوشە (پاسوۆرد) بۆ شۆفێر و کاشڤانەکان دابنێیت
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                setNewCVName('');
+                setNewCVUsername('');
+                setNewCVPassword(Math.floor(10000 + Math.random() * 90000).toString());
+                setNewCVPhone('');
+                setNewCVVehicleNumber('');
+                setShowAddCVModal(true);
+              }}
+              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-sm"
+            >
+              <Truck size={16} />
+              <span>دروستکردنی هەژماری کاشڤان</span>
+            </button>
+          </div>
+
+          {/* Cashvans Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-right">
+                <thead className="bg-slate-50 text-slate-500 text-xs font-bold uppercase border-b border-slate-100">
+                  <tr>
+                    <th className="px-5 py-3.5">ناوی کاشڤان</th>
+                    <th className="px-5 py-3.5">ناوی بەکارهێنەر (Username)</th>
+                    <th className="px-5 py-3.5">تێپەڕەوشە / پاسوۆرد</th>
+                    <th className="px-5 py-3.5">تەلەفۆن</th>
+                    <th className="px-5 py-3.5">ژمارەی ئۆتۆمبێل</th>
+                    <th className="px-5 py-3.5">دۆخی هەژمار</th>
+                    <th className="px-5 py-3.5 text-center">کردارەکان</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm divide-y divide-slate-100">
+                  {cashvans.map((cv: any) => {
+                    const pass = cv.accessCode || cv.password || '47953';
+                    const isDisabled = cv.status === 'disabled';
+
+                    return (
+                      <tr key={cv.id} className={`hover:bg-slate-50/80 transition ${isDisabled ? 'bg-red-50/30 opacity-70' : ''}`}>
+                        <td className="px-5 py-4">
+                          <div className="font-bold text-slate-900 flex items-center gap-2">
+                            <Truck size={16} className={isDisabled ? 'text-slate-400' : 'text-indigo-600'} />
+                            <span>{cv.name}</span>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <span className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded-lg text-xs font-mono font-bold">
+                            {cv.username || cv.name}
+                          </span>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className="px-3 py-1 bg-slate-900 text-amber-400 font-mono font-bold tracking-widest text-xs rounded-lg shadow-2xs">
+                              {pass}
+                            </span>
+                            <button
+                              onClick={() => handleCopyCVCredentials(cv)}
+                              className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md transition"
+                              title="کۆپیکردنی یوزەر و پاسوۆرد"
+                            >
+                              {copiedCVId === cv.id ? <Check size={15} className="text-green-600" /> : <Copy size={15} />}
+                            </button>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4 text-slate-600 font-mono text-xs" dir="ltr">
+                          {cv.phone || '-'}
+                        </td>
+
+                        <td className="px-5 py-4 text-slate-600 text-xs">
+                          {cv.vehicleNumber || '-'}
+                        </td>
+
+                        <td className="px-5 py-4">
+                          {isDisabled ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700 flex items-center gap-1 w-fit">
+                              <AlertTriangle size={12} />
+                              ڕاگیراوە
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 flex items-center gap-1 w-fit">
+                              <CheckCircle2 size={12} />
+                              چالاکە
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="px-5 py-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => {
+                                setCodeCVModalItem(cv);
+                                setInputCVCode(cv.accessCode || cv.password || '');
+                                setInputCVUsername(cv.username || cv.name);
+                              }}
+                              className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg transition flex items-center gap-1"
+                              title="گۆڕینی پاسوۆرد"
+                            >
+                              <span>گۆڕینی پاسوۆرد</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleToggleCVStatus(cv)}
+                              className={`p-1.5 rounded-lg transition ${
+                                isDisabled
+                                  ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                                  : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                              }`}
+                              title={isDisabled ? 'چالاککردنەوە' : 'ڕاگرتن'}
+                            >
+                              <CheckCircle2 size={15} />
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setEditingCVItem(cv);
+                                setEditCVName(cv.name);
+                                setEditCVUsername(cv.username || cv.name);
+                                setEditCVPhone(cv.phone || '');
+                                setEditCVPassword(cv.accessCode || cv.password || '');
+                                setEditCVStatus(cv.status || 'active');
+                              }}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition"
+                              title="دەستکاری زانیاری"
+                            >
+                              <Edit2 size={15} />
+                            </button>
+
+                            <button
+                              onClick={() => setDeletingCVItem(cv)}
+                              className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                              title="سڕینەوە"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {cashvans.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-12 text-slate-500">
+                        <Truck size={32} className="mx-auto text-slate-300 mb-2" />
+                        <p className="font-bold text-sm">هیچ کاشڤانێک تۆمار نەکراوە</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD NEW CASHVAN */}
+      {showAddCVModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
+              <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
+                <Truck className="text-indigo-600" size={20} />
+                دروستکردنی هەژماری کاشڤانی نوێ
+              </h3>
+              <button onClick={() => setShowAddCVModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddNewCashvan} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی کاشڤان *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="بۆ نموونە: کاشڤان ئارام"
+                  value={newCVName}
+                  onChange={(e) => {
+                    setNewCVName(e.target.value);
+                    if (!newCVUsername) setNewCVUsername(e.target.value.toLowerCase().replace(/\s+/g, '_'));
+                  }}
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold text-slate-900"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی بەکارهێنەر (Username)</label>
+                <input
+                  type="text"
+                  placeholder="aram_cashvan"
+                  value={newCVUsername}
+                  onChange={(e) => setNewCVUsername(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">تێپەڕەوشە / پاسوۆرد</label>
+                <input
+                  type="text"
+                  placeholder="12345"
+                  value={newCVPassword}
+                  onChange={(e) => setNewCVPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold font-mono tracking-widest bg-slate-50"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ژمارەی تەلەفۆن</label>
+                <input
+                  type="tel"
+                  placeholder="0750XXXXXXX"
+                  value={newCVPhone}
+                  onChange={(e) => setNewCVPhone(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ژمارەی ئۆتۆمبێل (ئارەزوومەندانە)</label>
+                <input
+                  type="text"
+                  placeholder="هەولێر 12345"
+                  value={newCVVehicleNumber}
+                  onChange={(e) => setNewCVVehicleNumber(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-medium"
+                />
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="submit"
+                  disabled={isProcessing || !newCVName.trim()}
+                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                >
+                  <Truck size={16} />
+                  <span>دروستکردنی هەژمار</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAddCVModal(false)}
+                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDIT CASHVAN */}
+      {editingCVItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
+              <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
+                <Edit2 className="text-indigo-600" size={18} />
+                دەستکاری زانیاری کاشڤان
+              </h3>
+              <button onClick={() => setEditingCVItem(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditCashvan} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی کاشڤان *</label>
+                <input
+                  type="text"
+                  required
+                  value={editCVName}
+                  onChange={(e) => setEditCVName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-indigo-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold text-slate-900"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">یوزەرنەیم (Username)</label>
+                <input
+                  type="text"
+                  value={editCVUsername}
+                  onChange={(e) => setEditCVUsername(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono font-bold"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">تێپەڕەوشە / پاسوۆرد</label>
+                <input
+                  type="text"
+                  value={editCVPassword}
+                  onChange={(e) => setEditCVPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono font-bold tracking-wider"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ژمارەی تەلەفۆن</label>
+                <input
+                  type="tel"
+                  value={editCVPhone}
+                  onChange={(e) => setEditCVPhone(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">دۆخی هەژمار</label>
+                <select
+                  value={editCVStatus}
+                  onChange={(e) => setEditCVStatus(e.target.value as any)}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold bg-white"
+                >
+                  <option value="active">چالاک (دەتوانێت بچێتە ژوورەوە)</option>
+                  <option value="disabled">ڕاگیراو (ناتوانێت بچێتە ژوورەوە)</option>
+                </select>
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="submit"
+                  disabled={isProcessing || !editCVName.trim()}
+                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition shadow-sm disabled:opacity-50"
+                >
+                  پاشەکەوتکردنی گۆڕانکارییەکان
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingCVItem(null)}
+                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CHANGE CASHVAN PASSWORD */}
+      {codeCVModalItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
+              <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
+                <Truck className="text-indigo-600" size={20} />
+                گۆڕینی تێپەڕەوشەی کاشڤان
+              </h3>
+              <button onClick={() => setCodeCVModalItem(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCVCode} className="p-6 space-y-4">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">کاشڤان:</span>
+                  <span className="font-bold text-slate-800">{codeCVModalItem.name}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی بەکارهێنەر (Username)</label>
+                <input
+                  type="text"
+                  value={inputCVUsername}
+                  onChange={(e) => setInputCVUsername(e.target.value)}
+                  dir="ltr"
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">تێپەڕەوشە / پاسوۆردی نوێ</label>
+                <input
+                  type="text"
+                  required
+                  value={inputCVCode}
+                  onChange={(e) => setInputCVCode(e.target.value)}
+                  className="w-full px-4 py-3 text-center tracking-[0.4em] text-xl border-2 border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono font-bold text-slate-800 bg-white"
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="submit"
+                  disabled={isProcessing || !inputCVCode.trim()}
+                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition text-xs shadow-sm disabled:opacity-50"
+                >
+                  پاشەکەوتکردنی پاسوۆرد
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCodeCVModalItem(null)}
+                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-xs"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE CASHVAN MODAL */}
+      <ConfirmModal
+        isOpen={!!deletingCVItem}
+        onClose={() => setDeletingCVItem(null)}
+        onConfirm={confirmDeleteCashvan}
+        title="سڕینەوەی کاشڤان"
+        message={`ئایا دڵنیایت لە سڕینەوەی هەژماری کاشڤان (${deletingCVItem?.name})؟`}
+        itemName={deletingCVItem?.name}
+        details={deletingCVItem ? [
+          { label: 'ناوی کاشڤان', value: deletingCVItem.name },
+          { label: 'تەلەفۆن', value: deletingCVItem.phone || '-' },
+          { label: 'پاسوۆرد', value: deletingCVItem.accessCode || deletingCVItem.password || 'دیاری نەکراوە' }
+        ] : []}
+      />
 
       {/* ========================================================================= */}
       {/* MODAL: SETTLE REP ORDER                                                    */}

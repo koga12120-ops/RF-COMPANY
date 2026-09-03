@@ -451,7 +451,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
               <div>
                 <h1 className="text-sm font-black text-slate-800 leading-tight">کۆمپانیای RF</h1>
                 <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
-                  سیستەمی مەندووب و کاشڤان
+                  بەشی مەندووب
                 </span>
               </div>
             </div>

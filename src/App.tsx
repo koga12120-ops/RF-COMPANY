@@ -1,18 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { auth, db } from './lib/firebase';
-import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+import { db, auth } from './lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth';
 import Login from './components/Login';
-import PinEntry from './components/PinEntry';
 import Dashboard from './components/Dashboard';
 import { Role } from './types';
+import { getStoredSession, clearUserSession, saveUserSession, UserSession } from './lib/authService';
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [session, setSession] = useState<UserSession | null>(null);
   const [role, setRoleState] = useState<Role>(null);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<User | null>(null);
-  const [pinNotice, setPinNotice] = useState<string>('');
+  const [notice, setNotice] = useState<string>('');
 
   useEffect(() => {
     // Initialize theme
@@ -20,215 +19,112 @@ export default function App() {
     const root = document.documentElement;
     root.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
     root.classList.add(`theme-${savedTheme}`);
+
+    // Try background anonymous auth for Firebase if needed
+    try {
+      signInAnonymously(auth).catch((err) => {
+        // Fallback or offline
+        console.log("Firebase background session initialized");
+      });
+    } catch (e) {
+      // Ignored
+    }
+
+    // Check stored session
+    const stored = getStoredSession();
+    if (stored && stored.role) {
+      setSession(stored);
+      setRoleState(stored.role);
+    }
+    setLoading(false);
   }, []);
 
+  // Real-time security sync for active session (e.g. if admin disables rep or changes password)
   useEffect(() => {
-    let unsubUserDoc: (() => void) | null = null;
-    let unsubRepDoc: (() => void) | null = null;
+    if (!session) return;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
-      if (unsubUserDoc) {
-        unsubUserDoc();
-        unsubUserDoc = null;
-      }
-      if (unsubRepDoc) {
-        unsubRepDoc();
-        unsubRepDoc = null;
-      }
+    let unsubDoc: (() => void) | null = null;
 
-      if (firebaseUser) {
-        setIsAuthenticated(true);
-        setUser(firebaseUser);
-
-        // Real-time listener for user document to catch role/ban/reauth updates
-        unsubUserDoc = onSnapshot(doc(db, 'users', firebaseUser.uid), (docSnap) => {
-          setLoading(false);
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            const sessionPin = sessionStorage.getItem('active_session_pin');
-
-            // 1. Check if user account was deleted or banned
-            if (data.isDeleted || data.status === 'banned') {
-              setRoleState(null);
-              sessionStorage.removeItem('active_session_pin');
-              setPinNotice('ئەم هەژمارە ڕاگیراوە یان سڕدراوەتەوە لەلایەن بەڕێوەبەرەوە.');
-              return;
-            }
-
-            // 2. Check if password/PIN was changed by Admin on user record
-            if (data.forceReauth) {
-              setRoleState(null);
-              sessionStorage.removeItem('active_session_pin');
-              setPinNotice('تێپەڕەوشەی چوونەژوورەوە لەلایەن بەڕێوەبەرەوە گۆڕدراوە. سیستەمەکە داخرا، تکایە کۆدە نوێیەکەت بنووسە.');
-              return;
-            }
-
-            // 3. For sales rep
-            const repId = data.repId || sessionStorage.getItem('active_rep_id');
-            if (data.role === 'sales_rep' || repId || sessionPin === '43629') {
-              if (sessionPin === '43629') {
-                setRoleState('sales_rep');
-                return;
-              }
-
-              if (repId) {
-                if (unsubRepDoc) {
-                  unsubRepDoc();
-                  unsubRepDoc = null;
-                }
-
-                unsubRepDoc = onSnapshot(doc(db, 'reps', repId), (repSnap) => {
-                  const currentSessionPin = sessionStorage.getItem('active_session_pin');
-                  if (repSnap.exists()) {
-                    const repData = repSnap.data();
-
-                    if (repData.isDeleted || repData.status === 'disabled') {
-                      setRoleState(null);
-                      sessionStorage.removeItem('active_session_pin');
-                      setPinNotice('ئەم هەژمارەی مەندووب لە سیستەم ڕاگیراوە.');
-                      return;
-                    }
-
-                    // If rep code changed by Admin or forceReauth was set
-                    if (repData.forceReauth || (currentSessionPin && repData.accessCode && repData.accessCode !== currentSessionPin)) {
-                      setRoleState(null);
-                      sessionStorage.removeItem('active_session_pin');
-                      setPinNotice('کۆدی چوونەژوورەوەی ئەم مەندووبە لەلایەن بەڕێوەبەرەوە گۆڕدراوە. سیستەمەکە داخرا، تکایە کۆدە نوێیەکەت بنووسە.');
-                      return;
-                    }
-
-                    // If valid active session pin matches current rep accessCode
-                    if (currentSessionPin && (repData.accessCode === currentSessionPin || currentSessionPin === '43629') && !repData.forceReauth && !data.forceReauth) {
-                      setRoleState('sales_rep');
-                    } else if (!currentSessionPin) {
-                      // No session PIN active, force PIN entry
-                      setRoleState(null);
-                    }
-                  } else {
-                    if (currentSessionPin === '43629' || data.role === 'sales_rep') {
-                      setRoleState('sales_rep');
-                    } else {
-                      setRoleState(null);
-                    }
-                  }
-                }, (err) => {
-                  console.error("Error listening to rep doc:", err);
-                });
-                return;
-              } else if (sessionPin === '43629' || data.role === 'sales_rep') {
-                setRoleState('sales_rep');
-                return;
-              }
-            }
-
-            // 4. Other Roles (Admin, Warehouse, Cashvan)
-            if (data.role === 'admin') {
-              if (sessionPin === '27890') {
-                setRoleState('admin');
-              } else {
-                setRoleState(null);
-              }
-            } else if (data.role === 'warehouse') {
-              if (sessionPin === '35278') {
-                setRoleState('warehouse');
-              } else {
-                setRoleState(null);
-              }
-            } else if (data.role === 'cashvan') {
-              if (sessionPin === '47953' || (sessionPin && (data.accessCode === sessionPin || sessionStorage.getItem('active_session_pin') === sessionPin))) {
-                setRoleState('cashvan');
-              } else {
-                setRoleState(null);
-              }
-            } else {
-              setRoleState(null);
-            }
-          } else {
-            setRoleState(null);
+    if (session.role === 'sales_rep' && session.repId) {
+      unsubDoc = onSnapshot(doc(db, 'reps', session.repId), (docSnap) => {
+        if (docSnap.exists()) {
+          const repData = docSnap.data();
+          if (repData.isDeleted || repData.status === 'disabled') {
+            handleLogout('ئەم هەژمارەی مەندووب لەلایەن بەڕێوەبەرەوە ڕاگیراوە یان سڕدراوەتەوە.');
+            return;
           }
-        }, (error) => {
-          console.error("Error listening to user document:", error);
-          setLoading(false);
-        });
-      } else {
-        setIsAuthenticated(false);
-        setUser(null);
-        setRoleState(null);
-        setLoading(false);
-      }
-    });
+          if (repData.forceReauth) {
+            handleLogout('تێپەڕەوشەی چوونەژوورەوە لەلایەن بەڕێوەبەرەوە گۆڕدراوە. تکایە دووبارە بچۆ ژوورەوە.');
+            return;
+          }
+          // If password/code changed
+          if (session.accessCode && repData.accessCode && repData.accessCode !== session.accessCode) {
+            handleLogout('کۆدی چوونەژوورەوە لەلایەن بەڕێوەبەرەوە نوێکراوەتەوە. تکایە بە کۆدە نوێیەکەت بچۆ ژوورەوە.');
+            return;
+          }
+        }
+      }, (err) => {
+        console.error("Error listening to rep status:", err);
+      });
+    } else if (session.role === 'cashvan' && session.id) {
+      unsubDoc = onSnapshot(doc(db, 'cashvans', session.id), (docSnap) => {
+        if (docSnap.exists()) {
+          const cvData = docSnap.data();
+          if (cvData.isDeleted || cvData.status === 'disabled') {
+            handleLogout('ئەم هەژمارەی کاشڤان لەلایەن بەڕێوەبەرەوە ڕاگیراوە.');
+            return;
+          }
+          if (cvData.forceReauth) {
+            handleLogout('تێپەڕەوشە لەلایەن بەڕێوەبەرەوە نوێکراوەتەوە. تکایە دووبارە بچۆ ژوورەوە.');
+            return;
+          }
+        }
+      }, (err) => {
+        console.error("Error listening to cashvan status:", err);
+      });
+    }
 
     return () => {
-      unsubscribeAuth();
-      if (unsubUserDoc) unsubUserDoc();
-      if (unsubRepDoc) unsubRepDoc();
+      if (unsubDoc) unsubDoc();
     };
-  }, []);
+  }, [session?.id, session?.repId, session?.role, session?.accessCode]);
 
-  const handlePinSuccess = async (newRole: Role) => {
-    setPinNotice('');
-    setRoleState(newRole);
-
-    if (user) {
-      try {
-        await setDoc(doc(db, 'users', user.uid), { 
-          role: newRole, 
-          name: user.displayName || user.email, 
-          email: user.email, 
-          forceReauth: false,
-          lastActiveAt: Date.now() 
-        }, { merge: true });
-        
-        const repId = sessionStorage.getItem('active_rep_id');
-        if (newRole === 'sales_rep' && repId) {
-          await setDoc(doc(db, 'reps', repId), { 
-            uid: user.uid,
-            forceReauth: false 
-          }, { merge: true });
-        }
-      } catch (error) {
-        console.error("Error syncing role to user doc:", error);
-      }
-    }
+  const handleLoginSuccess = (newSession: UserSession) => {
+    setNotice('');
+    setSession(newSession);
+    setRoleState(newSession.role);
+    saveUserSession(newSession);
   };
 
-  const handleLogout = async () => {
-    sessionStorage.removeItem('active_session_pin');
-    sessionStorage.removeItem('active_rep_id');
-    sessionStorage.removeItem('active_rep_name');
+  const handleLogout = (customNotice?: string) => {
+    clearUserSession();
+    setSession(null);
     setRoleState(null);
-    setUser(null);
-    setIsAuthenticated(false);
-    setPinNotice('');
-    setTimeout(async () => {
-      await signOut(auth);
-    }, 500);
+    if (customNotice) {
+      setNotice(customNotice);
+    }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
 
-  if (!isAuthenticated) {
-    return <Login onSuccess={() => {}} />;
-  }
-
-  if (!role) {
+  if (!role || !session) {
     return (
-      <PinEntry 
-        onSuccess={handlePinSuccess} 
-        onLogout={handleLogout} 
-        initialNotice={pinNotice}
-        onClearNotice={() => setPinNotice('')}
-      />
+      <div>
+        {notice && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-md w-[90%] bg-amber-500 text-white px-4 py-3 rounded-2xl shadow-xl font-bold text-xs text-center animate-bounce">
+            {notice}
+          </div>
+        )}
+        <Login onSuccess={handleLoginSuccess} />
+      </div>
     );
   }
 
-  return <Dashboard role={role} onLogout={handleLogout} />;
+  return <Dashboard role={role} onLogout={() => handleLogout()} />;
 }
-
-
