@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, where } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, where, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
-import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard } from 'lucide-react';
+import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard, Edit2, X } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
 import { printStatementPopup } from '../../lib/statementPrinter';
+import { getCompanySettings } from '../../lib/companySettings';
 
 export default function LedgerView() {
   const [activeTab, setActiveTab] = useState<'current' | 'archive'>('current');
@@ -20,6 +21,11 @@ export default function LedgerView() {
   const [orders, setOrders] = useState<any[]>([]);
   const [cashvanSales, setCashvanSales] = useState<any[]>([]);
   const [deletingDeal, setDeletingDeal] = useState<any | null>(null);
+  const [editingDeal, setEditingDeal] = useState<any | null>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editEntityName, setEditEntityName] = useState('');
+  const [editInvoiceNo, setEditInvoiceNo] = useState('');
+  const [editDescription, setEditDescription] = useState('');
   
   const [loading, setLoading] = useState(true);
   
@@ -145,6 +151,8 @@ export default function LedgerView() {
     fTrans.forEach(t => {
       list.push({
         id: t.id,
+        sourceCollection: 'transactions',
+        rawItem: t,
         type: t.type === 'company_paid_debt' ? 'پاردانەوەی کۆمپانیا' : (t.type === 'company_cash' || t.type === 'company_debt' ? 'وەرگرتنی کاڵا' : (t.type === 'income' ? 'داهاتی دەستی' : (t.type === 'expense' ? 'خەرجی دەستی' : 'پاردانەوە/قەرز'))),
         entityType: ['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'company' : 'market',
         entityName: t.relatedEntityId || t.description,
@@ -161,6 +169,8 @@ export default function LedgerView() {
       const inv = o.invoiceId || o.invoiceNo;
       list.push({
         id: o.id,
+        sourceCollection: 'orders',
+        rawItem: o,
         type: 'فرۆشتنی مەندووب',
         entityType: 'market',
         entityName: o.marketName,
@@ -177,6 +187,8 @@ export default function LedgerView() {
       const inv = c.invoiceNo || c.invoiceId;
       list.push({
         id: c.id,
+        sourceCollection: 'cashvan_sales',
+        rawItem: c,
         type: 'فرۆشتنی کاشڤان',
         entityType: 'market',
         entityName: c.marketName,
@@ -246,20 +258,107 @@ export default function LedgerView() {
     printStatementPopup(entityName, allTrans);
   };
 
+  const handleStartEditDeal = (deal: any) => {
+    setEditingDeal(deal);
+    setEditAmount((deal.amount || 0).toString());
+    setEditEntityName(deal.entityName || '');
+    setEditInvoiceNo(deal.invoiceNo || '');
+    setEditDescription(deal.rawItem?.description || deal.rawItem?.notes || '');
+  };
+
+  const handleSaveEditDeal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDeal) return;
+    try {
+      const numAmount = Number(editAmount) || 0;
+      const { id, sourceCollection, invoiceNo } = editingDeal;
+
+      if (sourceCollection === 'orders') {
+        await updateDoc(doc(db, 'orders', id), {
+          totalAmount: numAmount,
+          marketName: editEntityName,
+          invoiceNo: editInvoiceNo,
+          invoiceId: editInvoiceNo,
+          notes: editDescription
+        });
+        if (invoiceNo) {
+          const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', invoiceNo));
+          const snapTr = await getDocs(qTr);
+          for (const d of snapTr.docs) {
+            await updateDoc(doc(db, 'transactions', d.id), {
+              amount: numAmount,
+              relatedEntityId: editEntityName,
+              invoiceNo: editInvoiceNo
+            });
+          }
+        }
+      } else if (sourceCollection === 'cashvan_sales') {
+        await updateDoc(doc(db, 'cashvan_sales', id), {
+          totalAmount: numAmount,
+          marketName: editEntityName,
+          invoiceNo: editInvoiceNo,
+          invoiceId: editInvoiceNo,
+          notes: editDescription
+        });
+        if (invoiceNo) {
+          const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', invoiceNo));
+          const snapTr = await getDocs(qTr);
+          for (const d of snapTr.docs) {
+            await updateDoc(doc(db, 'transactions', d.id), {
+              amount: numAmount,
+              relatedEntityId: editEntityName,
+              invoiceNo: editInvoiceNo
+            });
+          }
+        }
+      } else {
+        await updateDoc(doc(db, 'transactions', id), {
+          amount: numAmount,
+          relatedEntityId: editEntityName,
+          invoiceNo: editInvoiceNo,
+          description: editDescription
+        });
+      }
+
+      setEditingDeal(null);
+      alert('مامەڵەکە بە سەرکەوتوویی نوێکرایەوە');
+    } catch (err: any) {
+      console.error(err);
+      alert('هەڵەیەک ڕوویدا لە کاتی پاشەکەوتکردنی دەستکاری: ' + err.message);
+    }
+  };
+
   const confirmDeleteDeal = async () => {
     if (!deletingDeal) return;
     try {
-      if (deletingDeal.invoiceNumber?.startsWith('COMP-') || deletingDeal.invoiceNumber?.startsWith('TRN-')) {
-        await deleteDoc(doc(db, 'transactions', deletingDeal.id));
-      } else if (deletingDeal.invoiceNumber?.startsWith('ORD-')) {
-        await deleteDoc(doc(db, 'orders', deletingDeal.id));
-      } else if (deletingDeal.invoiceNumber?.startsWith('CASH-')) {
-        await deleteDoc(doc(db, 'cashvan_sales', deletingDeal.id));
+      const { id, sourceCollection, invoiceNo } = deletingDeal;
+
+      if (sourceCollection === 'orders') {
+        await deleteDoc(doc(db, 'orders', id));
+        if (invoiceNo) {
+          const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', invoiceNo));
+          const snapTr = await getDocs(qTr);
+          for (const d of snapTr.docs) {
+            await deleteDoc(doc(db, 'transactions', d.id));
+          }
+        }
+      } else if (sourceCollection === 'cashvan_sales') {
+        await deleteDoc(doc(db, 'cashvan_sales', id));
+        if (invoiceNo) {
+          const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', invoiceNo));
+          const snapTr = await getDocs(qTr);
+          for (const d of snapTr.docs) {
+            await deleteDoc(doc(db, 'transactions', d.id));
+          }
+        }
+      } else {
+        await deleteDoc(doc(db, 'transactions', id));
       }
       setDeletingDeal(null);
-    } catch (error) {
-      console.error(error);
-      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی مامەڵە');
+      alert('مامەڵەکە بە سەرکەوتوویی سڕایەوە');
+    } catch (error: any) {
+      console.error('Delete error in ledger:', error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی مامەڵە: ' + error.message);
     }
   };
 
@@ -338,8 +437,10 @@ export default function LedgerView() {
         </head>
         <body>
           <div class="header">
-            <div class="title">کۆمپانیای RF</div>
-            <div class="subtitle">پسوڵەی دەفتەر حسابات</div>
+            <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px;">TAM TAM</h1>
+            <div class="title" style="margin-top: 4px;">${getCompanySettings().name}</div>
+            <div style="font-size: 12px; color: #475569; font-weight: bold; margin-top: 2px;">ژمارەی کۆمپانیا: ${getCompanySettings().phone}</div>
+            <div class="subtitle" style="margin-top: 6px;">پسوڵەی دەفتەر حسابات</div>
           </div>
           
           <div class="details">
@@ -725,6 +826,13 @@ export default function LedgerView() {
                               <FileText size={16} />
                             </button>
                             <button
+                              onClick={() => handleStartEditDeal(d)}
+                              className="text-amber-600 hover:bg-amber-50 p-1.5 rounded transition"
+                              title="دەستکاریکردنی مامەڵە"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button
                               onClick={() => setDeletingDeal(d)}
                               className="text-red-600 hover:bg-red-50 p-1.5 rounded transition"
                               title="سڕینەوە"
@@ -748,6 +856,98 @@ export default function LedgerView() {
           )}
         </section>
       </div>
+
+      {/* Edit Deal Modal */}
+      {editingDeal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-gradient-to-r from-amber-600 to-amber-700 px-6 py-4 flex items-center justify-between text-white">
+              <div className="flex items-center gap-2">
+                <Edit2 size={20} />
+                <h3 className="font-bold text-lg">دەستکاریکردنی مامەڵە</h3>
+              </div>
+              <button
+                onClick={() => setEditingDeal(null)}
+                className="text-white/80 hover:text-white transition p-1 hover:bg-white/10 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditDeal} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">
+                  ناوی لایەن / مارکێت / کۆمپانیا
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editEntityName}
+                  onChange={(e) => setEditEntityName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">
+                  ژمارەی وەسڵ (فاتورە)
+                </label>
+                <input
+                  type="text"
+                  value={editInvoiceNo}
+                  onChange={(e) => setEditInvoiceNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">
+                  بڕی پارە (د.ع)
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="0"
+                  step="any"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm font-bold font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">
+                  تێبینی / ڕوونکردنەوە
+                </label>
+                <textarea
+                  rows={2}
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-md shadow-amber-600/20 transition active:scale-[0.98]"
+                >
+                  پاشەکەوتکردنی گۆڕانکاری
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingDeal(null)}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       <ConfirmModal

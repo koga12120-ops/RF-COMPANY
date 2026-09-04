@@ -189,6 +189,7 @@ export interface CashvanSale {
   invoiceId?: string;
   paymentType?: 'cash' | 'debt';
   cashvanName: string;
+  cashvanPhone?: string;
   marketName: string;
   items: {
     itemId: string;

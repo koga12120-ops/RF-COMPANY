@@ -8,9 +8,10 @@ import { format, startOfDay, endOfDay, subDays, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
 import MarketDailyScheduleCard from '../common/MarketDailyScheduleCard';
-import { printDailyRepReceiptPopup, generateStatementHtml } from '../../lib/statementPrinter';
+import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPopup } from '../../lib/statementPrinter';
 import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
 import { getStoredSession } from '../../lib/authService';
+import { getCompanySettings } from '../../lib/companySettings';
 
 interface ActivityItem {
   id: string;
@@ -48,6 +49,16 @@ export default function OrdersView({
   const [loading, setLoading] = useState(true);
   const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
   const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
+  const [editingSale, setEditingSale] = useState<CashvanSale | null>(null);
+  const [editSaleMarketName, setEditSaleMarketName] = useState('');
+  const [editSaleAmount, setEditSaleAmount] = useState('');
+  const [editSalePaymentType, setEditSalePaymentType] = useState<'cash' | 'debt'>('cash');
+  const [editSaleInvoiceNo, setEditSaleInvoiceNo] = useState('');
+
+  const [deletingDebtColl, setDeletingDebtColl] = useState<Transaction | null>(null);
+  const [editingDebtColl, setEditingDebtColl] = useState<Transaction | null>(null);
+  const [editDebtCollAmount, setEditDebtCollAmount] = useState('');
+  const [editDebtCollNotes, setEditDebtCollNotes] = useState('');
 
   // Active user / rep name
   const [repName, setRepName] = useState(() => {
@@ -827,6 +838,112 @@ export default function OrdersView({
     }
   };
 
+  // --- CASHVAN SALE EDIT & DELETE HANDLERS ---
+  const handleConfirmDeleteSale = async () => {
+    if (!deletingSale) return;
+    try {
+      await updateDoc(doc(db, 'cashvan_sales', deletingSale.id), {
+        status: 'deleted',
+        deletedAt: Date.now(),
+        deletedBy: repName || 'کاشڤان'
+      });
+      const inv = deletingSale.invoiceNo || deletingSale.invoiceId;
+      if (inv) {
+        const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', inv));
+        const snapTr = await getDocs(qTr);
+        for (const d of snapTr.docs) {
+          await deleteDoc(doc(db, 'transactions', d.id));
+        }
+      }
+      setDeletingSale(null);
+      alert('فرۆشتنی کاشڤان بە سەرکەوتوویی سڕایەوە');
+    } catch (e: any) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە: ' + e.message);
+    }
+  };
+
+  const handleStartEditSale = (sale: CashvanSale) => {
+    setEditingSale(sale);
+    setEditSaleMarketName(sale.marketName || '');
+    setEditSaleAmount((sale.totalAmount || 0).toString());
+    setEditSalePaymentType((sale.paymentType as 'cash' | 'debt') || 'cash');
+    setEditSaleInvoiceNo(sale.invoiceNo || sale.invoiceId || '');
+  };
+
+  const handleSaveEditSale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSale) return;
+    try {
+      const numAmount = Number(editSaleAmount) || 0;
+      await updateDoc(doc(db, 'cashvan_sales', editingSale.id), {
+        marketName: editSaleMarketName,
+        totalAmount: numAmount,
+        paymentType: editSalePaymentType,
+        invoiceNo: editSaleInvoiceNo,
+        invoiceId: editSaleInvoiceNo,
+        lastEditedAt: Date.now(),
+        lastEditedBy: repName || 'کاشڤان'
+      });
+
+      const inv = editingSale.invoiceNo || editingSale.invoiceId;
+      if (inv) {
+        const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', inv));
+        const snapTr = await getDocs(qTr);
+        for (const d of snapTr.docs) {
+          await updateDoc(doc(db, 'transactions', d.id), {
+            amount: numAmount,
+            relatedEntityId: editSaleMarketName,
+            type: editSalePaymentType === 'cash' ? 'cash' : 'debt',
+            invoiceNo: editSaleInvoiceNo
+          });
+        }
+      }
+
+      setEditingSale(null);
+      alert('گۆڕانکارییەکانی فرۆشتنی کاشڤان بە سەرکەوتوویی پاشەکەوت کران');
+    } catch (e: any) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا لە دەستکاری: ' + e.message);
+    }
+  };
+
+  // --- DEBT COLLECTION EDIT & DELETE HANDLERS ---
+  const handleStartEditDebtColl = (tr: Transaction) => {
+    setEditingDebtColl(tr);
+    setEditDebtCollAmount((tr.amount || 0).toString());
+    setEditDebtCollNotes(tr.description || '');
+  };
+
+  const handleSaveEditDebtColl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDebtColl) return;
+    try {
+      await updateDoc(doc(db, 'transactions', editingDebtColl.id), {
+        amount: Number(editDebtCollAmount) || 0,
+        description: editDebtCollNotes,
+        lastEditedAt: Date.now()
+      });
+      setEditingDebtColl(null);
+      alert('گۆڕانکارییەکانی واسڵکردن بە سەرکەوتوویی پاشەکەوت کران');
+    } catch (e: any) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا: ' + e.message);
+    }
+  };
+
+  const handleConfirmDeleteDebtColl = async () => {
+    if (!deletingDebtColl) return;
+    try {
+      await deleteDoc(doc(db, 'transactions', deletingDebtColl.id));
+      setDeletingDebtColl(null);
+      alert('واسڵکردنەکە بە سەرکەوتوویی سڕایەوە');
+    } catch (e: any) {
+      console.error(e);
+      alert('هەڵەیەک ڕوویدا: ' + e.message);
+    }
+  };
+
   // --- CASHVAN SALE HANDLERS ---
   const addToVanCart = (item: any, initialQty: number = 1) => {
     setVanCart(prev => {
@@ -955,10 +1072,14 @@ export default function OrdersView({
         }
       });
 
+      const repObj = reps.find(r => r.name === (repName || 'کاشڤان'));
+      const cashvanPhone = repObj?.phone || (getStoredSession() as any)?.phone || '';
+
       const saleData: Omit<CashvanSale, 'id'> = {
         invoiceNo: nextInvoiceNo,
         invoiceId: nextInvoiceNo,
         cashvanName: repName || 'کاشڤان',
+        cashvanPhone,
         marketName: vanMarketName,
         items: saleItems,
         totalAmount,
@@ -1008,9 +1129,15 @@ export default function OrdersView({
   };
 
   // --- PRINTING UTILITIES ---
-  const printCashvanReceipt = async (sale: any, invoiceId: string) => {
-    const printWindow = window.open('', '', 'width=380,height=600');
+  const printCashvanReceipt = async (sale: any, invoiceIdParam?: string) => {
+    const printWindow = window.open('', '', 'width=420,height=750');
     if (!printWindow) return;
+
+    const companySettings = getCompanySettings();
+    const invoiceId = invoiceIdParam || sale.invoiceNo || sale.invoiceId || sale.id?.slice(-6) || '---';
+
+    const repObj = reps.find(r => r.name === sale.cashvanName || r.name === repName);
+    const cashvanPhone = sale.cashvanPhone || repObj?.phone || (getStoredSession() as any)?.phone || '0750 000 0000';
 
     let oldDebt = 0;
     try {
@@ -1034,18 +1161,19 @@ export default function OrdersView({
       console.error(e);
     }
 
-    const itemsHtml = (sale.items || []).map((item: any) => {
+    const itemsHtml = (sale.items || []).map((item: any, idx: number) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
       const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
       const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
       const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
         <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
+          <td style="text-align: center; color: #64748b; font-size: 11px;">${idx + 1}</td>
           <td style="text-align: right; font-weight: bold;">
             ${cleanName}
             ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 10px; font-weight: 900; padding: 1px 4px; border-radius: 4px; margin-right: 4px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
           </td>
-          <td style="text-align: center;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center; font-weight: bold;">${item.quantity} ${unitLabel}</td>
           <td style="text-align: center;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}</td>
           <td style="text-align: left; font-weight: bold;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}</td>
         </tr>
@@ -1057,56 +1185,244 @@ export default function OrdersView({
       <html dir="rtl">
         <head>
           <meta charset="utf-8">
-          <title>پسوڵەی فرۆشتن #${invoiceId}</title>
+          <title>فاتورەی فرۆشتن #${invoiceId}</title>
           <style>
-            @media print { @page { margin: 4mm; } body { margin: 0; font-family: monospace; font-size: 12px; } }
-            body { font-family: monospace; font-size: 12px; direction: rtl; text-align: right; padding: 10px; color: #000; }
-            .center { text-align: center; }
-            .bold { font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
-            th, td { padding: 4px 2px; border-bottom: 1px dashed #999; }
-            .summary { margin-top: 10px; border-top: 2px solid #000; padding-top: 6px; }
+            @media print { 
+              @page { margin: 5mm; } 
+              body { margin: 0; font-family: system-ui, -apple-system, sans-serif; font-size: 12px; } 
+            }
+            body { 
+              font-family: system-ui, -apple-system, sans-serif; 
+              font-size: 12px; 
+              direction: rtl; 
+              text-align: right; 
+              padding: 14px; 
+              color: #0f172a; 
+              line-height: 1.4;
+            }
+            .brand-header {
+              text-align: center;
+              border-bottom: 2px solid #0f172a;
+              padding-bottom: 8px;
+              margin-bottom: 10px;
+            }
+            .brand-title {
+              font-size: 26px;
+              font-weight: 900;
+              letter-spacing: 2px;
+              margin: 0;
+              color: #0f172a;
+            }
+            .company-sub {
+              font-size: 15px;
+              font-weight: 700;
+              color: #334155;
+              margin: 3px 0 0 0;
+            }
+            .company-phone {
+              font-size: 12px;
+              font-weight: 700;
+              color: #0284c7;
+              margin-top: 3px;
+            }
+            .invoice-badge-box {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              background: #f1f5f9;
+              border: 1px solid #cbd5e1;
+              border-radius: 8px;
+              padding: 6px 12px;
+              margin-bottom: 10px;
+            }
+            .invoice-badge-box .title {
+              font-weight: 800;
+              font-size: 13px;
+              color: #0f172a;
+            }
+            .invoice-badge-box .num {
+              font-family: monospace;
+              font-size: 15px;
+              font-weight: 900;
+              color: #0369a1;
+              background: #e0f2fe;
+              padding: 2px 8px;
+              border-radius: 6px;
+              border: 1px solid #7dd3fc;
+            }
+            .info-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 6px 12px;
+              background: #f8fafc;
+              border: 1px solid #e2e8f0;
+              border-radius: 8px;
+              padding: 10px 12px;
+              font-size: 12px;
+              margin-bottom: 10px;
+            }
+            .info-item {
+              display: flex;
+              justify-content: space-between;
+            }
+            .info-item .label {
+              color: #64748b;
+              font-weight: 600;
+            }
+            .info-item .val {
+              font-weight: 800;
+              color: #0f172a;
+            }
+            table { 
+              width: 100%; 
+              border-collapse: collapse; 
+              margin-top: 8px; 
+              font-size: 11px; 
+            }
+            th { 
+              background: #f1f5f9; 
+              color: #334155; 
+              padding: 7px 5px; 
+              border-top: 1px solid #0f172a; 
+              border-bottom: 1px solid #0f172a; 
+              font-weight: 800; 
+            }
+            td { 
+              padding: 6px 5px; 
+              border-bottom: 1px dashed #cbd5e1; 
+            }
+            .summary { 
+              margin-top: 12px; 
+              border-top: 2px solid #0f172a; 
+              padding-top: 8px; 
+            }
+            .summary-row {
+              display: flex;
+              justify-content: space-between;
+              font-size: 12px;
+              margin-bottom: 4px;
+            }
+            .summary-row.main {
+              font-size: 15px;
+              font-weight: 900;
+              color: #0f172a;
+              background: #f8fafc;
+              padding: 5px 8px;
+              border-radius: 6px;
+            }
+            .summary-row.total-debt {
+              font-size: 14px;
+              font-weight: 900;
+              color: #b91c1c;
+              border-top: 1px dashed #64748b;
+              padding-top: 6px;
+              margin-top: 6px;
+            }
+            .signatures {
+              display: flex;
+              justify-content: space-between;
+              margin-top: 30px;
+              padding-top: 10px;
+              font-size: 11px;
+              text-align: center;
+            }
+            .sig-line {
+              margin-top: 25px;
+              border-top: 1px dashed #94a3b8;
+              width: 120px;
+            }
+            .footer-note {
+              text-align: center;
+              margin-top: 18px;
+              font-size: 11px;
+              color: #64748b;
+            }
           </style>
         </head>
         <body>
-          <div class="center">
-            <h2 style="margin: 0; font-size: 16px;">پسوڵەی فرۆشتنی کاشڤان</h2>
-            <div style="font-size: 11px; margin-top: 2px;">کاشڤان: ${sale.cashvanName}</div>
+          <div class="brand-header">
+            <h1 class="brand-title">TAM TAM</h1>
+            <div class="company-sub">${companySettings.name}</div>
+            <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
           </div>
-          <hr style="border-top: 1px dashed #000; margin: 8px 0;" />
-          <div><strong>مارکێت:</strong> ${sale.marketName}</div>
-          <div><strong>شێوازی پارەدان:</strong> ${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}</div>
-          <div><strong>بەروار:</strong> <span dir="ltr">${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}</span></div>
+
+          <div class="invoice-badge-box">
+            <span class="title">پسوڵەی فرۆشتنی کاشڤان (فاتورە)</span>
+            <span class="num" dir="ltr">#${invoiceId}</span>
+          </div>
+
+          <div class="info-grid">
+            <div class="info-item" style="grid-column: span 2;">
+              <span class="label">کڕیار / مارکێت / کۆگا:</span>
+              <span class="val" style="font-size: 13px; color: #1e3a8a;">${sale.marketName}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">ناوی کاشڤان:</span>
+              <span class="val">${sale.cashvanName}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">ژمارەی کاشڤان:</span>
+              <span class="val" dir="ltr">${cashvanPhone}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">شێوازی پارەدان:</span>
+              <span class="val" style="color: ${sale.paymentType === 'cash' ? '#166534' : '#b45309'}; font-weight: 900;">
+                ${sale.paymentType === 'cash' ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
+              </span>
+            </div>
+            <div class="info-item">
+              <span class="label">بەروار:</span>
+              <span class="val" dir="ltr">${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}</span>
+            </div>
+          </div>
+
           <table>
             <thead>
               <tr>
-                <th style="text-align: right;">کاڵا</th>
+                <th style="width: 25px; text-align: center;">#</th>
+                <th style="text-align: right;">ناوی کاڵا</th>
                 <th style="text-align: center;">بڕ</th>
-                <th style="text-align: center;">نرخ</th>
-                <th style="text-align: left;">کۆ</th>
+                <th style="text-align: center;">نرخی تاک</th>
+                <th style="text-align: left;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
               ${itemsHtml}
             </tbody>
           </table>
+
           <div class="summary">
-            <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight: bold;">
-              <span>کۆی ئەم پسوڵەیە:</span>
+            <div class="summary-row main">
+              <span>کۆی ئەم وەسڵە:</span>
               <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
             </div>
             ${sale.paymentType === 'debt' ? `
-              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px;">
-                <span>قەرزی پێشوو:</span>
+              <div class="summary-row" style="margin-top: 4px;">
+                <span>قەرزی پێشووی مارکێت:</span>
                 <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
               </div>
-              <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; margin-top: 4px; border-top: 1px dashed #000; padding-top: 4px;">
-                <span>کۆی گشتی قەرز:</span>
+              <div class="summary-row total-debt">
+                <span>کۆی گشتی ماوە (قەرز):</span>
                 <span dir="ltr">${(oldDebt + (sale.totalAmount || 0)).toLocaleString()} د.ع</span>
               </div>
             ` : ''}
           </div>
-          <div class="center" style="margin-top: 15px; font-size: 10px;">سوپاس بۆ سەردانەکەت</div>
+
+          <div class="signatures">
+            <div>
+              <div>واژووی کاشڤان</div>
+              <div class="sig-line"></div>
+            </div>
+            <div>
+              <div>واژووی کڕیار (مارکێت/کۆگا)</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+
+          <div class="footer-note">
+            سوپاس بۆ مامەڵەکردنتان لەگەڵ TAM TAM
+          </div>
+
           <script>
             window.onload = function() { window.print(); window.close(); }
           </script>
@@ -1117,10 +1433,16 @@ export default function OrdersView({
     printWindow.document.close();
   };
 
-  const printOrderReceipt = async (order: Order, invoiceId: string) => {
-    const printWindow = window.open('', '_blank');
+  const printOrderReceipt = async (order: Order, invoiceIdParam?: string) => {
+    const printWindow = window.open('', '_blank', 'width=420,height=750');
     if (!printWindow) return;
-    
+
+    const companySettings = getCompanySettings();
+    const invoiceId = invoiceIdParam || order.invoiceId || order.invoiceNo || order.id.slice(-6);
+
+    const repObj = reps.find(r => r.name === order.repName || r.name === repName);
+    const repPhone = (order as any).repPhone || repObj?.phone || (getStoredSession() as any)?.phone || '-';
+
     let oldDebt = 0;
     try {
       const q = query(
@@ -1173,43 +1495,128 @@ export default function OrdersView({
           <meta charset="utf-8">
           <title>وەسڵی داواکاری #${invoiceId}</title>
           <style>
-            body { font-family: system-ui, sans-serif; direction: rtl; text-align: right; padding: 20px; color: #1e293b; }
-            .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 15px; margin-bottom: 20px; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-            th { background: #f8fafc; padding: 8px; border: 1px solid #cbd5e1; text-align: right; font-size: 13px; }
-            td { padding: 8px; border: 1px solid #e2e8f0; font-size: 13px; }
-            .total-box { text-align: left; font-size: 16px; font-weight: bold; margin-top: 15px; background: #f1f5f9; padding: 12px; border-radius: 8px; }
+            body { font-family: system-ui, sans-serif; direction: rtl; text-align: right; padding: 16px; color: #1e293b; }
+            .brand-header {
+              text-align: center;
+              border-bottom: 2px solid #0f172a;
+              padding-bottom: 8px;
+              margin-bottom: 12px;
+            }
+            .brand-title {
+              font-size: 26px;
+              font-weight: 900;
+              letter-spacing: 2px;
+              margin: 0;
+              color: #0f172a;
+            }
+            .company-sub {
+              font-size: 15px;
+              font-weight: 700;
+              color: #334155;
+              margin: 2px 0 0 0;
+            }
+            .company-phone {
+              font-size: 12px;
+              font-weight: 700;
+              color: #0284c7;
+              margin-top: 3px;
+            }
+            .invoice-badge-box {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              background: #f1f5f9;
+              border: 1px solid #cbd5e1;
+              border-radius: 8px;
+              padding: 6px 12px;
+              margin-bottom: 12px;
+            }
+            .info-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 6px 12px;
+              background: #f8fafc;
+              border: 1px solid #e2e8f0;
+              border-radius: 8px;
+              padding: 10px 12px;
+              font-size: 12px;
+              margin-bottom: 12px;
+            }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+            th { background: #f8fafc; padding: 8px; border: 1px solid #cbd5e1; text-align: right; font-size: 12px; font-weight: 800; }
+            td { padding: 7px 8px; border: 1px solid #e2e8f0; font-size: 12px; }
+            .total-box { font-size: 15px; font-weight: bold; margin-top: 15px; background: #f1f5f9; padding: 12px; border-radius: 8px; display: flex; justify-content: space-between; }
+            .signatures { display: flex; justify-content: space-between; margin-top: 30px; font-size: 11px; text-align: center; }
+            .sig-line { margin-top: 25px; border-top: 1px dashed #94a3b8; width: 120px; }
             @media print { body { padding: 0; } }
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1 style="margin: 0; font-size: 20px;">وەسڵی داواکاری (تەڵەبیە)</h1>
-            <div style="font-size: 12px; color: #64748b; margin-top: 5px;">ژمارەی وەسڵ: #${invoiceId} | مەندووب: ${order.repName}</div>
+          <div class="brand-header">
+            <h1 class="brand-title">TAM TAM</h1>
+            <div class="company-sub">${companySettings.name}</div>
+            <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
           </div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 13px;">
-            <div><strong>مارکێت:</strong> ${order.marketName}</div>
-            <div><strong>شێوازی پارەدان:</strong> ${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}</div>
-            <div><strong>بەروار:</strong> <span dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span></div>
+
+          <div class="invoice-badge-box">
+            <span style="font-weight: 800; font-size: 13px;">وەسڵی داواکاری (تەڵەبیەی مەندووب)</span>
+            <span style="font-family: monospace; font-size: 15px; font-weight: 900; color: #4338ca; background: #e0e7ff; padding: 2px 8px; border-radius: 6px; border: 1px solid #a5b4fc;" dir="ltr">#${invoiceId}</span>
           </div>
+
+          <div class="info-grid">
+            <div style="grid-column: span 2; display: flex; justify-content: space-between;">
+              <span style="color: #64748b; font-weight: 600;">کڕیار / مارکێت:</span>
+              <strong style="font-size: 13px; color: #1e3a8a;">${order.marketName}</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: #64748b; font-weight: 600;">ناوی مەندووب:</span>
+              <strong>${order.repName}</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: #64748b; font-weight: 600;">ژمارەی مەندووب:</span>
+              <strong dir="ltr">${repPhone}</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: #64748b; font-weight: 600;">شێوازی پارەدان:</span>
+              <strong style="color: ${order.paymentStatus === 'cash' ? '#166534' : '#b45309'};">${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: #64748b; font-weight: 600;">بەروار:</span>
+              <span dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span>
+            </div>
+          </div>
+
           <table>
             <thead>
               <tr>
-                <th style="width: 40px; text-align: center;">#</th>
+                <th style="width: 35px; text-align: center;">#</th>
                 <th>ناوی کاڵا</th>
-                <th style="width: 100px; text-align: center;">بڕ</th>
-                <th style="width: 120px; text-align: left;">نرخی تاک</th>
-                <th style="width: 140px; text-align: left;">کۆی گشتی</th>
+                <th style="width: 90px; text-align: center;">بڕ</th>
+                <th style="width: 110px; text-align: left;">نرخی تاک</th>
+                <th style="width: 130px; text-align: left;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
               ${itemsHtml}
             </tbody>
           </table>
+
           <div class="total-box">
             <span>کۆی گشتی: </span>
             <span dir="ltr" style="color: #4f46e5;">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
           </div>
+
+          <div class="signatures">
+            <div>
+              <div>واژووی مەندووب</div>
+              <div class="sig-line"></div>
+            </div>
+            <div>
+              <div>واژووی کڕیار (مارکێت/کۆگا)</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+
           <script>
             window.onload = function() { window.print(); }
           </script>
@@ -2593,14 +3000,72 @@ export default function OrdersView({
                       )}
 
                       {isSale && act.rawSale && (
-                        <button
-                          type="button"
-                          onClick={() => printCashvanReceipt(act.rawSale!, act.rawSale!.invoiceNo || act.rawSale!.id.slice(-6))}
-                          className="p-1.5 bg-amber-50 text-amber-800 hover:bg-amber-100 rounded-lg transition"
-                          title="چاپکردنی وەسڵ"
-                        >
-                          <Printer size={15} />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => printCashvanReceipt(act.rawSale!, act.rawSale!.invoiceNo || act.rawSale!.id.slice(-6))}
+                            className="p-1.5 bg-amber-50 text-amber-800 hover:bg-amber-100 rounded-lg transition"
+                            title="چاپکردنی وەسڵ"
+                          >
+                            <Printer size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditSale(act.rawSale!)}
+                            className="p-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg transition"
+                            title="دەستکاریکردنی فرۆشتنی کاشڤان"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingSale(act.rawSale!)}
+                            className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition"
+                            title="سڕینەوەی فرۆشتن"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </>
+                      )}
+
+                      {isDebtPay && act.rawTransaction && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              printPaymentReceiptPopup({
+                                entityName: act.rawTransaction!.relatedEntityId || act.marketName,
+                                originalDebtAmount: act.amount || 0,
+                                paidAmount: act.amount || 0,
+                                remainingDebtAmount: 0,
+                                date: act.rawTransaction!.date || Date.now(),
+                                invoiceNo: act.rawTransaction!.invoiceNo,
+                                roleTitle: 'مارکێت',
+                                description: act.rawTransaction!.description
+                              });
+                            }}
+                            className="p-1.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 rounded-lg transition"
+                            title="چاپکردنی پسوڵەی واسڵکردن"
+                          >
+                            <Printer size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditDebtColl(act.rawTransaction!)}
+                            className="p-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg transition"
+                            title="دەستکاریکردنی واسڵکردن"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingDebtColl(act.rawTransaction!)}
+                            className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition"
+                            title="سڕینەوەی واسڵکردن"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -2920,6 +3385,209 @@ export default function OrdersView({
           { label: 'کۆی گشتی', value: `${(deletingOrder.totalAmount || 0).toLocaleString()} د.ع` }
         ] : []}
       />
+
+      {/* Delete Sale Confirm Modal */}
+      <ConfirmModal
+        isOpen={!!deletingSale}
+        onClose={() => setDeletingSale(null)}
+        onConfirm={handleConfirmDeleteSale}
+        title="سڕینەوەی فرۆشتنی کاشڤان"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم فرۆشتنەی کاشڤان لە سیستەمدا؟"
+        details={deletingSale ? [
+          { label: 'ژمارەی وەسڵ', value: deletingSale.invoiceNo || deletingSale.invoiceId || '-' },
+          { label: 'مارکێت', value: deletingSale.marketName || '-' },
+          { label: 'کۆی گشتی', value: `${(deletingSale.totalAmount || 0).toLocaleString()} د.ع` },
+          { label: 'شێوازی پارەدان', value: deletingSale.paymentType === 'cash' ? 'نەقد' : 'قەرز' }
+        ] : []}
+      />
+
+      {/* Edit Sale Modal */}
+      {editingSale && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-gradient-to-r from-amber-600 to-amber-700 px-6 py-4 flex items-center justify-between text-white">
+              <div className="flex items-center gap-2">
+                <Edit2 size={20} />
+                <h3 className="font-bold text-lg">دەستکاریکردنی فرۆشتنی کاشڤان</h3>
+              </div>
+              <button
+                onClick={() => setEditingSale(null)}
+                className="text-white/80 hover:text-white transition p-1 hover:bg-white/10 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditSale} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">ناوی مارکێت</label>
+                <input
+                  type="text"
+                  required
+                  value={editSaleMarketName}
+                  onChange={(e) => setEditSaleMarketName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">ژمارەی وەسڵ (فاتورە)</label>
+                <input
+                  type="text"
+                  value={editSaleInvoiceNo}
+                  onChange={(e) => setEditSaleInvoiceNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">بڕی کۆی گشتی (د.ع)</label>
+                <input
+                  type="number"
+                  required
+                  min="0"
+                  step="any"
+                  value={editSaleAmount}
+                  onChange={(e) => setEditSaleAmount(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none text-sm font-bold font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">شێوازی پارەدان</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditSalePaymentType('cash')}
+                    className={`py-2 rounded-xl text-xs font-bold border transition ${
+                      editSalePaymentType === 'cash'
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    نەقد (کاش) 💵
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditSalePaymentType('debt')}
+                    className={`py-2 rounded-xl text-xs font-bold border transition ${
+                      editSalePaymentType === 'debt'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    قەرز 💳
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-md shadow-amber-600/20 transition active:scale-[0.98]"
+                >
+                  پاشەکەوتکردن
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingSale(null)}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Debt Collection Confirm Modal */}
+      <ConfirmModal
+        isOpen={!!deletingDebtColl}
+        onClose={() => setDeletingDebtColl(null)}
+        onConfirm={handleConfirmDeleteDebtColl}
+        title="سڕینەوەی واسڵکردنی قەرز"
+        message="ئایا دڵنیایت لە سڕینەوەی ئەم واسڵکردنە؟"
+        details={deletingDebtColl ? [
+          { label: 'مارکێت', value: deletingDebtColl.relatedEntityId || '-' },
+          { label: 'بڕی پارە', value: `${(deletingDebtColl.amount || 0).toLocaleString()} د.ع` },
+          { label: 'ژمارەی وەسڵ', value: deletingDebtColl.invoiceNo || '-' }
+        ] : []}
+      />
+
+      {/* Edit Debt Collection Modal */}
+      {editingDebtColl && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 px-6 py-4 flex items-center justify-between text-white">
+              <div className="flex items-center gap-2">
+                <Edit2 size={20} />
+                <h3 className="font-bold text-lg">دەستکاریکردنی واسڵکردنی پارە</h3>
+              </div>
+              <button
+                onClick={() => setEditingDebtColl(null)}
+                className="text-white/80 hover:text-white transition p-1 hover:bg-white/10 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditDebtColl} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">مارکێت / کڕیار</label>
+                <input
+                  type="text"
+                  disabled
+                  value={editingDebtColl.relatedEntityId || '-'}
+                  className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-500 cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">بڕی پارەی واسڵکراو (د.ع)</label>
+                <input
+                  type="number"
+                  required
+                  min="0"
+                  step="any"
+                  value={editDebtCollAmount}
+                  onChange={(e) => setEditDebtCollAmount(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none text-sm font-bold font-mono"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">تێبینی</label>
+                <textarea
+                  rows={2}
+                  value={editDebtCollNotes}
+                  onChange={(e) => setEditDebtCollNotes(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none text-sm"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 transition active:scale-[0.98]"
+                >
+                  پاشەکەوتکردنی گۆڕانکاری
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingDebtColl(null)}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  پاشگەزبوونەوە
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Simple Market Debt Payment Modal for Rep / Staff */}
       <SimpleMarketDebtPayModal

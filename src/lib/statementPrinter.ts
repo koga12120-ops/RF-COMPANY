@@ -1,5 +1,6 @@
 import { Transaction } from '../types';
 import { format } from 'date-fns';
+import { getCompanySettings } from './companySettings';
 
 export interface GroupedStatementRow {
   date: number;
@@ -128,8 +129,10 @@ export function generateStatementHtml(entityName: string, transactions: Transact
       </head>
       <body>
         <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>${headerSubtitle}</h3>
+          <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
+          <h2 style="margin: 3px 0; font-size: 16px; color: #334155;">${getCompanySettings().name}</h2>
+          <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
+          <h3 style="margin-top: 8px;">${headerSubtitle}</h3>
           <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
         </div>
         <table>
@@ -233,8 +236,10 @@ export function generatePaymentReceiptHtml(data: PaymentReceiptData): string {
       </head>
       <body>
         <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>پسوڵەی واسڵکردنی قەرز (پاردانەوە)</h3>
+          <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
+          <h2 style="margin: 3px 0; font-size: 16px; color: #334155;">${getCompanySettings().name}</h2>
+          <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
+          <h3 style="margin-top: 8px;">پسوڵەی واسڵکردنی قەرز (پاردانەوە)</h3>
           <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
         </div>
 
@@ -296,7 +301,7 @@ export function generatePaymentReceiptHtml(data: PaymentReceiptData): string {
             <div class="sig-line"></div>
           </div>
           <div class="sig-block">
-            <div>واژووی وەرگر (کۆمپانیای RF)</div>
+            <div>واژووی وەرگر (${getCompanySettings().name})</div>
             <div class="sig-line"></div>
           </div>
         </div>
@@ -431,8 +436,10 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
       </head>
       <body>
         <div class="header">
-          <h2>کۆمپانیای RF</h2>
-          <h3>وەسڵی ڕۆژانەی کار و حساباتی ${data.roleTitle}</h3>
+          <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
+          <h2 style="margin: 3px 0; font-size: 16px; color: #334155;">${getCompanySettings().name}</h2>
+          <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
+          <h3 style="margin-top: 8px;">وەسڵی ڕۆژانەی کار و حساباتی ${data.roleTitle}</h3>
           <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
         </div>
 
@@ -645,8 +652,10 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
       <body>
         <div class="receipt-box">
           <div class="header">
-            <h2>کۆمپانیای RF</h2>
-            <h3>وەسڵی وەرگرتنەوەی پارەی قەرز (پسوڵە)</h3>
+            <h1 style="margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
+            <h2 style="margin: 3px 0; font-size: 15px; color: #334155;">${getCompanySettings().name}</h2>
+            <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
+            <h3 style="margin-top: 6px;">وەسڵی وەرگرتنەوەی پارەی قەرز (پسوڵە)</h3>
             <p>بەروار: <span dir="ltr">${format(data.date, 'yyyy-MM-dd HH:mm')}</span></p>
           </div>
 
