@@ -161,7 +161,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
     { id: 'warehouse_orders', label: 'داواکارییەکان', icon: ClipboardList },
     { id: 'warehouse_create_order', label: 'تەڵەبییە (مەندووب)', icon: ShoppingCart },
-    { id: 'admin_schedule', label: 'خشتەی سەردانی مارکێت', icon: Calendar },
+    { id: 'markets_group', label: 'مارکێت و حیسابات', icon: Store },
   ];
 
   const repMenu = [

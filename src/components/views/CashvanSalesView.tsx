@@ -6,6 +6,7 @@ import { getStoredSession } from '../../lib/authService';
 import { CashvanRequisition, Item, CashvanReturn, CashvanReturnItem } from '../../types';
 import { Search, Plus, Send, Clock, CheckCircle2, Truck, ClipboardList, Package, Layers, RotateCcw, Printer, Edit2, Trash2, X, AlertTriangle, Check } from 'lucide-react';
 import { format } from 'date-fns';
+import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorder?: boolean }) {
   const [inventory, setInventory] = useState<any[]>([]);
@@ -367,11 +368,14 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1>کۆمپانیای RF</h1>
-            <h2>وەسڵی گەڕاندنەوەی کاڵا لە کاشڤانەوە بۆ کۆگای سەرەکی</h2>
-            <div style="font-size: 12px; color: #64748b;">پسوڵەی ڕادەستکردنەوەی کاڵای ماوەی ناو ڤان بە هەمان شێوازی وەرگیراو</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'وەسڵی گەڕاندنەوەی کاڵا لە کاشڤانەوە بۆ کۆگای سەرەکی',
+            subtitle: 'پسوڵەی ڕادەستکردنەوەی کاڵای ماوەی ناو ڤان بە هەمان شێوازی وەرگیراو',
+            repName: ret.cashvanName,
+            repPhone: (getStoredSession() as any)?.phone || '',
+            invoiceNo: ret.returnNo || ('RET-' + ret.id.slice(-6)),
+            date: ret.date
+          })}
 
           <div class="meta-grid">
             <div class="meta-item"><span>کاشڤان / ڕادەستکار:</span> <strong>${ret.cashvanName}</strong></div>

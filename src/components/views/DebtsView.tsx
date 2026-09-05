@@ -7,7 +7,7 @@ import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, end
 import { Plus, Check, Trash2, Printer, FileText, X, Calendar, Search, CreditCard, CheckCircle2, TrendingDown, Clock, ArrowDownLeft, DollarSign } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
 import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
-import { printStatementPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export interface ProcessedDebtItem {
   id: string;
@@ -285,10 +285,11 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
           </style>
         </head>
         <body>
-          <div class="header">
-            <div class="title">کۆمپانیای RF</div>
-            <div class="subtitle">پسوڵەی وەرگرتن / پێدان</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'پسوڵەی وەرگرتن / پێدان',
+            invoiceNo: transaction.invoiceNo,
+            date: transaction.date
+          })}
           
           <div class="details">
             <div class="row">

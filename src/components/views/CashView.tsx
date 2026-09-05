@@ -6,7 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Plus, Trash2, Printer, FileText, Calendar, Search, DollarSign, Clock, X, TrendingUp } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function CashView({ type = 'cash', targetName = 'مارکێت' }: { type?: 'cash' | 'company_cash', targetName?: string }) {
   const [cashSales, setCashSales] = useState<Transaction[]>([]);
@@ -197,10 +197,11 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
           </style>
         </head>
         <body>
-          <div class="header">
-            <div class="title">کۆمپانیای RF</div>
-            <div class="subtitle">پسوڵەی وەرگرتن / پێدان</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'پسوڵەی وەرگرتن / پێدان',
+            invoiceNo: transaction.invoiceNo,
+            date: transaction.date
+          })}
           
           <div class="details">
             <div class="row">

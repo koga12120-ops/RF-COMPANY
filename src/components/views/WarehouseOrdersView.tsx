@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { format, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
+import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function WarehouseOrdersView() {
   const [items, setItems] = useState<Item[]>([]);
@@ -584,11 +585,14 @@ export default function WarehouseOrdersView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1>کۆمپانیای RF</h1>
-            <h2>وەسڵی تەڵەبیە و ئامادەکردنی بار بۆ مارکێت</h2>
-            <div style="font-size: 12px; color: #64748b;">داواکاری مەندووب لە کۆگای سەرەکی بۆ کڕیار</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'وەسڵی تەڵەبیە و ئامادەکردنی بار بۆ مارکێت',
+            subtitle: 'داواکاری مەندووب لە کۆگای سەرەکی بۆ کڕیار',
+            repName: order.repName,
+            repPhone: (order as any).repPhone,
+            invoiceNo: order.invoiceNo || order.id,
+            date: order.timestamp
+          })}
 
           <div class="meta-grid">
             <div class="meta-item"><span>مارکێت:</span> <strong>${order.marketName}</strong></div>
@@ -801,11 +805,14 @@ export default function WarehouseOrdersView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1>کۆمپانیای RF</h1>
-            <h2>وەسڵی داواکاری پێشوەختەی کاشڤان (تەڵەبیەی ڤان)</h2>
-            <div style="font-size: 12px; color: #64748b;">داواکاری پێشوەختەی بارکردن لە کۆگای سەرەکی</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'وەسڵی داواکاری پێشوەختەی کاشڤان (تەڵەبیەی ڤان)',
+            subtitle: 'داواکاری پێشوەختەی بارکردن لە کۆگای سەرەکی',
+            repName: req.cashvanName,
+            repPhone: cashvans.find(c => c.name === req.cashvanName)?.phone,
+            invoiceNo: req.id,
+            date: req.createdAt
+          })}
 
           <div class="meta-grid">
             <div class="meta-item"><span>ناوی کاشڤان:</span> <strong>${req.cashvanName}</strong></div>
@@ -943,11 +950,14 @@ export default function WarehouseOrdersView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1>کۆمپانیای RF</h1>
-            <h2>پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان</h2>
-            <div style="font-size: 12px; color: #64748b;">پسوڵەی فەرمی دەرچوونی کاڵا لە کۆگا بۆ کاشڤان</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان',
+            subtitle: 'پسوڵەی فەرمی دەرچوونی کاڵا لە کۆگا بۆ کاشڤان',
+            repName: transfer.cashvanName,
+            repPhone: cashvans.find(c => c.name === transfer.cashvanName)?.phone,
+            invoiceNo: transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6)),
+            date: transfer.date
+          })}
 
           <div class="meta-grid">
             <div class="meta-item"><span>ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>

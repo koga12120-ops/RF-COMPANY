@@ -6,7 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard, Edit2, X } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 import { getCompanySettings } from '../../lib/companySettings';
 
 export default function LedgerView() {
@@ -436,12 +436,11 @@ export default function LedgerView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px;">TAM TAM</h1>
-            <div class="title" style="margin-top: 4px;">${getCompanySettings().name}</div>
-            <div style="font-size: 12px; color: #475569; font-weight: bold; margin-top: 2px;">ژمارەی کۆمپانیا: ${getCompanySettings().phone}</div>
-            <div class="subtitle" style="margin-top: 6px;">پسوڵەی دەفتەر حسابات</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'پسوڵەی دەفتەر حسابات',
+            invoiceNo: d.invoiceNumber,
+            date: d.date
+          })}
           
           <div class="details">
             <div class="row">

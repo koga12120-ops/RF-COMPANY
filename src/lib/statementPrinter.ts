@@ -16,6 +16,44 @@ export interface StatementOptions {
   roleTitle?: string;
 }
 
+export interface ReceiptHeaderOptions {
+  title?: string;
+  subtitle?: string;
+  invoiceNo?: string;
+  repName?: string;
+  repPhone?: string;
+  date?: number;
+  companyName?: string;
+  companyPhone?: string;
+}
+
+export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string {
+  const settings = getCompanySettings();
+  const cName = options?.companyName || settings.name || 'کۆمپانیای RF';
+  const cPhone = options?.companyPhone || settings.phone || '07506144894';
+  const repLine = options?.repPhone ? `
+    <div style="font-size: 13px; color: #0f172a; font-weight: 700; margin-top: 3px;">
+      ژمارەی مەندووب / کاشڤان${options.repName ? ` (${options.repName})` : ''}: <span dir="ltr">${options.repPhone}</span>
+    </div>
+  ` : '';
+
+  return `
+    <div style="text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 14px; margin-bottom: 18px;">
+      <div style="display: flex; justify-content: center; margin-bottom: 6px;">
+        <img src="/LOGO1.jpg" alt="Logo" style="width: 75px; height: 75px; object-fit: contain; border-radius: 8px; margin: 0 auto; display: block;" onerror="this.style.display='none'" />
+      </div>
+      <div style="font-size: 26px; font-weight: 900; letter-spacing: 1px; color: #0f172a; line-height: 1.1; margin: 2px 0;">${cName}</div>
+      <div style="font-size: 14px; font-weight: 800; color: #0284c7; margin-bottom: 3px;">بریکاری فەرمی TAM TAM</div>
+      <div style="font-size: 13px; color: #475569; font-weight: 700;">ژمارەی کۆمپانیا: <span dir="ltr">${cPhone}</span></div>
+      ${repLine}
+      ${options?.title ? `<h3 style="margin: 8px 0 2px 0; font-size: 17px; font-weight: 800; color: #1e293b;">${options.title}</h3>` : ''}
+      ${options?.subtitle ? `<div style="font-size: 12px; color: #64748b;">${options.subtitle}</div>` : ''}
+      ${options?.invoiceNo ? `<div style="margin-top: 5px;"><span style="display: inline-block; font-family: monospace; font-size: 14px; font-weight: 800; color: #0369a1; background: #e0f2fe; padding: 2px 8px; border-radius: 6px; border: 1px solid #7dd3fc;" dir="ltr">#${options.invoiceNo}</span></div>` : ''}
+      ${options?.date ? `<div style="font-size: 11px; color: #64748b; margin-top: 4px;">بەرواری چاپ: <span dir="ltr">${format(options.date, 'yyyy/MM/dd HH:mm')}</span></div>` : ''}
+    </div>
+  `;
+}
+
 export function generateStatementHtml(entityName: string, transactions: Transaction[], options?: StatementOptions): string {
   const sorted = [...transactions].sort((a, b) => a.date - b.date);
 
@@ -128,13 +166,10 @@ export function generateStatementHtml(entityName: string, transactions: Transact
         </style>
       </head>
       <body>
-        <div class="header">
-          <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
-          <h2 style="margin: 3px 0; font-size: 16px; color: #334155;">${getCompanySettings().name}</h2>
-          <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
-          <h3 style="margin-top: 8px;">${headerSubtitle}</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
+        ${renderReceiptHeaderHtml({
+          title: headerSubtitle,
+          date: Date.now()
+        })}
         <table>
           <thead>
             <tr>
@@ -235,13 +270,11 @@ export function generatePaymentReceiptHtml(data: PaymentReceiptData): string {
         </style>
       </head>
       <body>
-        <div class="header">
-          <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
-          <h2 style="margin: 3px 0; font-size: 16px; color: #334155;">${getCompanySettings().name}</h2>
-          <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
-          <h3 style="margin-top: 8px;">پسوڵەی واسڵکردنی قەرز (پاردانەوە)</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
+        ${renderReceiptHeaderHtml({
+          title: 'پسوڵەی واسڵکردنی قەرز (پاردانەوە)',
+          invoiceNo: data.invoiceNo,
+          date: Date.now()
+        })}
 
         <div class="info-box">
           <div class="info-row">
@@ -325,6 +358,7 @@ export function printPaymentReceiptPopup(data: PaymentReceiptData) {
 
 export interface DailyRepActivityData {
   repName: string;
+  repPhone?: string;
   roleTitle: string; // 'مەندووب' or 'کاشڤان'
   date: number;
   sales: {
@@ -435,13 +469,12 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
         </style>
       </head>
       <body>
-        <div class="header">
-          <h1 style="margin: 0; font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
-          <h2 style="margin: 3px 0; font-size: 16px; color: #334155;">${getCompanySettings().name}</h2>
-          <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
-          <h3 style="margin-top: 8px;">وەسڵی ڕۆژانەی کار و حساباتی ${data.roleTitle}</h3>
-          <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-        </div>
+        ${renderReceiptHeaderHtml({
+          title: `وەسڵی ڕۆژانەی کار و حساباتی ${data.roleTitle}`,
+          repName: data.repName,
+          repPhone: data.repPhone,
+          date: Date.now()
+        })}
 
         <div class="info-box">
           <div class="info-row">
@@ -570,6 +603,7 @@ export interface MarketDebtReceiptData {
   marketName: string;
   amount: number;
   collectorName: string;
+  collectorPhone?: string;
   date: number;
   receiptNo?: string;
   notes?: string;
@@ -651,13 +685,13 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
       </head>
       <body>
         <div class="receipt-box">
-          <div class="header">
-            <h1 style="margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 2px; color: #1e3a8a;">TAM TAM</h1>
-            <h2 style="margin: 3px 0; font-size: 15px; color: #334155;">${getCompanySettings().name}</h2>
-            <div style="font-size: 12px; color: #475569; font-weight: bold;">ژمارەی پەیوەندی: ${getCompanySettings().phone}</div>
-            <h3 style="margin-top: 6px;">وەسڵی وەرگرتنەوەی پارەی قەرز (پسوڵە)</h3>
-            <p>بەروار: <span dir="ltr">${format(data.date, 'yyyy-MM-dd HH:mm')}</span></p>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'وەسڵی وەرگرتنەوەی پارەی قەرز (پسوڵە)',
+            repName: data.collectorName,
+            repPhone: data.collectorPhone,
+            invoiceNo: data.receiptNo,
+            date: data.date
+          })}
 
           <table class="info-table">
             <tr>

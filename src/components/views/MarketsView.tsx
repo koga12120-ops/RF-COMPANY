@@ -24,7 +24,7 @@ import {
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
-import { printStatementPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function MarketsView() {
   const [markets, setMarkets] = useState<Market[]>([]);
@@ -301,11 +301,11 @@ export default function MarketsView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1 style="margin: 0; color: #1e293b; font-size: 32px; font-weight: 900; letter-spacing: 2px;">TAM TAM</h1>
-            <div style="color: #64748b; font-size: 14px; margin-top: 4px;">${title}</div>
-            ${invText}
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: title,
+            invoiceNo: invoiceNo,
+            date: date
+          })}
           <div class="row"><span>ناوی مارکێت:</span> <strong>${entityName}</strong></div>
           <div class="row"><span>ئەنجامدەر:</span> <strong>${personName}</strong></div>
           <div class="row"><span>بەروار:</span> <span dir="ltr">${format(date, 'yyyy-MM-dd HH:mm')}</span></div>

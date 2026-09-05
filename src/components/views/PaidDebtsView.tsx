@@ -6,7 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Trash2, Printer, FileText, Calendar, Search, CheckCircle2, Clock, X, TrendingUp } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup, printPaymentReceiptPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, printPaymentReceiptPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_debt' | 'company_paid_debt' }) {
   const [paidDebts, setPaidDebts] = useState<Transaction[]>([]);
@@ -185,10 +185,11 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
           </style>
         </head>
         <body>
-          <div class="header">
-            <div class="title">کۆمپانیای RF</div>
-            <div class="subtitle">پسوڵەی وەرگرتن / پێدان</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'پسوڵەی وەرگرتن / پێدان',
+            invoiceNo: transaction.invoiceNo,
+            date: transaction.date
+          })}
           
           <div class="details">
             <div class="row">

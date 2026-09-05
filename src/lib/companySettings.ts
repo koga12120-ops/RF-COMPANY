@@ -9,16 +9,28 @@ export interface CompanySettings {
 }
 
 export const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
-  name: 'کۆمپانیای TAM TAM',
-  brand: 'TAM TAM',
-  phone: '0750 456 7890',
+  name: 'کۆمپانیای RF',
+  brand: 'بریکاری فەرمی TAM TAM',
+  phone: '07506144894',
   address: 'هەولێر - عێراق'
 };
 
+const getInitialName = () => {
+  const stored = localStorage.getItem('company_name');
+  if (!stored || stored.includes('TAM TAM')) return DEFAULT_COMPANY_SETTINGS.name;
+  return stored;
+};
+
+const getInitialPhone = () => {
+  const stored = localStorage.getItem('company_phone');
+  if (!stored || stored === '0750 456 7890') return DEFAULT_COMPANY_SETTINGS.phone;
+  return stored;
+};
+
 let cachedSettings: CompanySettings = {
-  name: localStorage.getItem('company_name') || DEFAULT_COMPANY_SETTINGS.name,
+  name: getInitialName(),
   brand: localStorage.getItem('company_brand') || DEFAULT_COMPANY_SETTINGS.brand,
-  phone: localStorage.getItem('company_phone') || DEFAULT_COMPANY_SETTINGS.phone,
+  phone: getInitialPhone(),
   address: localStorage.getItem('company_address') || DEFAULT_COMPANY_SETTINGS.address
 };
 

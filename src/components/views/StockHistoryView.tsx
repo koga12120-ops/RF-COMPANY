@@ -7,6 +7,7 @@ import { Package, Search, Calendar, Trash2, Edit2, Printer, FileText, X, Check }
 import { format, startOfDay, endOfDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import { syncHistoryInvoice } from '../../lib/invoiceSync';
+import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function StockHistoryView() {
   const [history, setHistory] = useState<StockHistory[]>([]);
@@ -147,11 +148,10 @@ export default function StockHistoryView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h2>کۆمپانیای RF</h2>
-            <h3>ڕاپۆرتی هاتنەکانی کاڵا: ${itemName}</h3>
-            <p>بەرواری چاپ: <span dir="ltr">${format(Date.now(), 'yyyy-MM-dd HH:mm')}</span></p>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: `ڕاپۆرتی هاتنەکانی کاڵا: ${itemName}`,
+            date: Date.now()
+          })}
           <table>
             <thead><tr><th>بەروار و کات</th><th>بڕی زیادکراو</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
@@ -193,10 +193,11 @@ export default function StockHistoryView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <div class="title">کۆمپانیای RF</div>
-            <div class="subtitle">پسوڵەی هاتنی کاڵا بۆ کۆگا</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'پسوڵەی هاتنی کاڵا بۆ کۆگا',
+            invoiceNo: history.invoiceNo,
+            date: history.date
+          })}
           
           <div class="details">
             <div class="row">

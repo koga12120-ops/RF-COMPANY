@@ -5,6 +5,7 @@ import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, CashvanTransfer, CashvanRequisition } from '../../types';
 import { Plus, Search, Check, Send, Printer, Truck, ClipboardList, CheckCircle2, Clock, Eye, X, Package, Edit2, Trash2, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
+import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function WarehouseCashvanView() {
   const [items, setItems] = useState<Item[]>([]);
@@ -231,11 +232,14 @@ export default function WarehouseCashvanView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1>کۆمپانیای RF</h1>
-            <h2>پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان</h2>
-            <div style="font-size: 12px; color: #64748b;">پسوڵەی فەرمی دەرچوونی کاڵا لە کۆگا بۆ کاشڤان</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان',
+            subtitle: 'پسوڵەی فەرمی دەرچوونی کاڵا لە کۆگا بۆ کاشڤان',
+            repName: transfer.cashvanName,
+            repPhone: cashvans.find(c => c.name === transfer.cashvanName)?.phone,
+            invoiceNo: transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6)),
+            date: transfer.date
+          })}
 
           <div class="meta-grid">
             <div class="meta-item"><span>ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
@@ -768,11 +772,14 @@ export default function WarehouseCashvanView() {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1>کۆمپانیای RF</h1>
-            <h2>وەسڵی داواکاری پێشوەختەی کاشڤان (تەڵەبیە)</h2>
-            <div style="font-size: 12px; color: #64748b;">داواکاری ئامادەکردنی باری کاشڤان لە کۆگای سەرەکی</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            title: 'وەسڵی داواکاری پێشوەختەی کاشڤان (تەڵەبیە)',
+            subtitle: 'داواکاری ئامادەکردنی باری کاشڤان لە کۆگای سەرەکی',
+            repName: req.cashvanName,
+            repPhone: cashvans.find(c => c.name === req.cashvanName)?.phone,
+            invoiceNo: req.requisitionNo || ('REQ-' + req.id.slice(-6)),
+            date: req.createdAt
+          })}
 
           <div class="meta-grid">
             <div class="meta-item"><span>ناوی کاشڤان / مەندووب:</span> <strong>${req.cashvanName}</strong></div>

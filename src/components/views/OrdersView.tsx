@@ -1341,9 +1341,18 @@ export default function OrdersView({
         </head>
         <body>
           <div class="brand-header">
-            <h1 class="brand-title">TAM TAM</h1>
-            <div class="company-sub">${companySettings.name}</div>
-            <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <div style="width: 80px; text-align: right;">
+                <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 60px; max-width: 80px; object-fit: contain;" onerror="this.style.display='none'" />
+              </div>
+              <div style="flex: 1; text-align: center;">
+                <h1 class="brand-title">کۆمپانیای RF</h1>
+                <div class="company-sub" style="font-size: 13px; font-weight: 800; color: #0284c7; margin-top: 1px;">بریکاری فەرمی TAM TAM</div>
+                <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
+                ${cashvanPhone ? `<div style="font-size: 12px; font-weight: 700; color: #0f172a; margin-top: 2px;">ژمارەی کاشڤان (${sale.cashvanName}): <span dir="ltr">${cashvanPhone}</span></div>` : ''}
+              </div>
+              <div style="width: 80px;"></div>
+            </div>
           </div>
 
           <div class="invoice-badge-box">
@@ -1420,7 +1429,7 @@ export default function OrdersView({
           </div>
 
           <div class="footer-note">
-            سوپاس بۆ مامەڵەکردنتان لەگەڵ TAM TAM
+            سوپاس بۆ مامەڵەکردنتان لەگەڵ کۆمپانیای RF (بریکاری فەرمی TAM TAM)
           </div>
 
           <script>
@@ -1553,9 +1562,18 @@ export default function OrdersView({
         </head>
         <body>
           <div class="brand-header">
-            <h1 class="brand-title">TAM TAM</h1>
-            <div class="company-sub">${companySettings.name}</div>
-            <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <div style="width: 80px; text-align: right;">
+                <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 60px; max-width: 80px; object-fit: contain;" onerror="this.style.display='none'" />
+              </div>
+              <div style="flex: 1; text-align: center;">
+                <h1 class="brand-title">کۆمپانیای RF</h1>
+                <div class="company-sub" style="font-size: 13px; font-weight: 800; color: #0284c7; margin-top: 1px;">بریکاری فەرمی TAM TAM</div>
+                <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
+                ${repPhone ? `<div style="font-size: 12px; font-weight: 700; color: #0f172a; margin-top: 2px;">ژمارەی مەندووب (${order.repName}): <span dir="ltr">${repPhone}</span></div>` : ''}
+              </div>
+              <div style="width: 80px;"></div>
+            </div>
           </div>
 
           <div class="invoice-badge-box">
