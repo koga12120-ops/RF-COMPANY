@@ -10,10 +10,12 @@ import {
   where, 
   deleteDoc, 
   orderBy,
-  getDoc
+  getDoc,
+  setDoc
 } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
+import { renameRepOrCashvan } from '../../lib/syncHelper';
 import { CashvanSale, CashvanTransfer, Order, Transaction, Market, Item, SalesRep } from '../../types';
 import { 
   Truck, 
@@ -40,16 +42,36 @@ import {
   Store,
   Filter,
   Gift,
-  Copy
+  Copy,
+  BarChart3,
+  TrendingUp,
+  Package,
+  Clock,
+  Eye,
+  ChevronDown,
+  ChevronUp,
+  Phone,
+  ArrowUpDown
 } from 'lucide-react';
-import { format, startOfDay, endOfDay } from 'date-fns';
+import { 
+  format, 
+  startOfDay, 
+  endOfDay, 
+  startOfWeek, 
+  endOfWeek, 
+  startOfMonth, 
+  endOfMonth, 
+  subDays,
+  subWeeks,
+  subMonths 
+} from 'date-fns';
 import { printDailyRepReceiptPopup, printStatementPopup } from '../../lib/statementPrinter';
 import ConfirmModal from '../common/ConfirmModal';
 import { getCompanySettings } from '../../lib/companySettings';
 
 export default function AdminCashvanView() {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'rep_sales' | 'cashvan_sales' | 'transfers' | 'cashvan_accounts' | 'daily_statement'>('rep_sales');
+  const [activeTab, setActiveTab] = useState<'rep_sales' | 'cashvan_sales' | 'period_stats' | 'transfers' | 'cashvan_accounts' | 'daily_statement'>('rep_sales');
 
   // Core Data
   const [orders, setOrders] = useState<Order[]>([]);
@@ -90,6 +112,25 @@ export default function AdminCashvanView() {
   const [selectedCashvanFilter, setSelectedCashvanFilter] = useState('all');
   const [repStatusFilter, setRepStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
   const [cashvanStatusFilter, setCashvanStatusFilter] = useState<'all' | 'pending_accounting' | 'accounted'>('all');
+
+  // Quick Time Filters for Rep & Cashvan tabs
+  const [repTimeFilter, setRepTimeFilter] = useState<'all' | 'today' | 'this_week' | 'this_month'>('all');
+  const [cvTimeFilter, setCvTimeFilter] = useState<'all' | 'today' | 'this_week' | 'this_month'>('all');
+
+  // Period Analytics States (داتای مانگانە، هەفتانە، ڕۆژانە)
+  const [periodType, setPeriodType] = useState<'daily' | 'weekly' | 'monthly' | 'custom'>('monthly');
+  const [analyticsDate, setAnalyticsDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [analyticsMonth, setAnalyticsMonth] = useState(format(new Date(), 'yyyy-MM'));
+  const [customStartDate, setCustomStartDate] = useState(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
+  const [customEndDate, setCustomEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+
+  const [analyticsRoleFilter, setAnalyticsRoleFilter] = useState<'all' | 'rep' | 'cashvan'>('all');
+  const [analyticsPersonFilter, setAnalyticsPersonFilter] = useState<string>('all');
+  const [analyticsSearchTerm, setAnalyticsSearchTerm] = useState('');
+
+  // Drilldown modal states
+  const [inspectingPerson, setInspectingPerson] = useState<any | null>(null);
+  const [detailSubTab, setDetailSubTab] = useState<'items' | 'invoices'>('items');
 
   // Daily Statement Tool State
   const [dailyDate, setDailyDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -215,6 +256,101 @@ export default function AdminCashvanView() {
     };
   }, []);
 
+  // Unified list of all registered users (since cashvan and sales rep are the same person/system)
+  const unifiedUsers = useMemo(() => {
+    const map = new Map<string, {
+      id: string;
+      repId?: string;
+      cvId?: string;
+      name: string;
+      username: string;
+      phone: string;
+      accessCode: string;
+      password?: string;
+      vehicleNumber?: string;
+      status: 'active' | 'disabled';
+    }>();
+
+    // 1. Add all reps
+    reps.forEach(r => {
+      const name = (r.name || '').trim();
+      if (!name) return;
+      map.set(name.toLowerCase(), {
+        id: r.id,
+        repId: r.id,
+        name: r.name.trim(),
+        username: (r.username || r.name).trim(),
+        phone: r.phone || '',
+        accessCode: r.accessCode || r.password || '',
+        password: r.password || r.accessCode || '',
+        vehicleNumber: '',
+        status: r.status === 'disabled' ? 'disabled' : 'active',
+      });
+    });
+
+    // 2. Add / merge all cashvans
+    cashvans.forEach(c => {
+      const name = (c.name || '').trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      const existing = map.get(key);
+      if (existing) {
+        existing.cvId = c.id;
+        if (!existing.phone && c.phone) existing.phone = c.phone;
+        if (!existing.accessCode && (c.accessCode || c.password)) {
+          existing.accessCode = c.accessCode || c.password;
+          existing.password = c.password || c.accessCode;
+        }
+        if (c.vehicleNumber) existing.vehicleNumber = c.vehicleNumber;
+        if (c.status === 'disabled') existing.status = 'disabled';
+      } else {
+        map.set(key, {
+          id: c.id,
+          cvId: c.id,
+          name: c.name.trim(),
+          username: (c.username || c.name).trim(),
+          phone: c.phone || '',
+          accessCode: c.accessCode || c.password || '',
+          password: c.password || c.accessCode || '',
+          vehicleNumber: c.vehicleNumber || '',
+          status: c.status === 'disabled' ? 'disabled' : 'active',
+        });
+      }
+    });
+
+    // 3. Fallback: also include names that appeared in historical orders or sales
+    orders.forEach(o => {
+      const name = (o.repName || '').trim();
+      if (name && !map.has(name.toLowerCase())) {
+        map.set(name.toLowerCase(), {
+          id: `order_${name}`,
+          name,
+          username: name,
+          phone: '',
+          accessCode: '',
+          vehicleNumber: '',
+          status: 'active'
+        });
+      }
+    });
+    sales.forEach(s => {
+      const name = (s.cashvanName || '').trim();
+      if (name && !map.has(name.toLowerCase())) {
+        map.set(name.toLowerCase(), {
+          id: `sale_${name}`,
+          name,
+          username: name,
+          phone: '',
+          accessCode: '',
+          vehicleNumber: '',
+          status: 'active'
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [reps, cashvans, orders, sales]);
+
   // Filtered Orders (Reps)
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
@@ -228,9 +364,25 @@ export default function AdminCashvanView() {
                           (order.repName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (order.invoiceId || '').includes(searchTerm) ||
                           (order.invoiceNo || '').includes(searchTerm);
-      return matchRep && matchStatus && matchSearch;
+      
+      let matchTime = true;
+      if (repTimeFilter === 'today') {
+        const s = startOfDay(new Date()).getTime();
+        const e = endOfDay(new Date()).getTime();
+        matchTime = order.timestamp >= s && order.timestamp <= e;
+      } else if (repTimeFilter === 'this_week') {
+        const s = startOfWeek(new Date(), { weekStartsOn: 6 }).getTime();
+        const e = endOfWeek(new Date(), { weekStartsOn: 6 }).getTime();
+        matchTime = order.timestamp >= s && order.timestamp <= e;
+      } else if (repTimeFilter === 'this_month') {
+        const s = startOfMonth(new Date()).getTime();
+        const e = endOfMonth(new Date()).getTime();
+        matchTime = order.timestamp >= s && order.timestamp <= e;
+      }
+
+      return matchRep && matchStatus && matchSearch && matchTime;
     });
-  }, [orders, selectedRepFilter, repStatusFilter, searchTerm]);
+  }, [orders, selectedRepFilter, repStatusFilter, searchTerm, repTimeFilter]);
 
   // Filtered Sales (Cashvans)
   const filteredSales = useMemo(() => {
@@ -246,9 +398,25 @@ export default function AdminCashvanView() {
                           (sale.cashvanName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (sale.invoiceNo || '').includes(searchTerm) ||
                           (sale.invoiceId || '').includes(searchTerm);
-      return matchCV && matchStatus && matchSearch;
+
+      let matchTime = true;
+      if (cvTimeFilter === 'today') {
+        const s = startOfDay(new Date()).getTime();
+        const e = endOfDay(new Date()).getTime();
+        matchTime = sale.date >= s && sale.date <= e;
+      } else if (cvTimeFilter === 'this_week') {
+        const s = startOfWeek(new Date(), { weekStartsOn: 6 }).getTime();
+        const e = endOfWeek(new Date(), { weekStartsOn: 6 }).getTime();
+        matchTime = sale.date >= s && sale.date <= e;
+      } else if (cvTimeFilter === 'this_month') {
+        const s = startOfMonth(new Date()).getTime();
+        const e = endOfMonth(new Date()).getTime();
+        matchTime = sale.date >= s && sale.date <= e;
+      }
+
+      return matchCV && matchStatus && matchSearch && matchTime;
     });
-  }, [sales, selectedCashvanFilter, cashvanStatusFilter, searchTerm]);
+  }, [sales, selectedCashvanFilter, cashvanStatusFilter, searchTerm, cvTimeFilter]);
 
   // Filtered Transfers
   const filteredTransfers = useMemo(() => {
@@ -525,7 +693,7 @@ export default function AdminCashvanView() {
     }
   };
 
-  // --- Cashvan Accounts CRUD Handlers ---
+  // --- Cashvan & Reps Unified CRUD Handlers ---
   const handleAddNewCashvan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCVName.trim()) return;
@@ -537,18 +705,75 @@ export default function AdminCashvanView() {
       const phoneTrimmed = newCVPhone.trim();
       const vehicleTrimmed = newCVVehicleNumber.trim();
 
-      const docRef = await addDoc(collection(db, 'cashvans'), {
-        name: nameTrimmed,
-        username: userTrimmed,
-        accessCode: passTrimmed,
-        password: passTrimmed,
-        phone: phoneTrimmed,
-        vehicleNumber: vehicleTrimmed,
-        status: 'active',
-        createdAt: Date.now()
-      });
+      // 1. Create in cashvans
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', nameTrimmed)));
+      let cvDocId = '';
+      if (cvSnap.empty) {
+        const docRef = await addDoc(collection(db, 'cashvans'), {
+          name: nameTrimmed,
+          username: userTrimmed,
+          accessCode: passTrimmed,
+          password: passTrimmed,
+          phone: phoneTrimmed,
+          vehicleNumber: vehicleTrimmed,
+          status: 'active',
+          createdAt: Date.now()
+        });
+        cvDocId = docRef.id;
+        await updateDoc(doc(db, 'cashvans', docRef.id), { id: docRef.id });
+      } else {
+        cvDocId = cvSnap.docs[0].id;
+        await updateDoc(doc(db, 'cashvans', cvDocId), {
+          username: userTrimmed,
+          accessCode: passTrimmed,
+          password: passTrimmed,
+          phone: phoneTrimmed,
+          vehicleNumber: vehicleTrimmed,
+          status: 'active'
+        });
+      }
 
-      await updateDoc(doc(db, 'cashvans', docRef.id), { id: docRef.id });
+      // 2. Also create/sync in reps (Mandoub) because they are the same person/system
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', nameTrimmed)));
+      let repDocId = '';
+      if (repSnap.empty) {
+        const repDoc = await addDoc(collection(db, 'reps'), {
+          name: nameTrimmed,
+          username: userTrimmed,
+          phone: phoneTrimmed,
+          accessCode: passTrimmed,
+          password: passTrimmed,
+          status: 'active',
+          totalSales: 0,
+          totalProfit: 0,
+          createdAt: Date.now()
+        });
+        repDocId = repDoc.id;
+      } else {
+        repDocId = repSnap.docs[0].id;
+        await updateDoc(doc(db, 'reps', repDocId), {
+          username: userTrimmed,
+          accessCode: passTrimmed,
+          password: passTrimmed,
+          phone: phoneTrimmed,
+          status: 'active'
+        });
+      }
+
+      // 3. Sync to users collection for auth
+      const authId = repDocId || cvDocId;
+      if (authId) {
+        await setDoc(doc(db, 'users', authId), {
+          role: 'sales_rep',
+          username: userTrimmed,
+          accessCode: passTrimmed,
+          status: 'active',
+          name: nameTrimmed,
+          phone: phoneTrimmed,
+          repId: repDocId,
+          isDeleted: false
+        }, { merge: true });
+      }
 
       setShowAddCVModal(false);
       setNewCVName('');
@@ -556,10 +781,10 @@ export default function AdminCashvanView() {
       setNewCVPassword('');
       setNewCVPhone('');
       setNewCVVehicleNumber('');
-      alert(`کاشڤان (${nameTrimmed}) بە یوزەری [${userTrimmed}] و تێپەڕەوشەی [${passTrimmed}] زیادکرا.`);
+      alert(`بەکارهێنەر (${nameTrimmed}) بە سەرکەوتوویی وەک مەندووب و کاشڤان بە یوزەری [${userTrimmed}] و تێپەڕەوشەی [${passTrimmed}] زیادکرا.`);
     } catch (e) {
       console.error(e);
-      alert('هەڵەیەک ڕوویدا لە زیادکردنی کاشڤان');
+      alert('هەڵەیەک ڕوویدا لە زیادکردنی بەکارهێنەر');
     } finally {
       setIsProcessing(false);
     }
@@ -570,10 +795,20 @@ export default function AdminCashvanView() {
     if (!editingCVItem || !editCVName.trim()) return;
     setIsProcessing(true);
     try {
+      const oldName = editingCVItem.name.trim();
       const nameTrimmed = editCVName.trim();
       const userTrimmed = editCVUsername.trim() || nameTrimmed;
       const phoneTrimmed = editCVPhone.trim();
       const passTrimmed = editCVPassword.trim();
+
+      // 1. If name changed, rename globally across system
+      if (oldName !== nameTrimmed) {
+        await renameRepOrCashvan(oldName, nameTrimmed, { 
+          phone: phoneTrimmed,
+          isRep: true,
+          isCashvan: true 
+        });
+      }
 
       const updateData: any = {
         name: nameTrimmed,
@@ -586,9 +821,42 @@ export default function AdminCashvanView() {
         updateData.password = passTrimmed;
       }
 
-      await updateDoc(doc(db, 'cashvans', editingCVItem.id), updateData);
+      // 2. Update cashvans collection
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', 'in', [oldName, nameTrimmed])));
+      if (!cvSnap.empty) {
+        for (const d of cvSnap.docs) {
+          await updateDoc(doc(db, 'cashvans', d.id), updateData);
+        }
+      } else {
+        await addDoc(collection(db, 'cashvans'), {
+          ...updateData,
+          createdAt: Date.now()
+        });
+      }
+
+      // 3. Update reps collection
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', 'in', [oldName, nameTrimmed])));
+      if (!repSnap.empty) {
+        for (const d of repSnap.docs) {
+          await updateDoc(doc(db, 'reps', d.id), updateData);
+        }
+      } else {
+        await addDoc(collection(db, 'reps'), {
+          ...updateData,
+          totalSales: 0,
+          totalProfit: 0,
+          createdAt: Date.now()
+        });
+      }
+
+      // 4. Update users collection
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('name', 'in', [oldName, nameTrimmed])));
+      for (const d of usersSnap.docs) {
+        await updateDoc(doc(db, 'users', d.id), updateData);
+      }
+
       setEditingCVItem(null);
-      alert(`زانیارییەکانی کاشڤان (${nameTrimmed}) نوێکرایەوە.`);
+      alert(`زانیارییەکانی بەکارهێنەر (${nameTrimmed}) بۆ کاشڤان و مەندووب نوێکرایەوە.`);
     } catch (e) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا');
@@ -604,16 +872,35 @@ export default function AdminCashvanView() {
     try {
       const codeTrimmed = inputCVCode.trim();
       const userTrimmed = inputCVUsername.trim() || codeCVModalItem.name;
+      const personName = codeCVModalItem.name.trim();
 
-      await updateDoc(doc(db, 'cashvans', codeCVModalItem.id), {
+      const patch = {
         username: userTrimmed,
         accessCode: codeTrimmed,
         password: codeTrimmed,
         forceReauth: true
-      });
+      };
+
+      // 1. Update in cashvans
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
+      for (const d of cvSnap.docs) {
+        await updateDoc(doc(db, 'cashvans', d.id), patch);
+      }
+
+      // 2. Update in reps
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
+      for (const d of repSnap.docs) {
+        await updateDoc(doc(db, 'reps', d.id), patch);
+      }
+
+      // 3. Update in users
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
+      for (const d of usersSnap.docs) {
+        await updateDoc(doc(db, 'users', d.id), patch);
+      }
 
       setCodeCVModalItem(null);
-      alert(`تێپەڕەوشەی چوونەژوورەوەی کاشڤان (${codeCVModalItem.name}) نوێکرایەوە بۆ: [${codeTrimmed}]`);
+      alert(`تێپەڕەوشەی چوونەژوورەوەی (${personName}) نوێکرایەوە بۆ: [${codeTrimmed}]`);
     } catch (e) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا');
@@ -624,12 +911,36 @@ export default function AdminCashvanView() {
 
   const handleToggleCVStatus = async (item: any) => {
     const nextStatus = item.status === 'disabled' ? 'active' : 'disabled';
+    const personName = item.name.trim();
     try {
-      await updateDoc(doc(db, 'cashvans', item.id), {
-        status: nextStatus,
-        forceReauth: nextStatus === 'disabled'
-      });
-      alert(`دۆخی کاشڤان (${item.name}) گۆڕدرا بۆ: ${nextStatus === 'active' ? 'چالاک' : 'ڕاگیراو'}`);
+      // 1. Update cashvans
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
+      for (const d of cvSnap.docs) {
+        await updateDoc(doc(db, 'cashvans', d.id), {
+          status: nextStatus,
+          forceReauth: nextStatus === 'disabled'
+        });
+      }
+
+      // 2. Update reps
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
+      for (const d of repSnap.docs) {
+        await updateDoc(doc(db, 'reps', d.id), {
+          status: nextStatus,
+          forceReauth: nextStatus === 'disabled'
+        });
+      }
+
+      // 3. Update users
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
+      for (const d of usersSnap.docs) {
+        await updateDoc(doc(db, 'users', d.id), {
+          status: nextStatus,
+          forceReauth: nextStatus === 'disabled'
+        });
+      }
+
+      alert(`دۆخی هەژماری (${personName}) گۆڕدرا بۆ: ${nextStatus === 'active' ? 'چالاک' : 'ڕاگیراو'}`);
     } catch (e) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا');
@@ -638,18 +949,33 @@ export default function AdminCashvanView() {
 
   const confirmDeleteCashvan = async () => {
     if (!deletingCVItem) return;
+    const personName = deletingCVItem.name.trim();
     try {
-      await deleteDoc(doc(db, 'cashvans', deletingCVItem.id));
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
+      for (const d of cvSnap.docs) {
+        await deleteDoc(doc(db, 'cashvans', d.id));
+      }
+
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
+      for (const d of repSnap.docs) {
+        await deleteDoc(doc(db, 'reps', d.id));
+      }
+
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
+      for (const d of usersSnap.docs) {
+        await deleteDoc(doc(db, 'users', d.id));
+      }
+
       setDeletingCVItem(null);
-      alert(`کاشڤان (${deletingCVItem.name}) سڕدرایەوە.`);
+      alert(`بەکارهێنەر (${personName}) سڕدرایەوە.`);
     } catch (e) {
       console.error(e);
-      alert('هەڵەیەک ڕوویدا لە سڕینەوەی کاشڤان');
+      alert('هەڵەیەک ڕوویدا لە سڕینەوە');
     }
   };
 
   const handleCopyCVCredentials = (cv: any) => {
-    const text = `زانیاری چوونەژوورەوە بۆ کاشڤان: ${cv.name}\nیوزەرنەیم: ${cv.username || cv.name}\nتێپەڕەوشە: ${cv.accessCode || cv.password || '47953'}`;
+    const text = `زانیاری چوونەژوورەوە بۆ کاشڤان و مەندووب: ${cv.name}\nیوزەرنەیم: ${cv.username || cv.name}\nتێپەڕەوشە: ${cv.accessCode || cv.password || '47953'}`;
     navigator.clipboard.writeText(text);
     setCopiedCVId(cv.id);
     setTimeout(() => setCopiedCVId(null), 2000);
@@ -1189,6 +1515,731 @@ export default function AdminCashvanView() {
     });
   };
 
+  // =========================================================================
+  // PERIOD ANALYTICS CALCULATIONS (ڕۆژانە، هەفتانە، مانگانە بۆ فلان مەندووب)
+  // =========================================================================
+  const periodRange = useMemo(() => {
+    if (periodType === 'daily') {
+      const d = analyticsDate ? new Date(analyticsDate) : new Date();
+      return {
+        start: startOfDay(d).getTime(),
+        end: endOfDay(d).getTime(),
+        title: 'ڕاپۆرتی ڕۆژانە',
+        subtitle: format(d, 'yyyy/MM/dd'),
+        type: 'daily'
+      };
+    } else if (periodType === 'weekly') {
+      const d = analyticsDate ? new Date(analyticsDate) : new Date();
+      const s = startOfWeek(d, { weekStartsOn: 6 });
+      const e = endOfWeek(d, { weekStartsOn: 6 });
+      return {
+        start: s.getTime(),
+        end: e.getTime(),
+        title: 'ڕاپۆرتی هەفتانە',
+        subtitle: `لە ${format(s, 'yyyy/MM/dd')} تا ${format(e, 'yyyy/MM/dd')}`,
+        type: 'weekly'
+      };
+    } else if (periodType === 'monthly') {
+      const parts = (analyticsMonth || format(new Date(), 'yyyy-MM')).split('-');
+      const year = Number(parts[0]) || 2026;
+      const month = Number(parts[1]) || 9;
+      const d = new Date(year, month - 1, 1);
+      const s = startOfMonth(d);
+      const e = endOfMonth(d);
+      return {
+        start: s.getTime(),
+        end: e.getTime(),
+        title: 'ڕاپۆرتی مانگانە',
+        subtitle: `مانگی ${format(d, 'yyyy/MM')}`,
+        type: 'monthly'
+      };
+    } else {
+      const s = customStartDate ? new Date(customStartDate) : new Date();
+      const e = customEndDate ? new Date(customEndDate) : new Date();
+      return {
+        start: startOfDay(s).getTime(),
+        end: endOfDay(e).getTime(),
+        title: 'ڕاپۆرتی مەودای دیاریکراو',
+        subtitle: `لە ${format(s, 'yyyy/MM/dd')} تا ${format(e, 'yyyy/MM/dd')}`,
+        type: 'custom'
+      };
+    }
+  }, [periodType, analyticsDate, analyticsMonth, customStartDate, customEndDate]);
+
+  // Aggregated data for the selected period
+  const analyticsData = useMemo(() => {
+    const { start, end } = periodRange;
+
+    // 1. Filter orders in range
+    const periodOrders = orders.filter(o => {
+      if (o.status === 'deleted') return false;
+      return o.timestamp >= start && o.timestamp <= end;
+    });
+
+    // 2. Filter cashvan sales in range
+    const periodSales = sales.filter(s => {
+      if (s.status === 'deleted') return false;
+      return s.date >= start && s.date <= end;
+    });
+
+    interface RepPersonStats {
+      id: string;
+      name: string;
+      role: 'rep' | 'cashvan';
+      phone?: string;
+      totalCartons: number;
+      totalPackets: number;
+      totalGifts: number;
+      totalAmount: number;
+      cashAmount: number;
+      debtAmount: number;
+      cartons: number;
+      packets: number;
+      gifts: number;
+      amount: number;
+      cash: number;
+      debt: number;
+      itemsBreakdown: Array<{
+        itemId: string;
+        name: string;
+        cartons: number;
+        packets: number;
+        gifts: number;
+        totalPrice: number;
+        totalAmount?: number;
+      }>;
+      invoicesCount: number;
+      itemsMap: Record<string, {
+        itemId: string;
+        name: string;
+        cartons: number;
+        packets: number;
+        gifts: number;
+        totalPrice: number;
+      }>;
+      invoices: Array<{
+        id: string;
+        invoiceNo: string;
+        invoiceNumber?: string;
+        marketName: string;
+        date: number;
+        amount: number;
+        paymentType: 'cash' | 'debt';
+        cartons: number;
+        packets: number;
+        gifts: number;
+        type: 'order' | 'sale';
+        itemsCount: number;
+        status: string;
+      }>;
+    }
+
+    const peopleMap: Record<string, RepPersonStats> = {};
+
+    const getOrCreatePerson = (name: string, role: 'rep' | 'cashvan') => {
+      const key = `${role}_${name}`;
+      if (!peopleMap[key]) {
+        let phone = '';
+        if (role === 'rep') {
+          phone = reps.find(r => r.name === name)?.phone || '';
+        } else {
+          phone = cashvans.find(c => c.name === name)?.phone || '';
+        }
+        peopleMap[key] = {
+          id: key,
+          name,
+          role,
+          phone,
+          totalCartons: 0,
+          totalPackets: 0,
+          totalGifts: 0,
+          totalAmount: 0,
+          cashAmount: 0,
+          debtAmount: 0,
+          cartons: 0,
+          packets: 0,
+          gifts: 0,
+          amount: 0,
+          cash: 0,
+          debt: 0,
+          itemsBreakdown: [],
+          invoicesCount: 0,
+          itemsMap: {},
+          invoices: []
+        };
+      }
+      return peopleMap[key];
+    };
+
+    // Process Orders (Reps)
+    periodOrders.forEach(order => {
+      const repName = order.repName || 'مەندووبی نادیار';
+      const p = getOrCreatePerson(repName, 'rep');
+
+      let orderCartons = 0;
+      let orderPackets = 0;
+      let orderGifts = 0;
+
+      (order.items || []).forEach(item => {
+        const qty = Number(item.quantity) || 0;
+        const giftQty = Number(item.giftQuantity) || (item.isGift ? qty : 0);
+        const isPacket = item.unit === 'packet';
+        const itemCartons = isPacket ? 0 : qty;
+        const itemPackets = isPacket ? qty : 0;
+        const itemPrice = Number(item.price) || 0;
+        const itemTotal = Number(item.totalPrice) || (qty * itemPrice);
+
+        orderCartons += itemCartons;
+        orderPackets += itemPackets;
+        orderGifts += giftQty;
+
+        const itemKey = item.itemId || item.name;
+        if (!p.itemsMap[itemKey]) {
+          p.itemsMap[itemKey] = {
+            itemId: item.itemId || '',
+            name: item.name,
+            cartons: 0,
+            packets: 0,
+            gifts: 0,
+            totalPrice: 0
+          };
+        }
+        p.itemsMap[itemKey].cartons += itemCartons;
+        p.itemsMap[itemKey].packets += itemPackets;
+        p.itemsMap[itemKey].gifts += giftQty;
+        p.itemsMap[itemKey].totalPrice += itemTotal;
+      });
+
+      const isDebt = order.paymentStatus === 'debt' || order.paymentType === 'debt';
+      const amount = Number(order.totalAmount) || 0;
+
+      p.totalCartons += orderCartons;
+      p.totalPackets += orderPackets;
+      p.totalGifts += orderGifts;
+      p.totalAmount += amount;
+      if (isDebt) {
+        p.debtAmount += amount;
+      } else {
+        p.cashAmount += amount;
+      }
+      p.invoicesCount += 1;
+
+      p.invoices.push({
+        id: order.id,
+        invoiceNo: order.invoiceNo || order.invoiceId || order.id.slice(-6),
+        marketName: order.marketName || 'مارکێت',
+        date: order.timestamp,
+        amount,
+        paymentType: isDebt ? 'debt' : 'cash',
+        cartons: orderCartons,
+        packets: orderPackets,
+        gifts: orderGifts,
+        type: 'order',
+        itemsCount: order.items?.length || 0,
+        status: order.status
+      });
+    });
+
+    // Process Sales (Cashvans)
+    periodSales.forEach(sale => {
+      const cvName = sale.cashvanName || 'کاشڤانی نادیار';
+      const p = getOrCreatePerson(cvName, 'cashvan');
+
+      let saleCartons = 0;
+      let salePackets = 0;
+      let saleGifts = 0;
+
+      (sale.items || []).forEach(item => {
+        const qty = Number(item.quantity) || 0;
+        const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
+        const giftQty = isGift ? qty : 0;
+        const isPacket = item.unit === 'packet';
+        const itemCartons = isPacket ? 0 : qty;
+        const itemPackets = isPacket ? qty : 0;
+        const itemPrice = Number(item.price) || 0;
+        const itemTotal = isGift ? 0 : (qty * itemPrice);
+
+        saleCartons += itemCartons;
+        salePackets += itemPackets;
+        saleGifts += giftQty;
+
+        const itemKey = item.itemId || item.name;
+        if (!p.itemsMap[itemKey]) {
+          p.itemsMap[itemKey] = {
+            itemId: item.itemId || '',
+            name: item.name,
+            cartons: 0,
+            packets: 0,
+            gifts: 0,
+            totalPrice: 0
+          };
+        }
+        p.itemsMap[itemKey].cartons += itemCartons;
+        p.itemsMap[itemKey].packets += itemPackets;
+        p.itemsMap[itemKey].gifts += giftQty;
+        p.itemsMap[itemKey].totalPrice += itemTotal;
+      });
+
+      const isDebt = sale.paymentType === 'debt';
+      const amount = Number(sale.totalAmount) || 0;
+
+      p.totalCartons += saleCartons;
+      p.totalPackets += salePackets;
+      p.totalGifts += saleGifts;
+      p.totalAmount += amount;
+      if (isDebt) {
+        p.debtAmount += amount;
+      } else {
+        p.cashAmount += amount;
+      }
+      p.invoicesCount += 1;
+
+      p.invoices.push({
+        id: sale.id,
+        invoiceNo: sale.invoiceNo || sale.invoiceId || sale.id.slice(-6),
+        marketName: sale.marketName || 'مارکێت',
+        date: sale.date,
+        amount,
+        paymentType: isDebt ? 'debt' : 'cash',
+        cartons: saleCartons,
+        packets: salePackets,
+        gifts: saleGifts,
+        type: 'sale',
+        itemsCount: sale.items?.length || 0,
+        status: sale.status
+      });
+    });
+
+    let list = Object.values(peopleMap);
+
+    if (analyticsRoleFilter !== 'all') {
+      list = list.filter(p => p.role === analyticsRoleFilter);
+    }
+
+    if (analyticsPersonFilter !== 'all') {
+      list = list.filter(p => p.name === analyticsPersonFilter);
+    }
+
+    if (analyticsSearchTerm.trim()) {
+      const s = analyticsSearchTerm.trim().toLowerCase();
+      list = list.filter(p => 
+        p.name.toLowerCase().includes(s) || 
+        (p.phone && p.phone.toLowerCase().includes(s)) ||
+        Object.values(p.itemsMap).some(it => it.name.toLowerCase().includes(s))
+      );
+    }
+
+    list.forEach(p => {
+      p.cartons = p.totalCartons;
+      p.packets = p.totalPackets;
+      p.gifts = p.totalGifts;
+      p.amount = p.totalAmount;
+      p.cash = p.cashAmount;
+      p.debt = p.debtAmount;
+      p.itemsBreakdown = Object.values(p.itemsMap).map(it => ({
+        ...it,
+        totalAmount: it.totalPrice
+      }));
+      p.invoices.forEach(inv => {
+        inv.invoiceNumber = inv.invoiceNo;
+      });
+    });
+
+    list.sort((a, b) => (b.totalCartons - a.totalCartons) || (b.totalAmount - a.totalAmount));
+
+    const overall = list.reduce((acc, p) => {
+      acc.cartons += p.totalCartons;
+      acc.packets += p.totalPackets;
+      acc.gifts += p.totalGifts;
+      acc.amount += p.totalAmount;
+      acc.cash += p.cashAmount;
+      acc.debt += p.debtAmount;
+      acc.invoices += p.invoicesCount;
+      return acc;
+    }, {
+      cartons: 0,
+      packets: 0,
+      gifts: 0,
+      amount: 0,
+      cash: 0,
+      debt: 0,
+      invoices: 0
+    });
+
+    const consolidatedItems: Record<string, { name: string; cartons: number; packets: number; gifts: number; amount: number; totalAmount: number }> = {};
+    list.forEach(p => {
+      Object.values(p.itemsMap).forEach(it => {
+        if (!consolidatedItems[it.name]) {
+          consolidatedItems[it.name] = {
+            name: it.name,
+            cartons: 0,
+            packets: 0,
+            gifts: 0,
+            amount: 0,
+            totalAmount: 0
+          };
+        }
+        consolidatedItems[it.name].cartons += it.cartons;
+        consolidatedItems[it.name].packets += it.packets;
+        consolidatedItems[it.name].gifts += it.gifts;
+        consolidatedItems[it.name].amount += it.totalPrice;
+        consolidatedItems[it.name].totalAmount += it.totalPrice;
+      });
+    });
+
+    const sortedConsolidatedItems = Object.values(consolidatedItems).sort((a, b) => (b.cartons - a.cartons) || (b.amount - a.amount));
+
+    return {
+      peopleList: list,
+      overall,
+      consolidatedItems: sortedConsolidatedItems,
+      productsBreakdown: sortedConsolidatedItems,
+      periodOrdersCount: periodOrders.length,
+      periodSalesCount: periodSales.length
+    };
+  }, [orders, sales, periodRange, reps, cashvans, analyticsRoleFilter, analyticsPersonFilter, analyticsSearchTerm]);
+
+  // Print Comprehensive Period Report
+  const handlePrintPeriodReport = () => {
+    const companySettings = getCompanySettings();
+    const repPhone = analyticsPersonFilter !== 'all' ? (
+      reps.find(r => r.name === analyticsPersonFilter)?.phone || 
+      cashvans.find(c => c.name === analyticsPersonFilter)?.phone || ''
+    ) : '';
+
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ckb">
+        <head>
+          <meta charset="utf-8" />
+          <title>ڕاپۆرتی فرۆش و حسابات - ${periodRange.title}</title>
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; color: #0f172a; margin: 0; padding: 10px; font-size: 12px; }
+            .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 15px; }
+            .brand-title { margin: 0; font-size: 26px; font-weight: 900; color: #0f172a; }
+            .brand-sub { font-size: 13px; font-weight: 800; color: #0284c7; margin-top: 2px; }
+            .report-badge { display: inline-block; padding: 4px 12px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; font-weight: 800; font-size: 12px; margin-top: 5px; }
+            .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+            .kpi-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; text-align: center; }
+            .kpi-val { font-size: 16px; font-weight: 900; color: #0f172a; font-family: monospace; }
+            .kpi-lbl { font-size: 11px; font-weight: 700; color: #64748b; margin-top: 2px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+            th { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px 6px; font-size: 11px; font-weight: 800; color: #334155; }
+            td { border: 1px solid #cbd5e1; padding: 7px 6px; font-size: 11px; text-align: center; }
+            .td-right { text-align: right; font-weight: bold; }
+            .highlight { background: #eff6ff; font-weight: 900; }
+            .signatures { display: flex; justify-content: space-between; margin-top: 30px; padding: 0 30px; page-break-inside: avoid; }
+            .sig-box { text-align: center; font-weight: bold; font-size: 12px; }
+            .sig-line { width: 150px; border-bottom: 1px dashed #64748b; margin-top: 45px; }
+            @media print {
+              body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div style="width: 140px; text-align: right;">
+              <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 60px; max-width: 120px; object-fit: contain;" onerror="this.style.display='none'" />
+            </div>
+            <div style="flex: 1; text-align: center;">
+              <h1 class="brand-title">کۆمپانیای RF</h1>
+              <div class="brand-sub">بریکاری فەرمی TAM TAM</div>
+              <div style="font-size: 14px; font-weight: 900; color: #0f172a; margin-top: 4px;">ڕاپۆرتی فرۆش و حساباتی مەندووب و کاشڤان</div>
+              <div class="report-badge">${periodRange.title}: ${periodRange.subtitle}</div>
+              ${analyticsPersonFilter !== 'all' ? `<div style="font-weight: 800; color: #4338ca; margin-top: 3px;">ناوی دەستنیشانکراو: ${analyticsPersonFilter} ${repPhone ? `(${repPhone})` : ''}</div>` : ''}
+            </div>
+            <div style="width: 140px; text-align: left; font-size: 11px; color: #64748b; font-weight: 700;">
+              <div>ژ. کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
+              <div style="margin-top: 3px;">بەرواری چاپ: <span dir="ltr">${format(new Date(), 'yyyy/MM/dd HH:mm')}</span></div>
+            </div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-box" style="border-top: 3px solid #4f46e5;">
+              <div class="kpi-val" style="color: #4338ca;">${analyticsData.overall.cartons.toLocaleString()} کارتۆن</div>
+              <div class="kpi-lbl">کۆی کارتۆنی فرۆشراو</div>
+            </div>
+            <div class="kpi-box" style="border-top: 3px solid #16a34a;">
+              <div class="kpi-val" style="color: #15803d;" dir="ltr">${analyticsData.overall.amount.toLocaleString()} د.ع</div>
+              <div class="kpi-lbl">کۆی بڕ بە پارە</div>
+            </div>
+            <div class="kpi-box" style="border-top: 3px solid #0284c7;">
+              <div class="kpi-val" style="color: #0369a1;" dir="ltr">${analyticsData.overall.cash.toLocaleString()} د.ع</div>
+              <div class="kpi-lbl">کۆی نەقد</div>
+            </div>
+            <div class="kpi-box" style="border-top: 3px solid #d97706;">
+              <div class="kpi-val" style="color: #b45309;" dir="ltr">${analyticsData.overall.debt.toLocaleString()} د.ع</div>
+              <div class="kpi-lbl">کۆی قەرز</div>
+            </div>
+          </div>
+
+          <div style="font-size: 13px; font-weight: 900; margin-bottom: 6px; color: #1e293b;">
+            خشتەی ئاماری فرۆشی مەندووب و کاشڤانەکان (${analyticsData.peopleList.length} کەس)
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30px;">#</th>
+                <th>ناو</th>
+                <th>ڕۆڵ</th>
+                <th>کارتۆنی فرۆشراو</th>
+                <th>پاکەت</th>
+                <th>هەدیە</th>
+                <th>فرۆشی نەقد</th>
+                <th>فرۆشی قەرز</th>
+                <th>کۆی بڕ بە پارە</th>
+                <th>ژ. وەسڵ</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${analyticsData.peopleList.map((p, idx) => `
+                <tr>
+                  <td>${idx + 1}</td>
+                  <td class="td-right">${p.name}</td>
+                  <td>${p.role === 'rep' ? 'مەندووب' : 'کاشڤان'}</td>
+                  <td class="highlight" style="font-weight: 900; color: #4338ca;">${p.totalCartons.toLocaleString()} کارتۆن</td>
+                  <td>${p.totalPackets > 0 ? `${p.totalPackets.toLocaleString()} پاکەت` : '-'}</td>
+                  <td>${p.totalGifts > 0 ? p.totalGifts : '-'}</td>
+                  <td dir="ltr" style="font-family: monospace;">${p.cashAmount.toLocaleString()} د.ع</td>
+                  <td dir="ltr" style="font-family: monospace;">${p.debtAmount.toLocaleString()} د.ع</td>
+                  <td class="highlight" dir="ltr" style="font-weight: 900; font-family: monospace; color: #15803d;">${p.totalAmount.toLocaleString()} د.ع</td>
+                  <td>${p.invoicesCount}</td>
+                </tr>
+              `).join('')}
+              <tr style="background: #e2e8f0; font-weight: 900;">
+                <td colspan="3">کۆی گشتی</td>
+                <td style="color: #4338ca;">${analyticsData.overall.cartons.toLocaleString()} کارتۆن</td>
+                <td>${analyticsData.overall.packets > 0 ? `${analyticsData.overall.packets.toLocaleString()} پاکەت` : '-'}</td>
+                <td>${analyticsData.overall.gifts}</td>
+                <td dir="ltr" style="font-family: monospace;">${analyticsData.overall.cash.toLocaleString()} د.ع</td>
+                <td dir="ltr" style="font-family: monospace;">${analyticsData.overall.debt.toLocaleString()} د.ع</td>
+                <td dir="ltr" style="font-family: monospace; color: #15803d;">${analyticsData.overall.amount.toLocaleString()} د.ع</td>
+                <td>${analyticsData.overall.invoices}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          ${analyticsData.consolidatedItems.length > 0 ? `
+            <div style="font-size: 13px; font-weight: 900; margin: 15px 0 6px 0; color: #1e293b;">
+              کۆی کاڵا فرۆشراوەکان بەپێی کارتۆن لەم مەودایەدا (${analyticsData.consolidatedItems.length} کاڵا)
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 30px;">#</th>
+                  <th>ناوی کاڵا</th>
+                  <th>کارتۆنی فرۆشراو</th>
+                  <th>پاکەت</th>
+                  <th>هەدیە</th>
+                  <th>کۆی بڕ بە پارە</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${analyticsData.consolidatedItems.slice(0, 40).map((it, idx) => `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td class="td-right">${it.name}</td>
+                    <td style="font-weight: bold; color: #4338ca;">${it.cartons.toLocaleString()} کارتۆن</td>
+                    <td>${it.packets > 0 ? `${it.packets.toLocaleString()} پاکەت` : '-'}</td>
+                    <td>${it.gifts > 0 ? it.gifts : '-'}</td>
+                    <td dir="ltr" style="font-weight: bold; font-family: monospace;">${it.amount.toLocaleString()} د.ع</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : ''}
+
+          <div class="signatures">
+            <div class="sig-box">
+              <div>لێپرسراوی ژمێریاری</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>بەڕێوەبەری فرۆش</div>
+              <div class="sig-line"></div>
+            </div>
+            ${analyticsPersonFilter !== 'all' ? `
+              <div class="sig-box">
+                <div>واژووی ${analyticsPersonFilter}</div>
+                <div class="sig-line"></div>
+              </div>
+            ` : ''}
+          </div>
+
+          <script>
+            window.onload = () => window.print();
+          </script>
+        </body>
+      </html>
+    `;
+
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+    }
+  };
+
+  // Print Single Person Report
+  const handlePrintSinglePersonReport = (person: any) => {
+    const companySettings = getCompanySettings();
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ckb">
+        <head>
+          <meta charset="utf-8" />
+          <title>ڕاپۆرتی فرۆشی ${person.name} - ${periodRange.title}</title>
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; color: #0f172a; margin: 0; padding: 10px; font-size: 12px; }
+            .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 15px; }
+            .brand-title { margin: 0; font-size: 26px; font-weight: 900; color: #0f172a; }
+            .brand-sub { font-size: 13px; font-weight: 800; color: #0284c7; margin-top: 2px; }
+            .report-badge { display: inline-block; padding: 4px 12px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; font-weight: 800; font-size: 12px; margin-top: 5px; }
+            .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+            .kpi-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; text-align: center; }
+            .kpi-val { font-size: 16px; font-weight: 900; color: #0f172a; font-family: monospace; }
+            .kpi-lbl { font-size: 11px; font-weight: 700; color: #64748b; margin-top: 2px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+            th { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px 6px; font-size: 11px; font-weight: 800; color: #334155; }
+            td { border: 1px solid #cbd5e1; padding: 7px 6px; font-size: 11px; text-align: center; }
+            .td-right { text-align: right; font-weight: bold; }
+            .signatures { display: flex; justify-content: space-between; margin-top: 30px; padding: 0 30px; page-break-inside: avoid; }
+            .sig-box { text-align: center; font-weight: bold; font-size: 12px; }
+            .sig-line { width: 150px; border-bottom: 1px dashed #64748b; margin-top: 45px; }
+            @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div style="width: 140px; text-align: right;">
+              <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 60px; max-width: 120px; object-fit: contain;" onerror="this.style.display='none'" />
+            </div>
+            <div style="flex: 1; text-align: center;">
+              <h1 class="brand-title">کۆمپانیای RF</h1>
+              <div class="brand-sub">بریکاری فەرمی TAM TAM</div>
+              <div style="font-size: 15px; font-weight: 900; color: #0f172a; margin-top: 4px;">
+                ڕاپۆرتی فرۆش و حساباتی ${person.role === 'rep' ? 'مەندووب' : 'کاشڤان'}: ${person.name}
+              </div>
+              <div class="report-badge">${periodRange.title}: ${periodRange.subtitle}</div>
+              ${person.phone ? `<div style="font-size: 11px; color: #475569; margin-top: 2px;">ژمارەی پەیوەندی: <span dir="ltr">${person.phone}</span></div>` : ''}
+            </div>
+            <div style="width: 140px; text-align: left; font-size: 11px; color: #64748b; font-weight: 700;">
+              <div>ژ. کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
+              <div style="margin-top: 3px;">بەروار: <span dir="ltr">${format(new Date(), 'yyyy/MM/dd HH:mm')}</span></div>
+            </div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-box" style="border-top: 3px solid #4f46e5;">
+              <div class="kpi-val" style="color: #4338ca;">${person.totalCartons.toLocaleString()} کارتۆن</div>
+              <div class="kpi-lbl">کۆی کارتۆنی فرۆشراو</div>
+            </div>
+            <div class="kpi-box" style="border-top: 3px solid #16a34a;">
+              <div class="kpi-val" style="color: #15803d;" dir="ltr">${person.totalAmount.toLocaleString()} د.ع</div>
+              <div class="kpi-lbl">کۆی بڕ بە پارە</div>
+            </div>
+            <div class="kpi-box" style="border-top: 3px solid #0284c7;">
+              <div class="kpi-val" style="color: #0369a1;" dir="ltr">${person.cashAmount.toLocaleString()} د.ع</div>
+              <div class="kpi-lbl">فرۆشی نەقد</div>
+            </div>
+            <div class="kpi-box" style="border-top: 3px solid #d97706;">
+              <div class="kpi-val" style="color: #b45309;" dir="ltr">${person.debtAmount.toLocaleString()} د.ع</div>
+              <div class="kpi-lbl">فرۆشی قەرز</div>
+            </div>
+          </div>
+
+          <div style="font-size: 13px; font-weight: 900; margin-bottom: 6px; color: #1e293b;">
+            لیستی کاڵا فرۆشراوەکان بەپێی کارتۆن
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30px;">#</th>
+                <th>ناوی کاڵا</th>
+                <th>کارتۆنی فرۆشراو</th>
+                <th>پاکەت</th>
+                <th>هەدیە</th>
+                <th>کۆی پارە</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${Object.values(person.itemsMap).map((it: any, idx: number) => `
+                <tr>
+                  <td>${idx + 1}</td>
+                  <td class="td-right">${it.name}</td>
+                  <td style="font-weight: bold; color: #4338ca;">${it.cartons.toLocaleString()} کارتۆن</td>
+                  <td>${it.packets > 0 ? `${it.packets.toLocaleString()} پاکەت` : '-'}</td>
+                  <td>${it.gifts > 0 ? it.gifts : '-'}</td>
+                  <td dir="ltr" style="font-weight: bold; font-family: monospace;">${it.totalPrice.toLocaleString()} د.ع</td>
+                </tr>
+              `).join('')}
+              <tr style="background: #f1f5f9; font-weight: 900;">
+                <td colspan="2">کۆی گشتی کاڵاکان</td>
+                <td style="color: #4338ca;">${person.totalCartons.toLocaleString()} کارتۆن</td>
+                <td>${person.totalPackets > 0 ? `${person.totalPackets.toLocaleString()} پاکەت` : '-'}</td>
+                <td>${person.totalGifts}</td>
+                <td dir="ltr" style="font-family: monospace; color: #15803d;">${person.totalAmount.toLocaleString()} د.ع</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style="font-size: 13px; font-weight: 900; margin: 15px 0 6px 0; color: #1e293b;">
+            لیستی وەسڵەکان (${person.invoices.length} وەسڵ)
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30px;">#</th>
+                <th>ژ. وەسڵ</th>
+                <th>مارکێت</th>
+                <th>بەروار و کات</th>
+                <th>کارتۆن</th>
+                <th>جۆری پارەدان</th>
+                <th>بڕی پارە</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${person.invoices.map((inv: any, idx: number) => `
+                <tr>
+                  <td>${idx + 1}</td>
+                  <td dir="ltr" style="font-family: monospace; font-weight: bold;">#${inv.invoiceNo}</td>
+                  <td class="td-right">${inv.marketName}</td>
+                  <td dir="ltr" style="font-size: 10px;">${format(inv.date, 'yyyy/MM/dd HH:mm')}</td>
+                  <td style="font-weight: bold; color: #4338ca;">${inv.cartons} کارتۆن</td>
+                  <td>${inv.paymentType === 'debt' ? '<span style="color: #b45309; font-weight: bold;">قەرز</span>' : '<span style="color: #0369a1; font-weight: bold;">نەقد</span>'}</td>
+                  <td dir="ltr" style="font-family: monospace; font-weight: bold;">${inv.amount.toLocaleString()} د.ع</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+
+          <div class="signatures">
+            <div class="sig-box">
+              <div>لێپرسراوی ژمێریاری</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>واژووی ${person.name}</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+
+          <script>
+            window.onload = () => window.print();
+          </script>
+        </body>
+      </html>
+    `;
+
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header & Overview Bar */}
@@ -1247,6 +2298,18 @@ export default function AdminCashvanView() {
         </button>
 
         <button
+          onClick={() => setActiveTab('period_stats')}
+          className={`py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+            activeTab === 'period_stats' 
+              ? 'bg-indigo-600 text-white shadow-sm' 
+              : 'text-slate-700 bg-indigo-50/50 hover:bg-indigo-100/70 hover:text-indigo-900'
+          }`}
+        >
+          <BarChart3 size={18} className="text-indigo-600" />
+          <span>ئاماری فرۆش (ڕۆژانە، هەفتانە، مانگانە)</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('transfers')}
           className={`flex-1 py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
             activeTab === 'transfers' 
@@ -1269,7 +2332,7 @@ export default function AdminCashvanView() {
           <User size={18} />
           <span>هەژمارەکانی کاشڤان</span>
           <span className="text-[11px] px-2 py-0.5 rounded-full font-mono bg-indigo-100 text-indigo-800">
-            {cashvans.length}
+            {unifiedUsers.length}
           </span>
         </button>
 
@@ -1355,9 +2418,9 @@ export default function AdminCashvanView() {
                     onChange={(e) => setSelectedRepFilter(e.target.value)}
                     className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
                   >
-                    <option value="all">سەرجەم مەندووبەکان ({reps.length})</option>
-                    {reps.map(r => (
-                      <option key={`rep-filter-${r.id}`} value={r.name}>{r.name}</option>
+                    <option value="all">سەرجەم مەندووبەکان ({unifiedUsers.length})</option>
+                    {unifiedUsers.map(r => (
+                      <option key={`rep-filter-${r.name}`} value={r.name}>{r.name}</option>
                     ))}
                   </select>
                 </div>
@@ -1387,6 +2450,42 @@ export default function AdminCashvanView() {
                     }`}
                   >
                     تەسفییەکراو ({repCompletedOrders.length})
+                  </button>
+                </div>
+
+                {/* Period Filter for Reps */}
+                <div className="flex items-center gap-1 bg-indigo-50/80 p-1 rounded-xl border border-indigo-100">
+                  <button
+                    onClick={() => setRepTimeFilter('all')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      repTimeFilter === 'all' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    هەموو کات
+                  </button>
+                  <button
+                    onClick={() => setRepTimeFilter('today')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      repTimeFilter === 'today' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    ئەمڕۆ
+                  </button>
+                  <button
+                    onClick={() => setRepTimeFilter('this_week')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      repTimeFilter === 'this_week' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    ئەم هەفتەیە
+                  </button>
+                  <button
+                    onClick={() => setRepTimeFilter('this_month')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      repTimeFilter === 'this_month' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    ئەم مانگە
                   </button>
                 </div>
               </div>
@@ -1447,6 +2546,16 @@ export default function AdminCashvanView() {
                         <td className="p-4">
                           <div className="font-bold text-indigo-600 font-mono" dir="ltr">
                             {(order.totalAmount || 0).toLocaleString()} د.ع
+                          </div>
+                          <div className="text-[11px] font-bold text-slate-500 mt-0.5 flex items-center gap-1">
+                            <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                              {(order.items || []).reduce((s, it) => s + (it.unit === 'packet' ? 0 : (Number(it.quantity) || 0)), 0)} کارتۆن
+                            </span>
+                            {(order.items || []).some(it => it.unit === 'packet') && (
+                              <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded text-[10px]">
+                                + {(order.items || []).reduce((s, it) => s + (it.unit === 'packet' ? (Number(it.quantity) || 0) : 0), 0)} پاکەت
+                              </span>
+                            )}
                           </div>
                           {giftCount > 0 && (
                             <span className="inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 border border-yellow-300 text-[11px] font-bold px-2 py-0.5 rounded-md mt-1">
@@ -1600,9 +2709,9 @@ export default function AdminCashvanView() {
                     onChange={(e) => setSelectedCashvanFilter(e.target.value)}
                     className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
                   >
-                    <option value="all">سەرجەم کاشڤانەکان ({cashvans.length})</option>
-                    {cashvans.map(c => (
-                      <option key={`cv-filter-${c.id}`} value={c.name}>{c.name}</option>
+                    <option value="all">سەرجەم کاشڤانەکان ({unifiedUsers.length})</option>
+                    {unifiedUsers.map(c => (
+                      <option key={`cv-filter-${c.name}`} value={c.name}>{c.name}</option>
                     ))}
                   </select>
                 </div>
@@ -1632,6 +2741,42 @@ export default function AdminCashvanView() {
                     }`}
                   >
                     چووەتە حیسابات ({cvAccountedSales.length})
+                  </button>
+                </div>
+
+                {/* Period Filter for Cashvans */}
+                <div className="flex items-center gap-1 bg-indigo-50/80 p-1 rounded-xl border border-indigo-100">
+                  <button
+                    onClick={() => setCvTimeFilter('all')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      cvTimeFilter === 'all' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    هەموو کات
+                  </button>
+                  <button
+                    onClick={() => setCvTimeFilter('today')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      cvTimeFilter === 'today' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    ئەمڕۆ
+                  </button>
+                  <button
+                    onClick={() => setCvTimeFilter('this_week')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      cvTimeFilter === 'this_week' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    ئەم هەفتەیە
+                  </button>
+                  <button
+                    onClick={() => setCvTimeFilter('this_month')}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                      cvTimeFilter === 'this_month' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-indigo-700 hover:bg-indigo-100/60'
+                    }`}
+                  >
+                    ئەم مانگە
                   </button>
                 </div>
               </div>
@@ -1691,7 +2836,17 @@ export default function AdminCashvanView() {
                         </td>
                         <td className="p-4">
                           <div className="font-bold text-indigo-600 font-mono" dir="ltr">
-                            {sale.totalAmount.toLocaleString()} د.ع
+                            {(sale.totalAmount || 0).toLocaleString()} د.ع
+                          </div>
+                          <div className="text-[11px] font-bold text-slate-500 mt-0.5 flex items-center gap-1">
+                            <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                              {(sale.items || []).reduce((s, it) => s + (it.unit === 'packet' ? 0 : (Number(it.quantity) || 0)), 0)} کارتۆن
+                            </span>
+                            {(sale.items || []).some(it => it.unit === 'packet') && (
+                              <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded text-[10px]">
+                                + {(sale.items || []).reduce((s, it) => s + (it.unit === 'packet' ? (Number(it.quantity) || 0) : 0), 0)} پاکەت
+                              </span>
+                            )}
                           </div>
                           {giftCount > 0 && (
                             <span className="inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 border border-yellow-300 text-[11px] font-bold px-2 py-0.5 rounded-md mt-1">
@@ -1788,6 +2943,570 @@ export default function AdminCashvanView() {
       )}
 
       {/* ========================================================================= */}
+      {/* TAB: PERIOD ANALYTICS FOR SALES REPS & CASHVANS                           */}
+      {/* ========================================================================= */}
+      {activeTab === 'period_stats' && (
+        <div className="space-y-6">
+          {/* Header Card */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <BarChart3 size={24} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-black text-slate-900">
+                    ئامار و حساباتی فرۆش (ڕۆژانە، هەفتانە، مانگانە)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    بەپێی مەودای کات فلان مەندووب یان کاشڤان چەند کارتۆن و بڕی چەندی بە پارە فرۆشتووە
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={handlePrintPeriodReport}
+              className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm transition self-stretch md:self-auto justify-center"
+            >
+              <Printer size={16} />
+              <span>چاپکردنی تەواوی ڕاپۆرت (PDF)</span>
+            </button>
+          </div>
+
+          {/* Period Selector & Controls Card */}
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            {/* Top Period Selector Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl">
+                <button
+                  onClick={() => setPeriodType('daily')}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                    periodType === 'daily'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Calendar size={14} />
+                  <span>ڕۆژانە (Daily)</span>
+                </button>
+                <button
+                  onClick={() => setPeriodType('weekly')}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                    periodType === 'weekly'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <TrendingUp size={14} />
+                  <span>هەفتانە (Weekly)</span>
+                </button>
+                <button
+                  onClick={() => setPeriodType('monthly')}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                    periodType === 'monthly'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <BarChart3 size={14} />
+                  <span>مانگانە (Monthly)</span>
+                </button>
+                <button
+                  onClick={() => setPeriodType('custom')}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                    periodType === 'custom'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Clock size={14} />
+                  <span>دیاریکراو (Custom)</span>
+                </button>
+              </div>
+
+              {/* Range Active Indicator Badge */}
+              <div className="flex items-center gap-2 bg-indigo-50 text-indigo-700 px-3.5 py-1.5 rounded-xl border border-indigo-100 text-xs font-bold">
+                <Calendar size={14} className="text-indigo-500" />
+                <span>{periodRange.title}:</span>
+                <span className="font-mono text-indigo-900" dir="ltr">{periodRange.subtitle}</span>
+              </div>
+            </div>
+
+            {/* Date Inputs based on Period */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1 items-end">
+              {periodType === 'daily' && (
+                <div className="md:col-span-1">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-700">هەڵبژاردنی بەرواری ڕۆژ *</label>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setAnalyticsDate(format(new Date(), 'yyyy-MM-dd'))}
+                        className="text-[11px] font-bold text-indigo-600 hover:underline px-1.5 py-0.5 bg-indigo-50 rounded"
+                      >
+                        ئەمڕۆ
+                      </button>
+                      <button
+                        onClick={() => setAnalyticsDate(format(subDays(new Date(), 1), 'yyyy-MM-dd'))}
+                        className="text-[11px] font-bold text-slate-600 hover:underline px-1.5 py-0.5 bg-slate-100 rounded"
+                      >
+                        دوێنێ
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="date"
+                    value={analyticsDate}
+                    onChange={(e) => setAnalyticsDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+              )}
+
+              {periodType === 'weekly' && (
+                <div className="md:col-span-1">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-700">هەڵبژاردنی هەفتە (ڕۆژێک لە هەفتەکە دیاری بکە) *</label>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setAnalyticsDate(format(new Date(), 'yyyy-MM-dd'))}
+                        className="text-[11px] font-bold text-indigo-600 hover:underline px-1.5 py-0.5 bg-indigo-50 rounded"
+                      >
+                        ئەم هەفتەیە
+                      </button>
+                      <button
+                        onClick={() => setAnalyticsDate(format(subWeeks(new Date(), 1), 'yyyy-MM-dd'))}
+                        className="text-[11px] font-bold text-slate-600 hover:underline px-1.5 py-0.5 bg-slate-100 rounded"
+                      >
+                        هەفتەی پێشوو
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="date"
+                    value={analyticsDate}
+                    onChange={(e) => setAnalyticsDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+              )}
+
+              {periodType === 'monthly' && (
+                <div className="md:col-span-1">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-700">هەڵبژاردنی مانگ *</label>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setAnalyticsMonth(format(new Date(), 'yyyy-MM'))}
+                        className="text-[11px] font-bold text-indigo-600 hover:underline px-1.5 py-0.5 bg-indigo-50 rounded"
+                      >
+                        ئەم مانگە
+                      </button>
+                      <button
+                        onClick={() => setAnalyticsMonth(format(subMonths(new Date(), 1), 'yyyy-MM'))}
+                        className="text-[11px] font-bold text-slate-600 hover:underline px-1.5 py-0.5 bg-slate-100 rounded"
+                      >
+                        مانگی پێشوو
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="month"
+                    value={analyticsMonth}
+                    onChange={(e) => setAnalyticsMonth(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+              )}
+
+              {periodType === 'custom' && (
+                <div className="md:col-span-2 grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">لە بەرواری (From) *</label>
+                    <input
+                      type="date"
+                      value={customStartDate}
+                      onChange={(e) => setCustomStartDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">تا بەرواری (To) *</label>
+                    <input
+                      type="date"
+                      value={customEndDate}
+                      onChange={(e) => setCustomEndDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Person & Role Filter */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  دیاریکردنی کەس (فلان مەندووب / کاشڤان)
+                </label>
+                <select
+                  value={analyticsPersonFilter}
+                  onChange={(e) => setAnalyticsPersonFilter(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="all">سەرجەم مەندووب و کاشڤانەکان ({unifiedUsers.length})</option>
+                  {unifiedUsers.map(u => (
+                    <option key={`analytics-user-${u.name}`} value={u.name}>👤 {u.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Role Quick Filter and Search */}
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-slate-700 mb-1">جۆری ڕۆڵ</label>
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+                    <button
+                      onClick={() => setAnalyticsRoleFilter('all')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${
+                        analyticsRoleFilter === 'all' ? 'bg-white text-indigo-600 shadow-2xs' : 'text-slate-600'
+                      }`}
+                    >
+                      هەموو
+                    </button>
+                    <button
+                      onClick={() => setAnalyticsRoleFilter('rep')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${
+                        analyticsRoleFilter === 'rep' ? 'bg-white text-indigo-600 shadow-2xs' : 'text-slate-600'
+                      }`}
+                    >
+                      مەندووب
+                    </button>
+                    <button
+                      onClick={() => setAnalyticsRoleFilter('cashvan')}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${
+                        analyticsRoleFilter === 'cashvan' ? 'bg-white text-indigo-600 shadow-2xs' : 'text-slate-600'
+                      }`}
+                    >
+                      کاشڤان
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-slate-700 mb-1">گەڕان</label>
+                  <div className="relative">
+                    <Search className="absolute right-2.5 top-2.5 text-slate-400" size={14} />
+                    <input
+                      type="text"
+                      placeholder="گەڕان..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full pl-2.5 pr-8 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 4 Summary KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Card 1: Cartons */}
+            <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm relative overflow-hidden">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-indigo-700">کۆی کارتۆنی فرۆشراو</span>
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <Package size={20} />
+                </div>
+              </div>
+              <div className="text-2xl font-black text-indigo-900 font-mono" dir="ltr">
+                {(analyticsData.overall.cartons || 0).toLocaleString()}
+                <span className="text-xs font-sans mr-1 font-bold text-indigo-600"> کارتۆن</span>
+              </div>
+              <div className="text-[11px] font-bold text-indigo-600/80 mt-1 flex items-center justify-between">
+                <span>
+                  {(analyticsData.overall.packets || 0) > 0 ? `+ ${(analyticsData.overall.packets || 0).toLocaleString()} پاکەت` : 'سەرجەم بەرهەمەکان'}
+                </span>
+                {(analyticsData.overall.gifts || 0) > 0 && (
+                  <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">
+                    {analyticsData.overall.gifts} هەدیە
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Card 2: Total IQD */}
+            <div className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-sm relative overflow-hidden">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-emerald-700">کۆی گشتی فرۆش بە پارە</span>
+                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
+                  <DollarSign size={20} />
+                </div>
+              </div>
+              <div className="text-2xl font-black text-emerald-700 font-mono" dir="ltr">
+                {(analyticsData.overall.amount || 0).toLocaleString()}
+                <span className="text-xs font-sans mr-1 font-bold text-emerald-600"> د.ع</span>
+              </div>
+              <div className="text-[11px] font-bold text-emerald-600/80 mt-1">
+                کۆی نەقد و قەرزی {periodRange.title}
+              </div>
+            </div>
+
+            {/* Card 3: Cash */}
+            <div className="bg-white p-5 rounded-2xl border border-sky-100 shadow-sm relative overflow-hidden">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-sky-700">فرۆشی نەقد (کاش)</span>
+                <div className="p-2 bg-sky-50 text-sky-600 rounded-xl">
+                  <CheckCircle2 size={20} />
+                </div>
+              </div>
+              <div className="text-2xl font-black text-sky-700 font-mono" dir="ltr">
+                {(analyticsData.overall.cash || 0).toLocaleString()}
+                <span className="text-xs font-sans mr-1 font-bold text-sky-600"> د.ع</span>
+              </div>
+              <div className="text-[11px] font-bold text-sky-600/80 mt-1">
+                پارەی نەقدی ڕادەستکراو
+              </div>
+            </div>
+
+            {/* Card 4: Debt */}
+            <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-sm relative overflow-hidden">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-amber-700">فرۆشی بە قەرز</span>
+                <div className="p-2 bg-amber-50 text-amber-600 rounded-xl">
+                  <Clock size={20} />
+                </div>
+              </div>
+              <div className="text-2xl font-black text-amber-700 font-mono" dir="ltr">
+                {(analyticsData.overall.debt || 0).toLocaleString()}
+                <span className="text-xs font-sans mr-1 font-bold text-amber-600"> د.ع</span>
+              </div>
+              <div className="text-[11px] font-bold text-amber-600/80 mt-1">
+                قەرزی نوێی ئەم مەودایە
+              </div>
+            </div>
+          </div>
+
+          {/* Main Comparison Table: Performance of Sales Reps and Cashvans */}
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <Users size={18} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">
+                    خشتەی فرۆشی فلان مەندووب و کاشڤان بەپێی کارتۆن و بڕی پارە
+                  </h3>
+                  <div className="text-xs text-slate-500">
+                    مەودای کات: <span className="font-bold text-slate-700">{periodRange.title}</span> ({periodRange.subtitle})
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-xs font-bold text-slate-600 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                ژمارەی کارمەندان: {analyticsData.peopleList.length} کەس
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-right">
+                <thead className="bg-slate-50 text-slate-600 text-xs uppercase border-b border-slate-100">
+                  <tr>
+                    <th className="p-4 text-center w-12">#</th>
+                    <th className="p-4">ناوی مەندووب / کاشڤان</th>
+                    <th className="p-4">ڕۆڵ</th>
+                    <th className="p-4 bg-indigo-50/50 text-indigo-950">ژمارەی کارتۆنی فرۆشراو</th>
+                    <th className="p-4 bg-emerald-50/50 text-emerald-950">کۆی بڕ بە پارە (د.ع)</th>
+                    <th className="p-4">فرۆشی نەقد</th>
+                    <th className="p-4">فرۆشی قەرز</th>
+                    <th className="p-4 text-center">وەسڵەکان</th>
+                    <th className="p-4 text-center">کردارەکان</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs font-bold">
+                  {analyticsData.peopleList.map((person, idx) => (
+                    <tr key={`person-stat-${person.id}-${idx}`} className="hover:bg-slate-50/80 transition">
+                      <td className="p-4 text-center text-slate-400 font-mono">
+                        {idx + 1}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`p-2 rounded-xl ${
+                            person.role === 'rep' ? 'bg-indigo-50 text-indigo-600' : 'bg-amber-50 text-amber-600'
+                          }`}>
+                            {person.role === 'rep' ? <ShoppingCart size={16} /> : <Truck size={16} />}
+                          </div>
+                          <div>
+                            <div className="text-slate-900 font-black text-sm">{person.name}</div>
+                            {person.phone && (
+                              <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1 mt-0.5" dir="ltr">
+                                <Phone size={10} />
+                                <span>{person.phone}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
+                          person.role === 'rep' 
+                            ? 'bg-indigo-100 text-indigo-800' 
+                            : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {person.role === 'rep' ? 'مەندووب (تەڵەبیە)' : 'کاشڤان (ڕاستەوخۆ)'}
+                        </span>
+                      </td>
+                      {/* Cartons Sold */}
+                      <td className="p-4 bg-indigo-50/30">
+                        <div className="inline-flex items-baseline gap-1.5 bg-indigo-100/70 text-indigo-900 px-3 py-1.5 rounded-xl border border-indigo-200">
+                          <span className="text-base font-black font-mono">
+                            {((person.totalCartons ?? person.cartons) || 0).toLocaleString()}
+                          </span>
+                          <span className="text-xs font-bold text-indigo-700">کارتۆن</span>
+                        </div>
+                        {(person.totalPackets ?? person.packets ?? 0) > 0 && (
+                          <div className="text-[11px] text-slate-500 font-mono mt-1">
+                            + {(person.totalPackets ?? person.packets ?? 0).toLocaleString()} پاکەت
+                          </div>
+                        )}
+                        {(person.totalGifts ?? person.gifts ?? 0) > 0 && (
+                          <div className="text-[11px] text-amber-700 font-bold mt-0.5">
+                            🎁 {person.totalGifts ?? person.gifts} هەدیە
+                          </div>
+                        )}
+                      </td>
+                      {/* Total Amount IQD */}
+                      <td className="p-4 bg-emerald-50/30">
+                        <div className="text-base font-black text-emerald-700 font-mono" dir="ltr">
+                          {((person.totalAmount ?? person.amount) || 0).toLocaleString()} د.ع
+                        </div>
+                      </td>
+                      {/* Cash Amount */}
+                      <td className="p-4 text-sky-700 font-mono" dir="ltr">
+                        {((person.cashAmount ?? person.cash) || 0).toLocaleString()} د.ع
+                      </td>
+                      {/* Debt Amount */}
+                      <td className="p-4 text-amber-700 font-mono" dir="ltr">
+                        {((person.debtAmount ?? person.debt) || 0).toLocaleString()} د.ع
+                      </td>
+                      {/* Invoices */}
+                      <td className="p-4 text-center">
+                        <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg font-mono text-xs font-bold">
+                          {person.invoicesCount} وەسڵ
+                        </span>
+                      </td>
+                      {/* Actions */}
+                      <td className="p-4 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => setInspectingPerson(person)}
+                            className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg transition flex items-center gap-1 text-xs"
+                            title="بینینی وردەکاری بەرهەمە فرۆشراوەکان"
+                          >
+                            <Eye size={14} />
+                            <span>وردەکاری بەرهەم</span>
+                          </button>
+                          <button
+                            onClick={() => handlePrintSinglePersonReport(person)}
+                            className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition"
+                            title="چاپکردنی کەشفی ئەم کەسە"
+                          >
+                            <Printer size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {analyticsData.peopleList.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="text-center py-12 text-slate-400">
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <BarChart3 size={36} className="text-slate-300" />
+                          <span className="font-bold">هیچ داتایەکی فرۆشتن لەم مەودایەدا ({periodRange.title}) نەدۆزرایەوە</span>
+                          <span className="text-xs text-slate-400">دەتوانیت بەروار یان کەسی هەڵبژێردراو بگۆڕیت</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Consolidated Products Breakdown in Selected Period */}
+          {analyticsData.productsBreakdown.length > 0 && (
+            <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
+                    <Package size={18} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm">
+                      کۆی کاڵا فرۆشراوەکان بەپێی کارتۆن لەم مەودایەدا ({periodRange.title})
+                    </h3>
+                    <div className="text-xs text-slate-500">
+                      پوختەی سەرجەم بەرهەمەکانی فرۆشراون لەلایەن مەندووب و کاشڤانەکان لەم ماوەیەدا
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-xl border border-indigo-100">
+                  کۆی جۆری کاڵاکان: {analyticsData.productsBreakdown.length} جۆر
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-right">
+                  <thead className="bg-slate-50 text-slate-600 text-xs uppercase border-b border-slate-100">
+                    <tr>
+                      <th className="p-4 text-center w-12">#</th>
+                      <th className="p-4">ناوی کاڵا / بەرهەم</th>
+                      <th className="p-4 bg-indigo-50/50 text-indigo-950">ژمارەی کارتۆنی فرۆشراو</th>
+                      <th className="p-4">پاکەت (ئەگەر هەبێت)</th>
+                      <th className="p-4">هەدیە</th>
+                      <th className="p-4 bg-emerald-50/50 text-emerald-950">کۆی بەها بە پارە (د.ع)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs font-bold">
+                    {analyticsData.productsBreakdown.map((item, idx) => (
+                      <tr key={`prod-breakdown-${idx}`} className="hover:bg-slate-50/80 transition">
+                        <td className="p-4 text-center text-slate-400 font-mono">{idx + 1}</td>
+                        <td className="p-4 text-slate-900 font-bold text-sm">
+                          {item.name}
+                        </td>
+                        <td className="p-4 bg-indigo-50/30">
+                          <span className="font-mono text-base font-black text-indigo-800 bg-indigo-100/80 px-3 py-1 rounded-lg">
+                            {(item.cartons || 0).toLocaleString()} کارتۆن
+                          </span>
+                        </td>
+                        <td className="p-4 text-slate-600 font-mono">
+                          {(item.packets || 0) > 0 ? `${(item.packets || 0).toLocaleString()} پاکەت` : '-'}
+                        </td>
+                        <td className="p-4">
+                          {(item.gifts || 0) > 0 ? (
+                            <span className="px-2 py-0.5 bg-amber-50 text-amber-800 rounded font-bold border border-amber-200">
+                              🎁 {item.gifts} هەدیە
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="p-4 bg-emerald-50/30 text-emerald-700 font-mono font-black text-sm" dir="ltr">
+                          {((item.totalAmount ?? item.amount) || 0).toLocaleString()} د.ع
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
       {/* TAB 3: WAREHOUSE TRANSFERS TO CASHVAN                                     */}
       {/* ========================================================================= */}
       {activeTab === 'transfers' && (
@@ -1812,9 +3531,9 @@ export default function AdminCashvanView() {
                   onChange={(e) => setSelectedCashvanFilter(e.target.value)}
                   className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
                 >
-                  <option value="all">سەرجەم کاشڤانەکان ({cashvans.length})</option>
-                  {cashvans.map(c => (
-                    <option key={`transfer-cv-${c.id}`} value={c.name}>{c.name}</option>
+                  <option value="all">سەرجەم کاشڤانەکان ({unifiedUsers.length})</option>
+                  {unifiedUsers.map(c => (
+                    <option key={`transfer-cv-${c.name}`} value={c.name}>{c.name}</option>
                   ))}
                 </select>
               </div>
@@ -1931,17 +3650,10 @@ export default function AdminCashvanView() {
                       onChange={(e) => setDailySelectedPerson(e.target.value)}
                       className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
                     >
-                      <option value="all">سەرجەم مەندووب و کاشڤانەکان</option>
-                      <optgroup label="مەندووبەکان">
-                        {reps.map(r => (
-                          <option key={`daily-rep-${r.id}`} value={r.name}>👤 مەندووب: {r.name}</option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="کاشڤانەکان">
-                        {cashvans.map(c => (
-                          <option key={`daily-cv-${c.id}`} value={c.name}>🚚 کاشڤان: {c.name}</option>
-                        ))}
-                      </optgroup>
+                      <option value="all">سەرجەم مەندووب و کاشڤانەکان ({unifiedUsers.length})</option>
+                      {unifiedUsers.map(u => (
+                        <option key={`daily-user-${u.name}`} value={u.name}>👤 {u.name}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -1971,10 +3683,10 @@ export default function AdminCashvanView() {
             <div>
               <h2 className="font-bold text-slate-900 text-base flex items-center gap-2">
                 <Truck className="text-indigo-600" size={20} />
-                <span>هەژمار و تێپەڕەوشەی چوونەژوورەوەی کاشڤانەکان ({cashvans.length})</span>
+                <span>هەژمار و تێپەڕەوشەی چوونەژوورەوەی بەکارهێنەران (کاشڤان و مەندووب) ({unifiedUsers.length})</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                لێرە دەتوانیت ناوی بەکارهێنەر (یوزەرنەیم) و تێپەڕەوشە (پاسوۆرد) بۆ شۆفێر و کاشڤانەکان دابنێیت
+                لێرە سەرجەم ئەو بەکارهێنەرانە دەبینیت کە تۆمارکراون؛ هەم وەک مەندووب و هەم وەک کاشڤان لە سیستەمەکە کار دەکەن بە هەمان ناوی بەکارهێنەر و تێپەڕەوشە
               </p>
             </div>
 
@@ -1990,7 +3702,7 @@ export default function AdminCashvanView() {
               className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-sm"
             >
               <Truck size={16} />
-              <span>دروستکردنی هەژماری کاشڤان</span>
+              <span>دروستکردنی بەکارهێنەری نوێ</span>
             </button>
           </div>
 
@@ -2000,7 +3712,7 @@ export default function AdminCashvanView() {
               <table className="w-full text-right">
                 <thead className="bg-slate-50 text-slate-500 text-xs font-bold uppercase border-b border-slate-100">
                   <tr>
-                    <th className="px-5 py-3.5">ناوی کاشڤان</th>
+                    <th className="px-5 py-3.5">ناوی کەس / بەکارهێنەر</th>
                     <th className="px-5 py-3.5">ناوی بەکارهێنەر (Username)</th>
                     <th className="px-5 py-3.5">تێپەڕەوشە / پاسوۆرد</th>
                     <th className="px-5 py-3.5">تەلەفۆن</th>
@@ -2010,7 +3722,7 @@ export default function AdminCashvanView() {
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-slate-100">
-                  {cashvans.map((cv: any) => {
+                  {unifiedUsers.map((cv: any) => {
                     const pass = cv.accessCode || cv.password || '47953';
                     const isDisabled = cv.status === 'disabled';
 
@@ -2120,11 +3832,11 @@ export default function AdminCashvanView() {
                     );
                   })}
 
-                  {cashvans.length === 0 && (
+                  {unifiedUsers.length === 0 && (
                     <tr>
                       <td colSpan={7} className="text-center py-12 text-slate-500">
                         <Truck size={32} className="mx-auto text-slate-300 mb-2" />
-                        <p className="font-bold text-sm">هیچ کاشڤانێک تۆمار نەکراوە</p>
+                        <p className="font-bold text-sm">هیچ بەکارهێنەرێک تۆمار نەکراوە</p>
                       </td>
                     </tr>
                   )}
@@ -2629,6 +4341,217 @@ export default function AdminCashvanView() {
                   پاشگەزبوونەوە
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* DRILLDOWN MODAL: DETAILED PRODUCTS & INVOICES FOR A SINGLE PERSON         */}
+      {/* ========================================================================= */}
+      {inspectingPerson && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-2xl ${
+                  inspectingPerson.role === 'rep' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {inspectingPerson.role === 'rep' ? <ShoppingCart size={22} /> : <Truck size={22} />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-black text-slate-900">{inspectingPerson.name}</h3>
+                    <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
+                      inspectingPerson.role === 'rep' ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {inspectingPerson.role === 'rep' ? 'مەندووب' : 'کاشڤان'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 font-mono" dir="ltr">
+                    <span>{periodRange.title}: {periodRange.subtitle}</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setInspectingPerson(null)}
+                className="p-2 hover:bg-slate-200 text-slate-400 hover:text-slate-600 rounded-xl transition"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto space-y-5">
+              {/* Summary Stats Strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-indigo-50/80 p-3 rounded-2xl border border-indigo-100 text-center">
+                  <div className="text-[11px] font-bold text-indigo-700">کۆی کارتۆن</div>
+                  <div className="text-lg font-black text-indigo-900 font-mono mt-0.5">
+                    {((inspectingPerson.totalCartons ?? inspectingPerson.cartons) || 0).toLocaleString()}
+                    <span className="text-xs font-normal"> کارتۆن</span>
+                  </div>
+                  {((inspectingPerson.totalPackets ?? inspectingPerson.packets) || 0) > 0 && (
+                    <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                      + {(inspectingPerson.totalPackets ?? inspectingPerson.packets).toLocaleString()} پاکەت
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-emerald-50/80 p-3 rounded-2xl border border-emerald-100 text-center">
+                  <div className="text-[11px] font-bold text-emerald-700">کۆی گشتی بە پارە</div>
+                  <div className="text-lg font-black text-emerald-700 font-mono mt-0.5" dir="ltr">
+                    {((inspectingPerson.totalAmount ?? inspectingPerson.amount) || 0).toLocaleString()} د.ع
+                  </div>
+                </div>
+
+                <div className="bg-sky-50/80 p-3 rounded-2xl border border-sky-100 text-center">
+                  <div className="text-[11px] font-bold text-sky-700">فرۆشی نەقد</div>
+                  <div className="text-lg font-black text-sky-700 font-mono mt-0.5" dir="ltr">
+                    {((inspectingPerson.cashAmount ?? inspectingPerson.cash) || 0).toLocaleString()} د.ع
+                  </div>
+                </div>
+
+                <div className="bg-amber-50/80 p-3 rounded-2xl border border-amber-100 text-center">
+                  <div className="text-[11px] font-bold text-amber-700">فرۆشی قەرز</div>
+                  <div className="text-lg font-black text-amber-700 font-mono mt-0.5" dir="ltr">
+                    {((inspectingPerson.debtAmount ?? inspectingPerson.debt) || 0).toLocaleString()} د.ع
+                  </div>
+                </div>
+              </div>
+
+              {/* Items Breakdown Table */}
+              {(() => {
+                const breakdown = inspectingPerson.itemsBreakdown || Object.values(inspectingPerson.itemsMap || {});
+                return (
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                    <div className="bg-slate-50 p-3 border-b border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                        <Package size={15} className="text-indigo-600" />
+                        وردەکاری کاڵا فرۆشراوەکان بەپێی کارتۆن
+                      </span>
+                      <span className="text-xs font-bold text-slate-500 font-mono">
+                        {breakdown.length} جۆر کاڵا
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-60 overflow-y-auto">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-100/70 text-slate-600 uppercase border-b border-slate-200 font-bold sticky top-0">
+                          <tr>
+                            <th className="p-3">ناوی کاڵا</th>
+                            <th className="p-3 bg-indigo-50/50 text-indigo-950">کارتۆنی فرۆشراو</th>
+                            <th className="p-3">پاکەت</th>
+                            <th className="p-3">هەدیە</th>
+                            <th className="p-3 bg-emerald-50/50 text-emerald-950">کۆی بڕ (د.ع)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-bold">
+                          {breakdown.map((item: any, i: number) => (
+                            <tr key={i} className="hover:bg-slate-50/70">
+                              <td className="p-3 text-slate-900">{item.name}</td>
+                              <td className="p-3 bg-indigo-50/30">
+                                <span className="font-mono text-sm font-black text-indigo-800 bg-indigo-100/70 px-2 py-0.5 rounded">
+                                  {(item.cartons || 0).toLocaleString()} کارتۆن
+                                </span>
+                              </td>
+                              <td className="p-3 text-slate-600 font-mono">
+                                {(item.packets || 0) > 0 ? `${item.packets} پاکەت` : '-'}
+                              </td>
+                              <td className="p-3">
+                                {(item.gifts || 0) > 0 ? (
+                                  <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded font-bold">
+                                    🎁 {item.gifts} هەدیە
+                                  </span>
+                                ) : '-'}
+                              </td>
+                              <td className="p-3 bg-emerald-50/30 text-emerald-700 font-mono" dir="ltr">
+                                {((item.totalPrice ?? item.totalAmount ?? item.amount) || 0).toLocaleString()} د.ع
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Invoices List */}
+              <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                <div className="bg-slate-50 p-3 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                    <Receipt size={15} className="text-indigo-600" />
+                    لیستی وەسڵەکان لەم ماوەیەدا
+                  </span>
+                  <span className="text-xs font-bold text-slate-500 font-mono">
+                    {(inspectingPerson.invoices || []).length} وەسڵ
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto max-h-60 overflow-y-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-100/70 text-slate-600 uppercase border-b border-slate-200 font-bold sticky top-0">
+                      <tr>
+                        <th className="p-3">ژ.وەسڵ</th>
+                        <th className="p-3">مارکێت</th>
+                        <th className="p-3">بەروار و کات</th>
+                        <th className="p-3">بڕی کارتۆن</th>
+                        <th className="p-3">بڕی پارە</th>
+                        <th className="p-3">شێوازی پارەدان</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-bold">
+                      {(inspectingPerson.invoices || []).map((inv: any, i: number) => (
+                        <tr key={i} className="hover:bg-slate-50/70">
+                          <td className="p-3 text-slate-600 font-mono">#{inv.invoiceNumber || inv.invoiceNo || inv.id?.slice(-6)}</td>
+                          <td className="p-3 text-slate-900">{inv.marketName}</td>
+                          <td className="p-3 text-slate-500 font-mono" dir="ltr">
+                            {inv.date ? format(inv.date, 'yyyy/MM/dd HH:mm') : '-'}
+                          </td>
+                          <td className="p-3">
+                            <span className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded font-mono">
+                              {(inv.cartons || 0).toLocaleString()} کارتۆن
+                            </span>
+                          </td>
+                          <td className="p-3 text-indigo-700 font-mono" dir="ltr">
+                            {(inv.amount || 0).toLocaleString()} د.ع
+                          </td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded-md text-[11px] ${
+                              inv.paymentType === 'cash'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {inv.paymentType === 'cash' ? 'نەقد' : 'قەرز'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+              <button
+                onClick={() => handlePrintSinglePersonReport(inspectingPerson)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition"
+              >
+                <Printer size={16} />
+                <span>چاپکردنی ڕاپۆرتی تەواوی ئەم کەسە (PDF)</span>
+              </button>
+
+              <button
+                onClick={() => setInspectingPerson(null)}
+                className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs rounded-xl transition"
+              >
+                داخستن
+              </button>
             </div>
           </div>
         </div>

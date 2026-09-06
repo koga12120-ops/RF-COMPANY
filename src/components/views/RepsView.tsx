@@ -142,6 +142,17 @@ export default function RepsView() {
         updatedAt: now
       }, { merge: true });
 
+      // 3. Also sync to cashvans collection
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', codeModalItem.name)));
+      for (const d of cvSnap.docs) {
+        await setDoc(doc(db, 'cashvans', d.id), {
+          username: trimmedU,
+          accessCode: trimmedCode,
+          password: trimmedCode,
+          forceReauth: true
+        }, { merge: true });
+      }
+
       showToast(`زانیارییەکانی چوونەژوورەوە بۆ مەندووب (${codeModalItem.name}) نوێکرایەوە: یوزەر [${trimmedU}] - تێپەڕەوشە [${trimmedCode}]`);
       setCodeModalItem(null);
     } catch (error) {
@@ -201,7 +212,20 @@ export default function RepsView() {
         accessCode: newPasswordTrimmed || editingItem.accessCode || '',
       }, { merge: true });
 
-      showToast(`زانیارییەکانی مەندووب (${newNameTrimmed}) لە سەرانسەری سیستەمدا نوێکرایەوە.`);
+      // 4. Update cashvans collection
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', 'in', [oldName, newNameTrimmed])));
+      if (!cvSnap.empty) {
+        for (const d of cvSnap.docs) {
+          await setDoc(doc(db, 'cashvans', d.id), updateData, { merge: true });
+        }
+      } else {
+        await addDoc(collection(db, 'cashvans'), {
+          ...updateData,
+          createdAt: Date.now()
+        });
+      }
+
+      showToast(`زانیارییەکانی بەکارهێنەر (${newNameTrimmed}) بۆ مەندووب و کاشڤان لە سەرانسەری سیستەمدا نوێکرایەوە.`);
       setEditingItem(null);
     } catch (error) {
       console.error(error);
@@ -224,7 +248,16 @@ export default function RepsView() {
         forceReauth: nextStatus === 'disabled'
       }, { merge: true });
 
-      showToast(`دۆخی مەندووب (${item.name}) گۆڕدرا بۆ: ${nextStatus === 'active' ? 'چالاک' : 'ڕاگیراو'}`);
+      // Also update in cashvans
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', item.name)));
+      for (const d of cvSnap.docs) {
+        await setDoc(doc(db, 'cashvans', d.id), {
+          status: nextStatus,
+          forceReauth: nextStatus === 'disabled'
+        }, { merge: true });
+      }
+
+      showToast(`دۆخی بەکارهێنەر (${item.name}) گۆڕدرا بۆ: ${nextStatus === 'active' ? 'چالاک' : 'ڕاگیراو'}`);
     } catch (e) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا');
@@ -267,7 +300,31 @@ export default function RepsView() {
         isDeleted: false
       }, { merge: true });
 
-      showToast(`مەندووب (${trimmedN}) بە یوزەری [${trimmedU}] و تێپەڕەوشەی [${trimmedPass}] دروستکرا.`);
+      // Also create in cashvans collection so the person is both rep and cashvan
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', trimmedN)));
+      if (cvSnap.empty) {
+        await addDoc(collection(db, 'cashvans'), {
+          name: trimmedN,
+          username: trimmedU,
+          accessCode: trimmedPass,
+          password: trimmedPass,
+          phone: trimmedP,
+          status: 'active',
+          createdAt: Date.now()
+        });
+      } else {
+        for (const d of cvSnap.docs) {
+          await setDoc(doc(db, 'cashvans', d.id), {
+            username: trimmedU,
+            accessCode: trimmedPass,
+            password: trimmedPass,
+            phone: trimmedP,
+            status: 'active'
+          }, { merge: true });
+        }
+      }
+
+      showToast(`بەکارهێنەر (${trimmedN}) وەک مەندووب و کاشڤان بە یوزەری [${trimmedU}] و تێپەڕەوشەی [${trimmedPass}] دروستکرا.`);
       setShowAddModal(false);
       setNewName('');
       setNewUsername('');
@@ -294,7 +351,13 @@ export default function RepsView() {
         isDeleted: true
       }, { merge: true });
 
-      showToast(`مەندووب (${deletingItem.name}) سڕدرایەوە.`);
+      // 3. Remove from cashvans
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', deletingItem.name)));
+      for (const d of cvSnap.docs) {
+        await deleteDoc(doc(db, 'cashvans', d.id));
+      }
+
+      showToast(`بەکارهێنەر (${deletingItem.name}) سڕدرایەوە.`);
       setDeletingItem(null);
     } catch (error) {
       console.error(error);
