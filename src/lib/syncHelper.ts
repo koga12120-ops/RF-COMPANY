@@ -177,3 +177,74 @@ export async function renameRepOrCashvan(
     console.error('Error updating transactions:', err);
   }
 }
+
+/**
+ * Ensures all users in reps exist in cashvans, and vice-versa,
+ * maintaining single unified user identity with distinct sales.
+ */
+export async function syncAllRepsAndCashvans() {
+  try {
+    const [repsSnap, cashvansSnap] = await Promise.all([
+      getDocs(collection(db, 'reps')),
+      getDocs(collection(db, 'cashvans'))
+    ]);
+
+    const repsMap = new Map<string, any>();
+    repsSnap.docs.forEach(d => {
+      const data = d.data();
+      const name = (data.name || '').trim();
+      if (name) repsMap.set(name.toLowerCase(), { id: d.id, ...data });
+    });
+
+    const cashvansMap = new Map<string, any>();
+    cashvansSnap.docs.forEach(d => {
+      const data = d.data();
+      const name = (data.name || '').trim();
+      if (name) cashvansMap.set(name.toLowerCase(), { id: d.id, ...data });
+    });
+
+    // 1. If in reps but not in cashvans, create in cashvans
+    for (const [key, rep] of repsMap.entries()) {
+      if (!cashvansMap.has(key)) {
+        try {
+          await setDoc(doc(db, 'cashvans', rep.id), {
+            name: rep.name,
+            username: rep.username || rep.name,
+            phone: rep.phone || '',
+            accessCode: rep.accessCode || rep.password || '43629',
+            password: rep.password || rep.accessCode || '43629',
+            vehicleNumber: '',
+            status: rep.status || 'active',
+            balance: 0,
+            createdAt: rep.createdAt || Date.now()
+          }, { merge: true });
+        } catch (e) {
+          console.error(`Error syncing rep ${rep.name} to cashvans:`, e);
+        }
+      }
+    }
+
+    // 2. If in cashvans but not in reps, create in reps
+    for (const [key, cv] of cashvansMap.entries()) {
+      if (!repsMap.has(key)) {
+        try {
+          await setDoc(doc(db, 'reps', cv.id), {
+            name: cv.name,
+            username: cv.username || cv.name,
+            phone: cv.phone || '',
+            accessCode: cv.accessCode || cv.password || '43629',
+            password: cv.password || cv.accessCode || '43629',
+            status: cv.status || 'active',
+            createdAt: cv.createdAt || Date.now(),
+            totalSales: 0,
+            totalProfit: 0
+          }, { merge: true });
+        } catch (e) {
+          console.error(`Error syncing cashvan ${cv.name} to reps:`, e);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error running syncAllRepsAndCashvans:', err);
+  }
+}

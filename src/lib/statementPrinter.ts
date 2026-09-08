@@ -782,4 +782,155 @@ export function printMarketDebtReceiptPopup(data: MarketDebtReceiptData) {
   }
 }
 
+export function printExpenseVoucherPopup(expense: Transaction) {
+  const header = renderReceiptHeaderHtml({
+    title: 'پسوڵەی خەرجی',
+    subtitle: 'پسوڵەی فەرمی خەرجی دەفتەری حسابات',
+    invoiceNo: expense.invoiceNo || expense.id.slice(-6).toUpperCase(),
+    date: expense.date
+  });
+
+  const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ckb">
+      <head>
+        <meta charset="utf-8" />
+        <title>پسوڵەی خەرجی</title>
+        <style>
+          @page { size: auto; margin: 12mm; }
+          body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; color: #0f172a; }
+          .container { max-width: 580px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+          .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed #e2e8f0; font-size: 14px; }
+          .label { color: #64748b; font-weight: 600; }
+          .value { font-weight: 700; color: #0f172a; }
+          .amount-box { background: #fff1f2; border: 2px solid #fecdd3; border-radius: 10px; padding: 16px; text-align: center; margin: 20px 0; }
+          .amount-title { font-size: 13px; color: #be123c; font-weight: 700; margin-bottom: 4px; }
+          .amount-value { font-size: 26px; font-weight: 900; color: #e11d48; font-family: monospace; }
+          .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 20px; }
+          .sig-box { width: 45%; text-align: center; font-size: 13px; font-weight: 700; color: #475569; }
+          .sig-line { border-bottom: 1px solid #94a3b8; margin-top: 50px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          ${header}
+          <div class="amount-box">
+            <div class="amount-title">بڕی خەرجی پارە</div>
+            <div class="amount-value" dir="ltr">${(expense.amount || 0).toLocaleString()} د.ع</div>
+          </div>
+          <div class="row">
+            <span class="label">هۆکار و وردەکاری:</span>
+            <span class="value">${expense.description || '-'}</span>
+          </div>
+          <div class="row">
+            <span class="label">بەروار و کات:</span>
+            <span class="value" dir="ltr">${format(expense.date, 'yyyy/MM/dd HH:mm')}</span>
+          </div>
+          <div class="signatures">
+            <div class="sig-box">
+              <div>واژووی کەسی خەرجکەر</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>واژووی ژمێریار / بەڕێوەبەر</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+        </div>
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
+export function printExpensesListReportPopup(expenses: Transaction[], periodLabel: string) {
+  const total = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+  const header = renderReceiptHeaderHtml({
+    title: 'ڕاپۆرتی خەرجییەکان',
+    subtitle: `ماوەی دیاریکراو: ${periodLabel}`,
+    date: Date.now()
+  });
+
+  const rows = expenses.map((e, idx) => `
+    <tr>
+      <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${idx + 1}</td>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 12px;" dir="ltr">${format(e.date, 'yyyy/MM/dd HH:mm')}</td>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 700;">${e.description || '-'}</td>
+      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 800; color: #e11d48; text-align: left; font-family: monospace;" dir="ltr">${(e.amount || 0).toLocaleString()} د.ع</td>
+    </tr>
+  `).join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ckb">
+      <head>
+        <meta charset="utf-8" />
+        <title>ڕاپۆرتی خەرجییەکان</title>
+        <style>
+          @page { size: A4 portrait; margin: 12mm; }
+          body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; color: #0f172a; }
+          .container { max-width: 800px; margin: 0 auto; }
+          table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
+          th { background: #f8fafc; border-bottom: 2px solid #cbd5e1; padding: 10px 8px; text-align: right; font-weight: 800; color: #334155; }
+          .summary-card { margin-top: 20px; padding: 14px; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; }
+          .summary-title { font-weight: 800; color: #9f1239; font-size: 15px; }
+          .summary-val { font-size: 20px; font-weight: 900; color: #e11d48; font-family: monospace; }
+          .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 20px; }
+          .sig-box { width: 40%; text-align: center; font-size: 13px; font-weight: 700; color: #475569; }
+          .sig-line { border-bottom: 1px solid #94a3b8; margin-top: 45px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          ${header}
+          <div class="summary-card">
+            <div class="summary-title">کۆی گشتی خەرجییەکان (${expenses.length} مامەڵە):</div>
+            <div class="summary-val" dir="ltr">${total.toLocaleString()} د.ع</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 40px; text-align: center;">#</th>
+                <th style="width: 140px;">بەروار</th>
+                <th>هۆکار و وردەکاری خەرجی</th>
+                <th style="width: 140px; text-align: left;">بڕ (د.ع)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+          <div class="signatures">
+            <div class="sig-box">
+              <div>ئامادەکاری ژمێریاری</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>پەسەندکردنی بەڕێوەبەر</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+        </div>
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
 

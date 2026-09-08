@@ -10,6 +10,8 @@ export interface SyncItemParams {
   quantityAdded: number;
   paymentType: 'cash' | 'debt';
   costPricePerPiece: number;
+  totalCostAmount?: number;
+  bonusQuantityAdded?: number;
 }
 
 /**
@@ -23,6 +25,8 @@ export async function updateItemAndSyncEverywhere({
   quantityAdded,
   paymentType,
   costPricePerPiece,
+  totalCostAmount,
+  bonusQuantityAdded = 0,
 }: SyncItemParams) {
   try {
     const cleanNewInvoice = (itemData.invoiceNo || '').trim();
@@ -45,23 +49,29 @@ export async function updateItemAndSyncEverywhere({
         itemId,
         itemName: newName,
         quantityAdded,
+        bonusQuantity: bonusQuantityAdded,
+        purchasedQuantity: Math.max(0, quantityAdded - bonusQuantityAdded),
         date: Date.now(),
         invoiceNo: cleanNewInvoice || '',
         supplier: newSupplier || '',
+        notes: bonusQuantityAdded > 0 ? `دیاری: ${bonusQuantityAdded} بە بێ تێچوو` : ''
       });
 
+      const actualCost = totalCostAmount !== undefined ? totalCostAmount : costPricePerPiece * Math.max(0, quantityAdded - bonusQuantityAdded);
+
+      const giftSuffix = bonusQuantityAdded > 0 ? ` (+ ${bonusQuantityAdded} دیاری بە بێ تێچوو)` : '';
       const transactionDesc =
         paymentType === 'cash'
           ? cleanNewInvoice
-            ? `نەقدی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName}`
-            : `نەقدی زیادکردنی کاڵای ${newName}`
+            ? `نەقدی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName}${giftSuffix}`
+            : `نەقدی زیادکردنی کاڵای ${newName}${giftSuffix}`
           : cleanNewInvoice
-          ? `قەرزی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName}`
-          : `قەرزی زیادکردنی کاڵای ${newName}`;
+          ? `قەرزی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName}${giftSuffix}`
+          : `قەرزی زیادکردنی کاڵای ${newName}${giftSuffix}`;
 
       await addDoc(collection(db, 'transactions'), {
         type: paymentType === 'cash' ? 'company_cash' : 'company_debt',
-        amount: costPricePerPiece * quantityAdded,
+        amount: actualCost,
         date: Date.now(),
         description: transactionDesc,
         relatedEntityId: newSupplier || 'نەزانراو',

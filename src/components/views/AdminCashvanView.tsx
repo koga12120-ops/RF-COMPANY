@@ -15,9 +15,10 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { renameRepOrCashvan } from '../../lib/syncHelper';
+import { renameRepOrCashvan, syncAllRepsAndCashvans } from '../../lib/syncHelper';
 import { CashvanSale, CashvanTransfer, Order, Transaction, Market, Item, SalesRep } from '../../types';
 import { 
+  Plus,
   Truck, 
   CheckCircle2, 
   DollarSign, 
@@ -155,6 +156,8 @@ export default function AdminCashvanView() {
   const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
+    syncAllRepsAndCashvans();
+
     // 1. Orders (Reps)
     const unsubOrders = onSnapshot(
       query(collection(db, 'orders'), orderBy('timestamp', 'desc')),
@@ -350,6 +353,80 @@ export default function AdminCashvanView() {
 
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [reps, cashvans, orders, sales]);
+
+  // User stats for Mandoob (from orders)
+  const repUsersSummary = useMemo(() => {
+    return unifiedUsers.map(user => {
+      const userOrders = orders.filter(o => o.repName === user.name && o.status !== 'deleted');
+      const totalAmount = userOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+      const pendingOrders = userOrders.filter(o => o.status !== 'completed');
+      const pendingAmount = pendingOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+      const completedOrders = userOrders.filter(o => o.status === 'completed');
+      const completedAmount = completedOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+      
+      let cartons = 0;
+      let packets = 0;
+      let gifts = 0;
+      userOrders.forEach(o => {
+        (o.items || []).forEach(it => {
+          const qty = Number(it.quantity) || 0;
+          if (it.unit === 'packet') packets += qty;
+          else cartons += qty;
+          gifts += Number(it.giftQuantity) || (it.isGift ? qty : 0);
+        });
+      });
+
+      return {
+        ...user,
+        totalAmount,
+        pendingAmount,
+        completedAmount,
+        ordersCount: userOrders.length,
+        pendingCount: pendingOrders.length,
+        completedCount: completedOrders.length,
+        cartons,
+        packets,
+        gifts
+      };
+    });
+  }, [unifiedUsers, orders]);
+
+  // User stats for Cashvan (from sales)
+  const cashvanUsersSummary = useMemo(() => {
+    return unifiedUsers.map(user => {
+      const userSales = sales.filter(s => s.cashvanName === user.name && s.status !== 'deleted');
+      const totalAmount = userSales.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+      const pendingSales = userSales.filter(s => s.status === 'pending_accounting');
+      const pendingAmount = pendingSales.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+      const accountedSales = userSales.filter(s => s.status === 'accounted');
+      const accountedAmount = accountedSales.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+      
+      let cartons = 0;
+      let packets = 0;
+      let gifts = 0;
+      userSales.forEach(s => {
+        (s.items || []).forEach(it => {
+          const qty = Number(it.quantity) || 0;
+          if (it.unit === 'packet') packets += qty;
+          else cartons += qty;
+          gifts += Number(it.giftQuantity) || (it.isGift ? qty : 0);
+        });
+      });
+
+      return {
+        ...user,
+        totalAmount,
+        pendingAmount,
+        accountedAmount,
+        salesCount: userSales.length,
+        pendingCount: pendingSales.length,
+        accountedCount: accountedSales.length,
+        cartons,
+        packets,
+        gifts
+      };
+    });
+  }, [unifiedUsers, sales]);
 
   // Filtered Orders (Reps)
   const filteredOrders = useMemo(() => {
@@ -2406,6 +2483,95 @@ export default function AdminCashvanView() {
             </div>
           </div>
 
+          {/* Registered Users as Mandoob Overview */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                  <User size={18} className="text-indigo-600" />
+                  <span>بەکارهێنەرانی سیستەم وەک مەندووب ({unifiedUsers.length} بەکارهێنەر)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  هەموو بەکارهێنەرێک کە تۆمار کراوە لەم لیستەیە. کلیک لەسەر هەر کەسێک بکە بۆ فلتەرکردنی ئۆردەرەکانی.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {selectedRepFilter !== 'all' && (
+                  <button
+                    onClick={() => setSelectedRepFilter('all')}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-3 py-1.5 rounded-xl transition"
+                  >
+                    پیشاندانی سەرجەمیان
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowAddCVModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition"
+                >
+                  <Plus size={15} />
+                  <span>زیادکردنی بەکارهێنەری نوێ</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {repUsersSummary.map((u) => {
+                const isSelected = selectedRepFilter === u.name;
+                return (
+                  <div
+                    key={`rep-user-card-${u.name}`}
+                    onClick={() => setSelectedRepFilter(isSelected ? 'all' : u.name)}
+                    className={`cursor-pointer p-4 rounded-xl border transition relative flex flex-col justify-between gap-3 ${
+                      isSelected
+                        ? 'bg-indigo-50/80 border-indigo-500 ring-2 ring-indigo-500/30 shadow-sm'
+                        : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm ${
+                          isSelected ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-700'
+                        }`}>
+                          <User size={18} />
+                        </div>
+                        <div>
+                          <div className="font-bold text-slate-900 text-sm">{u.name}</div>
+                          <div className="text-[11px] text-slate-500 font-mono" dir="ltr">{u.phone || u.username || 'بێ ژمارە'}</div>
+                        </div>
+                      </div>
+                      {u.status === 'disabled' ? (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
+                      ) : isSelected ? (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-600 text-white">دیاریکراو</span>
+                      ) : null}
+                    </div>
+
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200/80 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500 font-medium">فرۆشی مەندووب:</span>
+                        <span className="font-black text-indigo-700 font-mono" dir="ltr">{(u.totalAmount || 0).toLocaleString()} د.ع</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500">کارتۆن و ئۆردەر:</span>
+                        <span className="font-bold text-slate-700 font-mono">{u.cartons} کارتۆن ({u.ordersCount} ئۆردەر)</span>
+                      </div>
+                      {u.pendingCount > 0 && (
+                        <div className="flex items-center justify-between text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                          <span>چاوەڕێی تەسفییە:</span>
+                          <span className="font-bold font-mono" dir="ltr">{(u.pendingAmount || 0).toLocaleString()} د.ع ({u.pendingCount})</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-center text-[11px] font-bold text-indigo-600">
+                      {isSelected ? '✓ هەڵبژێردراوە (کلیک بکە بۆ لابردن)' : 'کلیک بکە بۆ فلتەرکردن'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Table Container & Filter Bar */}
           <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -2694,6 +2860,95 @@ export default function AdminCashvanView() {
               <div className="p-3 bg-yellow-200 text-yellow-800 rounded-xl">
                 <Gift size={24} />
               </div>
+            </div>
+          </div>
+
+          {/* Registered Users as Cashvan Overview */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                  <Truck size={18} className="text-blue-600" />
+                  <span>بەکارهێنەرانی سیستەم وەک کاشڤان ({unifiedUsers.length} بەکارهێنەر)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  هەمان ئەو بەکارهێنەرانەی تۆمارکراون لەگەڵ فرۆشەکانیان وەک کاشڤان. کلیک لەسەر هەر کەسێک بکە بۆ فلتەرکردنی وەسڵەکانی.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {selectedCashvanFilter !== 'all' && (
+                  <button
+                    onClick={() => setSelectedCashvanFilter('all')}
+                    className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1.5 rounded-xl transition"
+                  >
+                    پیشاندانی سەرجەمیان
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowAddCVModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition"
+                >
+                  <Plus size={15} />
+                  <span>زیادکردنی بەکارهێنەری نوێ</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {cashvanUsersSummary.map((u) => {
+                const isSelected = selectedCashvanFilter === u.name;
+                return (
+                  <div
+                    key={`cv-user-card-${u.name}`}
+                    onClick={() => setSelectedCashvanFilter(isSelected ? 'all' : u.name)}
+                    className={`cursor-pointer p-4 rounded-xl border transition relative flex flex-col justify-between gap-3 ${
+                      isSelected
+                        ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/30 shadow-sm'
+                        : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm ${
+                          isSelected ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-700'
+                        }`}>
+                          <Truck size={18} />
+                        </div>
+                        <div>
+                          <div className="font-bold text-slate-900 text-sm">{u.name}</div>
+                          <div className="text-[11px] text-slate-500 font-mono" dir="ltr">{u.phone || u.username || 'بێ ژمارە'}</div>
+                        </div>
+                      </div>
+                      {u.status === 'disabled' ? (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
+                      ) : isSelected ? (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">دیاریکراو</span>
+                      ) : null}
+                    </div>
+
+                    <div className="bg-white p-2.5 rounded-lg border border-slate-200/80 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500 font-medium">فرۆشی کاشڤان:</span>
+                        <span className="font-black text-blue-700 font-mono" dir="ltr">{(u.totalAmount || 0).toLocaleString()} د.ع</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500">کارتۆن و وەسڵ:</span>
+                        <span className="font-bold text-slate-700 font-mono">{u.cartons} کارتۆن ({u.salesCount} وەسڵ)</span>
+                      </div>
+                      {u.pendingCount > 0 && (
+                        <div className="flex items-center justify-between text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                          <span>چاوەڕێی حیسابات:</span>
+                          <span className="font-bold font-mono" dir="ltr">{(u.pendingAmount || 0).toLocaleString()} د.ع ({u.pendingCount})</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-center text-[11px] font-bold text-blue-600">
+                      {isSelected ? '✓ هەڵبژێردراوە (کلیک بکە بۆ لابردن)' : 'کلیک بکە بۆ فلتەرکردن'}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

@@ -302,7 +302,14 @@ export default function StockHistoryView() {
                       )}
                     </td>
                     <td className="px-4 py-4 text-green-600 font-bold" dir="ltr">
-                      +{item.quantityAdded.toLocaleString()}
+                      <div>+{item.quantityAdded.toLocaleString()}</div>
+                      {item.bonusQuantity && item.bonusQuantity > 0 ? (
+                        <div className="text-[11px] text-amber-700 font-semibold mt-0.5" dir="rtl">
+                          🎁 {item.bonusQuantity} دیاری (تێچوو 0)
+                        </div>
+                      ) : item.notes ? (
+                        <div className="text-[11px] text-slate-500 font-normal mt-0.5" dir="rtl">{item.notes}</div>
+                      ) : null}
                     </td>
                                         <td className="px-4 py-4 text-slate-500 font-mono text-xs" dir="ltr">
                       {format(item.date, 'HH:mm')}

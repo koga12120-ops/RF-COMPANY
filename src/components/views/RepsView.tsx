@@ -27,7 +27,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { renameRepOrCashvan } from '../../lib/syncHelper';
+import { renameRepOrCashvan, syncAllRepsAndCashvans } from '../../lib/syncHelper';
 
 export default function RepsView() {
   const [reps, setReps] = useState<SalesRep[]>([]);
@@ -68,29 +68,84 @@ export default function RepsView() {
   };
 
   useEffect(() => {
+    syncAllRepsAndCashvans();
+
+    let repsRaw: SalesRep[] = [];
+    let cashvansRaw: any[] = [];
+
+    const mergeAndSet = () => {
+      const map = new Map<string, SalesRep>();
+      repsRaw.forEach(r => {
+        const name = (r.name || '').trim();
+        if (!name) return;
+        map.set(name.toLowerCase(), { ...r });
+      });
+
+      cashvansRaw.forEach(c => {
+        const name = (c.name || '').trim();
+        if (!name) return;
+        const key = name.toLowerCase();
+        const existing = map.get(key);
+        if (existing) {
+          if (!existing.phone && c.phone) existing.phone = c.phone;
+          if (!existing.accessCode && (c.accessCode || c.password)) {
+            existing.accessCode = c.accessCode || c.password;
+            existing.password = c.password || c.accessCode;
+          }
+          if (c.status === 'disabled') existing.status = 'disabled';
+        } else {
+          map.set(key, {
+            id: c.id,
+            name: c.name.trim(),
+            username: (c.username || c.name).trim(),
+            phone: c.phone || '',
+            accessCode: c.accessCode || c.password || '',
+            password: c.password || c.accessCode || '',
+            status: c.status === 'disabled' ? 'disabled' : 'active',
+            createdAt: c.createdAt || Date.now(),
+            totalSales: 0,
+            totalProfit: 0
+          });
+        }
+      });
+
+      const list = Array.from(map.values());
+      list.sort((a, b) => {
+        if (!a.accessCode && b.accessCode) return -1;
+        if (a.accessCode && !b.accessCode) return 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      setReps(list);
+      setLoading(false);
+    };
+
     const qReps = query(collection(db, 'reps'));
     const unsubReps = onSnapshot(
       qReps,
       (snapshot) => {
-        const repsData: SalesRep[] = [];
-        snapshot.forEach((docSnap) => {
-          repsData.push({ id: docSnap.id, ...docSnap.data() } as SalesRep);
-        });
-        repsData.sort((a, b) => {
-          if (!a.accessCode && b.accessCode) return -1;
-          if (a.accessCode && !b.accessCode) return 1;
-          return (a.name || '').localeCompare(b.name || '');
-        });
-        setReps(repsData);
-        setLoading(false);
+        repsRaw = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as SalesRep));
+        mergeAndSet();
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, 'reps');
       }
     );
 
+    const qCashvans = query(collection(db, 'cashvans'));
+    const unsubCashvans = onSnapshot(
+      qCashvans,
+      (snapshot) => {
+        cashvansRaw = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+        mergeAndSet();
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'cashvans');
+      }
+    );
+
     return () => {
       unsubReps();
+      unsubCashvans();
     };
   }, []);
 

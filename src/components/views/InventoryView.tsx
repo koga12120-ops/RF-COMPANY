@@ -28,12 +28,14 @@ export default function InventoryView({ role }: { role: Role }) {
 
   // Carton fields
   const [cartonQuantity, setCartonQuantity] = useState('');
+  const [cartonBonus, setCartonBonus] = useState(''); // دیاری / هەدیەی کارتۆن (تێچوو 0)
   const [cartonCost, setCartonCost] = useState('');
   const [cartonPrice, setCartonPrice] = useState('');
   const [cartonWholesale, setCartonWholesale] = useState('');
 
   // Packet fields
   const [packetQuantity, setPacketQuantity] = useState('');
+  const [packetBonus, setPacketBonus] = useState(''); // دیاری / هەدیەی پاکەت (تێچوو 0)
   const [packetCost, setPacketCost] = useState('');
   const [packetPrice, setPacketPrice] = useState('');
   const [packetWholesale, setPacketWholesale] = useState('');
@@ -117,9 +119,17 @@ export default function InventoryView({ role }: { role: Role }) {
     }
 
     const cleanInvoice = invoiceNo.trim();
-    const cQty = Number(cartonQuantity) || 0;
-    const pQty = Number(packetQuantity) || 0;
-    const totalQty = hasCarton && hasPacket ? cQty + pQty : hasCarton ? cQty : pQty;
+    const cPurchased = Number(cartonQuantity) || 0;
+    const cBonus = Number(cartonBonus) || 0;
+    const totalCartons = cPurchased + cBonus;
+
+    const pPurchased = Number(packetQuantity) || 0;
+    const pBonus = Number(packetBonus) || 0;
+    const totalPackets = pPurchased + pBonus;
+
+    const totalQty = (hasCarton ? totalCartons : 0) + (hasPacket ? totalPackets : 0);
+    const totalPurchasedQty = (hasCarton ? cPurchased : 0) + (hasPacket ? pPurchased : 0);
+    const totalBonusQty = (hasCarton ? cBonus : 0) + (hasPacket ? pBonus : 0);
 
     const cCost = Number(cartonCost) || 0;
     const cPrice = Number(cartonPrice) || 0;
@@ -129,8 +139,15 @@ export default function InventoryView({ role }: { role: Role }) {
     const pPrice = Number(packetPrice) || 0;
     const pWholesale = Number(packetWholesale) || 0;
 
+    // Total purchase cost owed to company (GIFT / BONUS HAS ZERO COST!)
+    const totalCostVal = (hasCarton ? cCost * cPurchased : 0) + (hasPacket ? pCost * pPurchased : 0);
+
+    // Effective weighted cost per carton/packet so selling the gifts yields 100% full profit
+    const effectiveCartonCost = totalCartons > 0 ? (cCost * cPurchased) / totalCartons : cCost;
+    const effectivePacketCost = totalPackets > 0 ? (pCost * pPurchased) / totalPackets : pCost;
+
     // Primary cost & selling prices
-    const primaryCost = hasCarton ? cCost : pCost;
+    const primaryCost = hasCarton ? effectiveCartonCost : effectivePacketCost;
     const primaryPrice = hasCarton ? cPrice : pPrice;
     const primaryWholesale = hasCarton ? cWholesale : pWholesale;
 
@@ -147,15 +164,19 @@ export default function InventoryView({ role }: { role: Role }) {
       sellingPrice: primaryPrice,
       wholesalePrice: primaryWholesale,
 
-      cartonCostPrice: hasCarton ? cCost : 0,
+      cartonCostPrice: hasCarton ? effectiveCartonCost : 0,
+      cartonPurchaseCost: hasCarton ? cCost : 0,
       cartonSellingPrice: hasCarton ? cPrice : 0,
       cartonWholesalePrice: hasCarton ? cWholesale : 0,
-      cartonQuantity: hasCarton ? cQty : 0,
+      cartonQuantity: hasCarton ? totalCartons : 0,
+      cartonBonusQuantity: hasCarton ? cBonus : 0,
 
-      packetCostPrice: hasPacket ? pCost : 0,
+      packetCostPrice: hasPacket ? effectivePacketCost : 0,
+      packetPurchaseCost: hasPacket ? pCost : 0,
       packetSellingPrice: hasPacket ? pPrice : 0,
       packetWholesalePrice: hasPacket ? pWholesale : 0,
-      packetQuantity: hasPacket ? pQty : 0,
+      packetQuantity: hasPacket ? totalPackets : 0,
+      packetBonusQuantity: hasPacket ? pBonus : 0,
     };
 
     try {
@@ -181,6 +202,8 @@ export default function InventoryView({ role }: { role: Role }) {
           quantityAdded,
           paymentType,
           costPricePerPiece: primaryCost,
+          totalCostAmount: totalCostVal,
+          bonusQuantityAdded: totalBonusQty,
         });
       } else {
         await addDoc(collection(db, 'items'), {
@@ -189,29 +212,37 @@ export default function InventoryView({ role }: { role: Role }) {
         });
 
         if (totalQty > 0) {
+          const giftDetails = [];
+          if (cBonus > 0) giftDetails.push(`${cBonus} کارتۆن دیاری`);
+          if (pBonus > 0) giftDetails.push(`${pBonus} پاکەت دیاری`);
+          const giftNote = giftDetails.length > 0 ? ` (+ ${giftDetails.join(' و ')} بە بێ تێچوو)` : '';
+
           await addDoc(collection(db, 'stock_history'), {
             itemName: name.trim(),
             quantityAdded: totalQty,
+            purchasedQuantity: totalPurchasedQty,
+            bonusQuantity: totalBonusQty,
+            cartonBonus: cBonus,
+            packetBonus: pBonus,
             unit: hasCarton ? 'carton' : 'packet',
             date: Date.now(),
             invoiceNo: cleanInvoice || '',
-            supplier: supplier.trim() || ''
+            supplier: supplier.trim() || '',
+            notes: giftDetails.length > 0 ? `دیاری: ${giftDetails.join(' و ')} (تێچوو سفر - تەواو قازانج)` : ''
           });
 
-          const totalCostVal = hasCarton && hasPacket
-            ? (cCost * cQty) + (pCost * pQty)
-            : hasCarton
-            ? (cCost * cQty)
-            : (pCost * pQty);
+          const unitParts = [];
+          if (hasCarton && cPurchased > 0) unitParts.push(`${cPurchased} کارتۆن`);
+          if (hasPacket && pPurchased > 0) unitParts.push(`${pPurchased} پاکەت`);
+          const unitLabel = unitParts.join(' و ') || (hasCarton ? 'کارتۆن' : 'پاکەت');
 
-          const unitLabel = hasCarton && hasPacket ? 'کارتۆن و پاکەت' : hasCarton ? 'کارتۆن' : 'پاکەت';
           const transactionDesc = paymentType === 'cash'
-            ? (cleanInvoice ? `نەقدی کڕین (وەسڵی #${cleanInvoice}) - ${name.trim()} (${totalQty} ${unitLabel})` : `نەقدی کڕینی کاڵای ${name.trim()}`)
-            : (cleanInvoice ? `قەرزی کڕین (وەسڵی #${cleanInvoice}) - ${name.trim()} (${totalQty} ${unitLabel})` : `قەرزی کڕینی کاڵای ${name.trim()}`);
+            ? (cleanInvoice ? `نەقدی کڕین (وەسڵی #${cleanInvoice}) - ${name.trim()} (${unitLabel}${giftNote})` : `نەقدی کڕینی کاڵای ${name.trim()}${giftNote}`)
+            : (cleanInvoice ? `قەرزی کڕین (وەسڵی #${cleanInvoice}) - ${name.trim()} (${unitLabel}${giftNote})` : `قەرزی کڕینی کاڵای ${name.trim()}${giftNote}`);
 
           await addDoc(collection(db, 'transactions'), {
             type: paymentType === 'cash' ? 'company_cash' : 'company_debt',
-            amount: totalCostVal,
+            amount: totalCostVal, // ONLY charged for purchased goods; gifts have 0 cost!
             date: Date.now(),
             description: transactionDesc,
             relatedEntityId: supplier.trim() || 'نەزانراو',
@@ -240,15 +271,32 @@ export default function InventoryView({ role }: { role: Role }) {
     setHasCarton(isCarton);
     setHasPacket(isPacket);
 
-    setCartonCost(item.cartonCostPrice ? item.cartonCostPrice.toString() : (item.costPrice ? item.costPrice.toString() : ''));
+    const initialCartonCost = item.cartonPurchaseCost !== undefined
+      ? item.cartonPurchaseCost.toString()
+      : (item.cartonCostPrice ? item.cartonCostPrice.toString() : (item.costPrice ? item.costPrice.toString() : ''));
+
+    setCartonCost(initialCartonCost);
     setCartonPrice(item.cartonSellingPrice ? item.cartonSellingPrice.toString() : (item.sellingPrice ? item.sellingPrice.toString() : ''));
     setCartonWholesale(item.cartonWholesalePrice ? item.cartonWholesalePrice.toString() : (item.wholesalePrice ? item.wholesalePrice.toString() : ''));
-    setCartonQuantity(item.cartonQuantity !== undefined ? item.cartonQuantity.toString() : (item.quantity ? item.quantity.toString() : '0'));
+    
+    // Total cartons minus bonus if recorded
+    const totalCartonsVal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.quantity || 0);
+    const bonusCartonsVal = item.cartonBonusQuantity || 0;
+    setCartonQuantity((Math.max(0, totalCartonsVal - bonusCartonsVal)).toString());
+    setCartonBonus(bonusCartonsVal > 0 ? bonusCartonsVal.toString() : '');
 
-    setPacketCost(item.packetCostPrice ? item.packetCostPrice.toString() : '');
+    const initialPacketCost = item.packetPurchaseCost !== undefined
+      ? item.packetPurchaseCost.toString()
+      : (item.packetCostPrice ? item.packetCostPrice.toString() : '');
+
+    setPacketCost(initialPacketCost);
     setPacketPrice(item.packetSellingPrice ? item.packetSellingPrice.toString() : '');
     setPacketWholesale(item.packetWholesalePrice ? item.packetWholesalePrice.toString() : '');
-    setPacketQuantity(item.packetQuantity !== undefined ? item.packetQuantity.toString() : '0');
+    
+    const totalPacketsVal = item.packetQuantity !== undefined ? item.packetQuantity : 0;
+    const bonusPacketsVal = item.packetBonusQuantity || 0;
+    setPacketQuantity((Math.max(0, totalPacketsVal - bonusPacketsVal)).toString());
+    setPacketBonus(bonusPacketsVal > 0 ? bonusPacketsVal.toString() : '');
 
     setPaymentType('cash');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -278,10 +326,12 @@ export default function InventoryView({ role }: { role: Role }) {
     setHasCarton(true);
     setHasPacket(false);
     setCartonQuantity('');
+    setCartonBonus('');
     setCartonCost('');
     setCartonPrice('');
     setCartonWholesale('');
     setPacketQuantity('');
+    setPacketBonus('');
     setPacketCost('');
     setPacketPrice('');
     setPacketWholesale('');
@@ -411,7 +461,7 @@ export default function InventoryView({ role }: { role: Role }) {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">بڕ (کارتۆن)</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">بڕی کڕین (کارتۆن)</label>
                     <input 
                       type="number" 
                       min="0" 
@@ -425,7 +475,22 @@ export default function InventoryView({ role }: { role: Role }) {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">تێچوو بۆ کارتۆن</label>
+                    <label className="block text-xs font-bold text-amber-700 mb-1 flex items-center gap-1">
+                      <span>🎁 دیاری / هەدیە (تێچوو 0)</span>
+                    </label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      className="w-full px-3 py-2 border border-amber-300 bg-amber-50/50 rounded-xl text-sm font-bold focus:ring-2 focus:ring-amber-500 outline-none" 
+                      value={cartonBonus} 
+                      onChange={(e) => setCartonBonus(e.target.value)} 
+                      placeholder="بڕی هەدیە (0)"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">تێچوو بۆ کارتۆنی کڕدراو</label>
                     <input 
                       type="number" 
                       min="0" 
@@ -451,7 +516,7 @@ export default function InventoryView({ role }: { role: Role }) {
                       dir="ltr" 
                     />
                   </div>
-                  <div>
+                  <div className="col-span-2">
                     <label className="block text-xs font-bold text-slate-600 mb-1">نرخی کۆگا / کۆمەڵ (کارتۆن)</label>
                     <input 
                       type="number" 
@@ -465,6 +530,18 @@ export default function InventoryView({ role }: { role: Role }) {
                     />
                   </div>
                 </div>
+
+                {/* Carton Bonus summary explanation */}
+                {Number(cartonBonus) > 0 && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed font-medium">
+                    <div className="flex items-center gap-1 font-bold text-amber-950 mb-0.5">
+                      <span>🎁 بڕی دیاری: {cartonBonus} کارتۆن بێ تێچوو</span>
+                    </div>
+                    <div>
+                      کۆی گشتی لە کۆگا: <strong className="font-bold">{(Number(cartonQuantity) || 0) + Number(cartonBonus)}</strong> کارتۆن دادەنرێت. پارەی کۆمپانیا تەنها بۆ <strong className="font-bold">{Number(cartonQuantity) || 0}</strong> کارتۆنی کڕدراوە ({((Number(cartonCost) || 0) * (Number(cartonQuantity) || 0)).toLocaleString()} د.ع). فرۆشتنی ئەم {cartonBonus} کارتۆنە ١٠٠٪ قازانجی ڕووت دەبێت.
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -479,7 +556,7 @@ export default function InventoryView({ role }: { role: Role }) {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">بڕ (پاکەت)</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">بڕی کڕین (پاکەت)</label>
                     <input 
                       type="number" 
                       min="0" 
@@ -493,7 +570,22 @@ export default function InventoryView({ role }: { role: Role }) {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">تێچوو بۆ پاکەت</label>
+                    <label className="block text-xs font-bold text-amber-700 mb-1 flex items-center gap-1">
+                      <span>🎁 دیاری / هەدیە (تێچوو 0)</span>
+                    </label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      step="any" 
+                      className="w-full px-3 py-2 border border-amber-300 bg-amber-50/50 rounded-xl text-sm font-bold focus:ring-2 focus:ring-amber-500 outline-none" 
+                      value={packetBonus} 
+                      onChange={(e) => setPacketBonus(e.target.value)} 
+                      placeholder="بڕی هەدیە (0)"
+                      dir="ltr" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">تێچوو بۆ پاکەتی کڕدراو</label>
                     <input 
                       type="number" 
                       min="0" 
@@ -519,7 +611,7 @@ export default function InventoryView({ role }: { role: Role }) {
                       dir="ltr" 
                     />
                   </div>
-                  <div>
+                  <div className="col-span-2">
                     <label className="block text-xs font-bold text-slate-600 mb-1">نرخی کۆگا / کۆمەڵ (پاکەت)</label>
                     <input 
                       type="number" 
@@ -533,6 +625,18 @@ export default function InventoryView({ role }: { role: Role }) {
                     />
                   </div>
                 </div>
+
+                {/* Packet Bonus summary explanation */}
+                {Number(packetBonus) > 0 && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed font-medium">
+                    <div className="flex items-center gap-1 font-bold text-amber-950 mb-0.5">
+                      <span>🎁 بڕی دیاری: {packetBonus} پاکەت بێ تێچوو</span>
+                    </div>
+                    <div>
+                      کۆی گشتی لە کۆگا: <strong className="font-bold">{(Number(packetQuantity) || 0) + Number(packetBonus)}</strong> پاکەت دادەنرێت. پارەی کۆمپانیا تەنها بۆ <strong className="font-bold">{Number(packetQuantity) || 0}</strong> پاکەتی کڕدراوە ({((Number(packetCost) || 0) * (Number(packetQuantity) || 0)).toLocaleString()} د.ع). فرۆشتنی ئەم {packetBonus} پاکەتە ١٠٠٪ قازانجی ڕووت دەبێت.
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -665,9 +769,17 @@ export default function InventoryView({ role }: { role: Role }) {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-slate-900 font-bold" dir="ltr">
-                      <span className={`${(item.quantity || 0) <= 0 ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'} px-2.5 py-1 rounded-lg text-xs font-bold inline-block`}>
-                        {formatStock(item)}
-                      </span>
+                      <div className="flex flex-col gap-1 items-start">
+                        <span className={`${(item.quantity || 0) <= 0 ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'} px-2.5 py-1 rounded-lg text-xs font-bold inline-block`}>
+                          {formatStock(item)}
+                        </span>
+                        {((item.cartonBonusQuantity && item.cartonBonusQuantity > 0) || (item.packetBonusQuantity && item.packetBonusQuantity > 0)) ? (
+                          <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded font-bold flex items-center gap-1" dir="rtl">
+                            <span>🎁</span>
+                            <span>{item.cartonBonusQuantity ? `${item.cartonBonusQuantity} کارتۆن` : ''} {item.packetBonusQuantity ? `${item.packetBonusQuantity} پاکەت` : ''} دیاری بێ تێچوو</span>
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-2">

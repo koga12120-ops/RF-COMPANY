@@ -28,6 +28,11 @@ export interface Item {
   cartonSellingPrice?: number;
   cartonWholesalePrice?: number;
   cartonQuantity?: number;
+  cartonBonusQuantity?: number; // بڕی دیاری / هەدیەی کارتۆن (تێچوو 0)
+  cartonPurchaseCost?: number; // تێچووی کڕینی سەرەکی بەبێ دیاری
+
+  packetBonusQuantity?: number; // بڕی دیاری / هەدیەی پاکەت (تێچوو 0)
+  packetPurchaseCost?: number; // تێچووی کڕینی سەرەکی پاکەت بەبێ دیاری
 
   // Backward compatibility fields
   ratio?: number;
@@ -53,10 +58,15 @@ export interface StockHistory {
   itemId: string;
   itemName: string;
   quantityAdded: number;
+  purchasedQuantity?: number;
+  bonusQuantity?: number; // بڕی دیاری / هەدیە
+  cartonBonus?: number;
+  packetBonus?: number;
   unit?: 'carton' | 'packet';
   date: number;
   invoiceNo?: string; // ژمارەی سەر وەسڵ
   supplier?: string;
+  notes?: string;
 }
 
 export interface Transaction {
@@ -65,6 +75,7 @@ export interface Transaction {
   amount: number;
   date: number; // timestamp
   description: string;
+  category?: string; // پۆلێنی خەرجی (بەنزین، کرێ، نان، هتد)
   relatedEntityId?: string; // e.g. market name or person name
   profitReversal?: number;
   invoiceNo?: string; // ژمارەی دەفتەر وەسڵ

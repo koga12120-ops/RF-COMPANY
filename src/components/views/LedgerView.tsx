@@ -4,13 +4,24 @@ import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
-import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard, Edit2, X } from 'lucide-react';
+import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard, Edit2, X, Search, CheckCircle, Tag, Wallet, Sparkles } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml, printExpenseVoucherPopup, printExpensesListReportPopup } from '../../lib/statementPrinter';
 import { getCompanySettings } from '../../lib/companySettings';
 
+export const PRESET_EXPENSE_CATEGORIES = [
+  'بەنزین و سووتەمەنی',
+  'خواردن و میوانداری',
+  'کرێی شوێن و کۆگا',
+  'چاککردنەوە و سێرڤیس',
+  'مووچە و دەستکەوت',
+  'پێداویستی و پاککەرەوە',
+  'گواستنەوە و بارکردن',
+  'جۆراوجۆر'
+];
+
 export default function LedgerView() {
-  const [activeTab, setActiveTab] = useState<'current' | 'archive'>('current');
+  const [activeTab, setActiveTab] = useState<'current' | 'expenses' | 'archive'>('current');
   const [timeFilter, setTimeFilter] = useState<'all' | 'day' | 'week' | 'month'>('day');
   
   const [archiveYear, setArchiveYear] = useState(new Date().getFullYear().toString());
@@ -26,13 +37,24 @@ export default function LedgerView() {
   const [editEntityName, setEditEntityName] = useState('');
   const [editInvoiceNo, setEditInvoiceNo] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+  const [editReceivedBy, setEditReceivedBy] = useState('');
   
   const [loading, setLoading] = useState(true);
   
-  const [type, setType] = useState<'income' | 'expense'>('income');
-  const [amount, setAmount] = useState('');
-  const [description, setDescription] = useState('');
-  const [dealFilterType, setDealFilterType] = useState<'all' | 'company' | 'market' | 'warehouse'>('all');
+  // Expenses Tab specific state
+  const [expenseFilterTime, setExpenseFilterTime] = useState<'day' | 'week' | 'month' | 'custom' | 'all'>('day');
+  const [expenseCustomDate, setExpenseCustomDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [expenseSearch, setExpenseSearch] = useState('');
+
+  // Expense entry form state
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseDescription, setExpenseDescription] = useState('');
+  const [expenseDate, setExpenseDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+  const [expenseSuccessMsg, setExpenseSuccessMsg] = useState('');
+
+  const [dealFilterType, setDealFilterType] = useState<'all' | 'company' | 'market' | 'warehouse' | 'expense'>('all');
   const [dealFilterName, setDealFilterName] = useState('all');
   const [dealFilterRep, setDealFilterRep] = useState('all');
 
@@ -88,30 +110,105 @@ export default function LedgerView() {
     };
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!amount || !description) return;
+    const num = Number(expenseAmount);
+    if (!expenseAmount || isNaN(num) || num <= 0) {
+      alert('تکایە بڕێکی دروست بۆ خەرجی بنووسە');
+      return;
+    }
+    if (!expenseDescription.trim()) {
+      alert('تکایە هۆکاری خەرجی بنووسە');
+      return;
+    }
+
     try {
+      setIsSubmittingExpense(true);
+      let targetTimestamp = Date.now();
+      if (expenseDate) {
+        const [y, m, d] = expenseDate.split('-').map(Number);
+        const now = new Date();
+        const customD = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds());
+        targetTimestamp = customD.getTime();
+      }
+
       await addDoc(collection(db, 'transactions'), {
-        type,
-        amount: Number(amount),
-        description,
-        date: Date.now()
+        type: 'expense',
+        amount: num,
+        description: expenseDescription.trim(),
+        date: targetTimestamp,
+        createdAt: Date.now()
       });
-      setAmount('');
-      setDescription('');
-    } catch (error) {
+
+      setExpenseAmount('');
+      setExpenseDescription('');
+      setExpenseSuccessMsg('خەرجییەکە بە سەرکەوتوویی تۆمارکرا و یەکسەر چووە نێو دەفتەری سەرەکی');
+      setTimeout(() => setExpenseSuccessMsg(''), 4000);
+    } catch (error: any) {
       console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی تۆمارکردنی خەرجی: ' + error.message);
+    } finally {
+      setIsSubmittingExpense(false);
     }
   };
 
-    const filteredData = useMemo(() => {
+  const expenseTransactions = useMemo(() => {
+    return transactions.filter(t => t.type === 'expense');
+  }, [transactions]);
+
+  const filteredExpenses = useMemo(() => {
+    const now = new Date();
+    let list = expenseTransactions;
+
+    if (expenseFilterTime === 'day') {
+      const start = startOfDay(now).getTime();
+      const end = endOfDay(now).getTime();
+      list = list.filter(t => t.date >= start && t.date <= end);
+    } else if (expenseFilterTime === 'week') {
+      const start = startOfWeek(now, { weekStartsOn: 6 }).getTime();
+      const end = endOfWeek(now, { weekStartsOn: 6 }).getTime();
+      list = list.filter(t => t.date >= start && t.date <= end);
+    } else if (expenseFilterTime === 'month') {
+      const start = startOfMonth(now).getTime();
+      const end = endOfMonth(now).getTime();
+      list = list.filter(t => t.date >= start && t.date <= end);
+    } else if (expenseFilterTime === 'custom' && expenseCustomDate) {
+      const targetDate = new Date(expenseCustomDate);
+      const start = startOfDay(targetDate).getTime();
+      const end = endOfDay(targetDate).getTime();
+      list = list.filter(t => t.date >= start && t.date <= end);
+    }
+
+    if (expenseSearch.trim()) {
+      const q = expenseSearch.trim().toLowerCase();
+      list = list.filter(t => 
+        (t.description && t.description.toLowerCase().includes(q)) ||
+        (t.amount && t.amount.toString().includes(q))
+      );
+    }
+
+    return list.sort((a, b) => b.date - a.date);
+  }, [expenseTransactions, expenseFilterTime, expenseCustomDate, expenseSearch]);
+
+  const totalFilteredExpenseAmount = useMemo(() => {
+    return filteredExpenses.reduce((sum, item) => sum + (item.amount || 0), 0);
+  }, [filteredExpenses]);
+
+  const expensePeriodLabel = useMemo(() => {
+    if (expenseFilterTime === 'day') return `ئەمڕۆ (${format(new Date(), 'yyyy/MM/dd')})`;
+    if (expenseFilterTime === 'week') return 'ئەم هەفتەیە';
+    if (expenseFilterTime === 'month') return `ئەم مانگە (${format(new Date(), 'yyyy/MM')})`;
+    if (expenseFilterTime === 'custom') return `بەرواری ${expenseCustomDate}`;
+    return 'هەموو کاتەکان';
+  }, [expenseFilterTime, expenseCustomDate]);
+
+  const filteredData = useMemo(() => {
     const now = new Date();
     let start: Date;
     let end: Date;
     let isAll = false;
 
-    if (activeTab === 'current') {
+    if (activeTab === 'current' || activeTab === 'expenses') {
       if (timeFilter === 'all') {
         isAll = true;
       } else if (timeFilter === 'day') {
@@ -137,7 +234,7 @@ export default function LedgerView() {
       }
     }
 
-        const t = transactions.filter(tr => isAll ? true : isWithinInterval(tr.date, { start: start!, end: end! }));
+    const t = transactions.filter(tr => isAll ? true : isWithinInterval(tr.date, { start: start!, end: end! }));
     const o = orders.filter(ord => (ord.status === 'completed' || ord.status === 'deleted') && (isAll ? true : isWithinInterval(ord.timestamp, { start: start!, end: end! })));
     const c = cashvanSales.filter(cv => (cv.status === 'accounted' || cv.status === 'deleted') && (isAll ? true : isWithinInterval(cv.date || cv.timestamp, { start: start!, end: end! })));
 
@@ -149,17 +246,18 @@ export default function LedgerView() {
   const deals = useMemo(() => {
     let list: any[] = [];
     fTrans.forEach(t => {
+      const isExp = t.type === 'expense';
       list.push({
         id: t.id,
         sourceCollection: 'transactions',
         rawItem: t,
-        type: t.type === 'company_paid_debt' ? 'پاردانەوەی کۆمپانیا' : (t.type === 'company_cash' || t.type === 'company_debt' ? 'وەرگرتنی کاڵا' : (t.type === 'income' ? 'داهاتی دەستی' : (t.type === 'expense' ? 'خەرجی دەستی' : 'پاردانەوە/قەرز'))),
-        entityType: ['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'company' : 'market',
-        entityName: t.relatedEntityId || t.description,
-        personName: ['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'کۆمپانیا' : 'بەڕێوەبەر',
+        type: isExp ? 'خەرجی' : (t.type === 'company_paid_debt' ? 'پاردانەوەی کۆمپانیا' : (t.type === 'company_cash' || t.type === 'company_debt' ? 'وەرگرتنی کاڵا' : (t.type === 'income' ? 'داهاتی دەستی' : 'پاردانەوە/قەرز'))),
+        entityType: isExp ? 'expense' : (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'company' : 'market'),
+        entityName: isExp ? (t.description || t.category || 'خەرجی') : (t.relatedEntityId || t.description),
+        personName: isExp ? (t.receivedBy || 'بەڕێوەبەر') : (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'کۆمپانیا' : 'بەڕێوەبەر'),
         amount: t.amount,
         date: t.date,
-        invoiceNumber: t.invoiceNo ? `#${t.invoiceNo}` : ((['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'COMP-' : 'TRN-') + t.id.slice(-4).toUpperCase()),
+        invoiceNumber: t.invoiceNo ? `#${t.invoiceNo}` : (isExp ? `EXP-${t.id.slice(-4).toUpperCase()}` : ((['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'COMP-' : 'TRN-') + t.id.slice(-4).toUpperCase())),
         invoiceNo: t.invoiceNo,
         isDeleted: false,
         deletedBy: ''
@@ -204,7 +302,11 @@ export default function LedgerView() {
     
     // Filtering
     if (dealFilterType !== 'all') {
-       list = list.filter(d => d.entityType === dealFilterType || d.type.includes(dealFilterType === 'company' ? 'کۆمپانیا' : ''));
+      if (dealFilterType === 'expense') {
+        list = list.filter(d => d.entityType === 'expense' || d.type === 'خەرجی');
+      } else {
+        list = list.filter(d => d.entityType === dealFilterType || d.type.includes(dealFilterType === 'company' ? 'کۆمپانیا' : ''));
+      }
     }
     
     if (dealFilterName !== 'all' && dealFilterName.trim() !== '') {
@@ -264,6 +366,8 @@ export default function LedgerView() {
     setEditEntityName(deal.entityName || '');
     setEditInvoiceNo(deal.invoiceNo || '');
     setEditDescription(deal.rawItem?.description || deal.rawItem?.notes || '');
+    setEditCategory(deal.rawItem?.category || 'جۆراوجۆر');
+    setEditReceivedBy(deal.rawItem?.receivedBy || deal.personName || '');
   };
 
   const handleSaveEditDeal = async (e: React.FormEvent) => {
@@ -316,7 +420,9 @@ export default function LedgerView() {
           amount: numAmount,
           relatedEntityId: editEntityName,
           invoiceNo: editInvoiceNo,
-          description: editDescription
+          description: editDescription,
+          category: editCategory || (editingDeal.rawItem?.category || 'جۆراوجۆر'),
+          receivedBy: editReceivedBy || (editingDeal.rawItem?.receivedBy || 'بەڕێوەبەر')
         });
       }
 
@@ -412,6 +518,11 @@ export default function LedgerView() {
 
 
   const printDeal = (d: any) => {
+    if (d.rawItem?.type === 'expense' || d.type === 'خەرجی' || d.type === 'خەرجی دەستی') {
+      printExpenseVoucherPopup(d.rawItem);
+      return;
+    }
+
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
@@ -506,6 +617,18 @@ export default function LedgerView() {
           حساباتی هەنووکەیی
         </button>
         <button
+          onClick={() => setActiveTab('expenses')}
+          className={`px-4 py-3 font-bold text-sm flex items-center gap-2 border-b-2 transition ${
+            activeTab === 'expenses' ? 'border-rose-600 text-rose-600 bg-rose-50/60 rounded-t-xl' : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <Receipt size={18} />
+          <span>خەرجییەکان</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${activeTab === 'expenses' ? 'bg-rose-200 text-rose-800' : 'bg-slate-100 text-slate-600'}`}>
+            {expenseTransactions.length}
+          </span>
+        </button>
+        <button
           onClick={() => setActiveTab('archive')}
           className={`px-4 py-3 font-bold text-sm flex items-center gap-2 border-b-2 transition ${
             activeTab === 'archive' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'
@@ -516,8 +639,11 @@ export default function LedgerView() {
         </button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+      {/* Main Ledger Content (Current & Archive) */}
+      {(activeTab === 'current' || activeTab === 'archive') && (
+        <>
+          {/* Filters */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
                 {activeTab === 'current' ? (
           <div className="flex gap-2 w-full md:w-auto">
             <button
@@ -638,15 +764,22 @@ export default function LedgerView() {
           </div>
         </div>
 
-        {/* کۆی خەرجی */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition">
-          <div className="p-3 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+        {/* کۆی خەرجی - Clickable to open Expenses tab */}
+        <div 
+          onClick={() => setActiveTab('expenses')}
+          className="bg-white p-4 rounded-2xl border border-rose-200 shadow-sm flex items-center gap-3.5 hover:shadow-md transition cursor-pointer hover:border-rose-400 group"
+          title="کرتە بکە بۆ چوونە سەر تابی خەرجییەکان"
+        >
+          <div className="p-3 bg-rose-100 text-rose-600 rounded-xl shrink-0 group-hover:scale-110 transition-transform">
             <Receipt size={20} />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate">کۆی خەرجی</div>
+            <div className="text-xs text-slate-500 mb-0.5 font-medium truncate flex items-center justify-between">
+              <span>کۆی خەرجی</span>
+              <span className="text-[10px] text-rose-500 font-bold group-hover:underline">بینین &larr;</span>
+            </div>
             <div className="text-lg font-bold text-rose-600 tracking-tight" dir="ltr">{totalExpense.toLocaleString()}</div>
-            <div className="text-[11px] text-slate-400 mt-0.5 truncate">خەرجی دەستی</div>
+            <div className="text-[11px] text-rose-500/80 mt-0.5 truncate font-medium">کرتە بکە بۆ بەڕێوەبردن</div>
           </div>
         </div>
 
@@ -675,62 +808,9 @@ export default function LedgerView() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Entry Form - Only show in current tab */}
-        {activeTab === 'current' && (
-          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 lg:col-span-1 h-fit flex flex-col overflow-hidden">
-            <div className="p-4 border-b border-slate-100 bg-slate-50">
-              <h4 className="font-bold text-slate-700 flex items-center gap-2">زیادکردنی تۆمار</h4>
-            </div>
-            <div className="p-4">
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1">جۆر</label>
-                  <select
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                    value={type}
-                    onChange={(e) => setType(e.target.value as 'income' | 'expense')}
-                  >
-                    <option value="income">داهات</option>
-                    <option value="expense">خەرجی</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1">بڕی پارە</label>
-                  <input
-                    type="number"
-                    required
-                    min="0"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    dir="ltr"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1">وردەکاری</label>
-                  <textarea
-                    required
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                    rows={3}
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="w-full py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2 font-medium text-sm"
-                >
-                  <Plus size={18} />
-                  <span>پاشەکەوتکردن</span>
-                </button>
-              </form>
-            </div>
-          </section>
-        )}
-
+      <div className="w-full">
         {/* Transactions List */}
-        <section className={`bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden ${activeTab === 'archive' ? 'lg:col-span-3' : 'lg:col-span-2'}`}>
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden w-full">
           <div className="border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 gap-4">
             <h4 className="font-bold text-slate-700 flex items-center gap-2">
               <ShoppingBag size={18} />
@@ -749,16 +829,17 @@ export default function LedgerView() {
                 ))}
               </select>
               <select
-                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
+                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none font-bold"
                 value={dealFilterType}
                 onChange={(e) => {
                   setDealFilterType(e.target.value as any);
                   setDealFilterName('all');
                 }}
               >
-                <option value="all">جۆری لایەن</option>
+                <option value="all">هەموو جۆرەکان</option>
                 <option value="company">کۆمپانیاکان</option>
                 <option value="market">مارکێت/کۆگا</option>
+                <option value="expense">خەرجییەکان</option>
               </select>
               <select
                 className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
@@ -793,8 +874,9 @@ export default function LedgerView() {
                       <tr key={d.id + i} className="hover:bg-slate-50/50 transition">
                         <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">{format(d.date, 'yyyy-MM-dd HH:mm')}</td>
                         <td className="px-4 py-4">
-                          <span className={`px-2 py-1 rounded text-xs font-bold ${
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                             d.isDeleted ? 'bg-red-100 text-red-700' :
+                            d.type.includes('خەرجی') ? 'bg-rose-100 text-rose-800 border border-rose-200' :
                             d.type.includes('مەندووب') ? 'bg-indigo-100 text-indigo-700' :
                             d.type.includes('کاشڤان') ? 'bg-sky-100 text-sky-700' :
                             d.type.includes('کۆمپانیا') ? 'bg-amber-100 text-amber-700' :
@@ -807,23 +889,30 @@ export default function LedgerView() {
                         <td className={`px-4 py-4 font-mono text-xs ${d.isDeleted ? 'text-slate-400 line-through' : 'text-slate-500'}`}>{d.invoiceNumber}</td>
                         <td className={`px-4 py-4 font-bold ${d.isDeleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{d.entityName}</td>
                         <td className={`px-4 py-4 ${d.isDeleted ? 'text-slate-400 line-through' : 'text-slate-600'}`}>{d.personName}</td>
-                        <td className={`px-4 py-4 font-bold ${d.isDeleted ? 'text-slate-400 line-through' : 'text-emerald-600'}`} dir="ltr">{d.amount.toLocaleString()}</td>
+                        <td className={`px-4 py-4 font-bold ${
+                          d.isDeleted ? 'text-slate-400 line-through' : 
+                          d.type.includes('خەرجی') ? 'text-rose-600' : 'text-emerald-600'
+                        }`} dir="ltr">
+                          {d.type.includes('خەرجی') ? `-${d.amount.toLocaleString()}` : d.amount.toLocaleString()}
+                        </td>
                         <td className="px-4 py-4">
-                                                  <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2">
                             <button
                               onClick={() => printDeal(d)}
                               className="text-blue-600 hover:bg-blue-50 p-1.5 rounded transition"
-                              title="چاپکردنی تەنها ئەمە"
+                              title="چاپکردنی وەسڵ"
                             >
                               <Printer size={16} />
                             </button>
-                            <button
-                              onClick={() => printStatement(d.entityName)}
-                              className="text-indigo-600 hover:bg-indigo-50 p-1.5 rounded transition"
-                              title="کەشف حیساب"
-                            >
-                              <FileText size={16} />
-                            </button>
+                            {!d.type.includes('خەرجی') && (
+                              <button
+                                onClick={() => printStatement(d.entityName)}
+                                className="text-indigo-600 hover:bg-indigo-50 p-1.5 rounded transition"
+                                title="کەشف حیساب"
+                              >
+                                <FileText size={16} />
+                              </button>
+                            )}
                             <button
                               onClick={() => handleStartEditDeal(d)}
                               className="text-amber-600 hover:bg-amber-50 p-1.5 rounded transition"
@@ -855,6 +944,340 @@ export default function LedgerView() {
           )}
         </section>
       </div>
+    </>
+  )}
+
+      {/* Expenses Tab View */}
+      {activeTab === 'expenses' && (
+        <div className="space-y-6">
+          {/* Expenses Stats Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Total Filtered Expense */}
+            <div className="bg-white p-5 rounded-2xl border border-rose-200 shadow-sm flex items-center gap-4">
+              <div className="p-3.5 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+                <Receipt size={24} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-slate-500 font-medium mb-1">کۆی خەرجی ({expensePeriodLabel})</div>
+                <div className="text-xl font-bold text-rose-600 tracking-tight" dir="ltr">
+                  {totalFilteredExpenseAmount.toLocaleString()} <span className="text-xs font-normal text-slate-500">دینار</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5 font-medium">
+                  {filteredExpenses.length} پسوولە / تۆمار
+                </div>
+              </div>
+            </div>
+
+            {/* All-time Total Expense */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3.5 bg-slate-100 text-slate-600 rounded-xl shrink-0">
+                <Wallet size={24} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-slate-500 font-medium mb-1">کۆی گشتی خەرجی (هەمووی)</div>
+                <div className="text-xl font-bold text-slate-800 tracking-tight" dir="ltr">
+                  {expenseTransactions.reduce((s, x) => s + (x.amount || 0), 0).toLocaleString()} <span className="text-xs font-normal text-slate-500">دینار</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  کۆی گشتی {expenseTransactions.length} خەرجی تۆمارکراو
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Actions / Print Report */}
+            <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/50 p-5 rounded-2xl border border-indigo-200 shadow-sm flex flex-col justify-between sm:col-span-2">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div>
+                  <h4 className="font-bold text-indigo-950 text-sm flex items-center gap-2">
+                    <Printer size={18} className="text-indigo-600" />
+                    چاپکردنی ڕاپۆرتی خەرجییەکان
+                  </h4>
+                  <p className="text-xs text-indigo-700/80 mt-1">
+                    چاپکردنی خشتەی ڕاپۆرتی خەرجییە فلتەرکراوەکان بەپێی بەروار
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    printExpensesListReportPopup(filteredExpenses, expensePeriodLabel);
+                  }}
+                  disabled={filteredExpenses.length === 0}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center gap-2 transition shadow-sm cursor-pointer"
+                >
+                  <Printer size={16} />
+                  <span>چاپکردنی ڕاپۆرت ({filteredExpenses.length})</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Expenses Two-Column Layout */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left Column: Add New Expense Form (4 cols) */}
+            <div className="lg:col-span-4 space-y-4">
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-4 border-b border-slate-100 bg-gradient-to-r from-rose-50 to-white flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-rose-600 text-white flex items-center justify-center font-bold">
+                      <Plus size={18} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">تۆمارکردنی خەرجی نوێ</h3>
+                      <p className="text-[11px] text-slate-400">یەکسەر لە دەفتەر حساباتی سەرەکیش دەردەکەوێت</p>
+                    </div>
+                  </div>
+                </div>
+
+                {expenseSuccessMsg && (
+                  <div className="m-4 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
+                    <CheckCircle size={16} className="text-emerald-600 shrink-0" />
+                    <span>{expenseSuccessMsg}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleAddExpense} className="p-4 space-y-4">
+                  {/* Amount */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      بڕی پارەی خەرجی (دینار) <span className="text-rose-600">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        placeholder="نموونە: 25000"
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-rose-500 focus:border-rose-500 outline-none text-base font-bold text-slate-800"
+                        value={expenseAmount}
+                        onChange={(e) => setExpenseAmount(e.target.value)}
+                        dir="ltr"
+                      />
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">IQD</span>
+                    </div>
+                  </div>
+
+                  {/* Description / Reason */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      وردەکاری و هۆکاری خەرجی <span className="text-rose-600">*</span>
+                    </label>
+                    <textarea
+                      required
+                      rows={3}
+                      placeholder="هۆکاری خەرجی بنووسە، وەک: کڕینی بەنزین بۆ ئۆتۆمبێل، کرێی بار، نانخواردن..."
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-500"
+                      value={expenseDescription}
+                      onChange={(e) => setExpenseDescription(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Date */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      بەرواری خەرجی
+                    </label>
+                    <input
+                      type="date"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-500"
+                      value={expenseDate}
+                      onChange={(e) => setExpenseDate(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Submit Button */}
+                  <button
+                    type="submit"
+                    disabled={isSubmittingExpense}
+                    className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-sm transition flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer"
+                  >
+                    <Plus size={18} />
+                    <span>{isSubmittingExpense ? 'خەریکی تۆمارکردنە...' : 'پاشەکەوتکردنی خەرجی'}</span>
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* Right Column: Expenses Table & Filters (8 cols) */}
+            <div className="lg:col-span-8 space-y-4">
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+                {/* Header & Filter Controls */}
+                <div className="p-4 border-b border-slate-100 bg-slate-50 space-y-3">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                    <h4 className="font-bold text-slate-800 flex items-center gap-2 text-sm">
+                      <Receipt size={18} className="text-rose-600" />
+                      <span>لیستی خەرجییەکان</span>
+                      <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 text-xs font-bold">
+                        {filteredExpenses.length}
+                      </span>
+                    </h4>
+                    
+                    {/* Time Filter Buttons: day / week / month / all / custom */}
+                    <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => setExpenseFilterTime('all')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                          expenseFilterTime === 'all'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        هەمووی
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpenseFilterTime('day')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                          expenseFilterTime === 'day'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        ئەمڕۆ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpenseFilterTime('week')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                          expenseFilterTime === 'week'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        ئەم هەفتەیە
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpenseFilterTime('month')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                          expenseFilterTime === 'month'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        ئەم مانگە
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpenseFilterTime('custom')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                          expenseFilterTime === 'custom'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        بەرواری دیاریکراو
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Secondary Filters: Custom Date and Search */}
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    {expenseFilterTime === 'custom' && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-slate-500 font-bold">بەروار:</label>
+                        <input
+                          type="date"
+                          value={expenseCustomDate}
+                          onChange={(e) => setExpenseCustomDate(e.target.value)}
+                          className="px-3 py-1.5 border border-slate-200 bg-white rounded-lg text-xs font-bold outline-none focus:ring-2 focus:ring-rose-500"
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex-1 min-w-[200px] relative">
+                      <Search size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="گەڕان لە خەرجی..."
+                        value={expenseSearch}
+                        onChange={(e) => setExpenseSearch(e.target.value)}
+                        className="w-full pr-8 pl-3 py-1.5 border border-slate-200 bg-white rounded-lg text-xs outline-none focus:ring-2 focus:ring-rose-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Expenses Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right">
+                    <thead className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-100">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">بەروار</th>
+                        <th className="px-4 py-3 font-semibold">وردەکاری و هۆکاری خەرجی</th>
+                        <th className="px-4 py-3 font-semibold">بڕی خەرجی</th>
+                        <th className="px-4 py-3 font-semibold text-center w-24">کردەوەکان</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-sm divide-y divide-slate-100">
+                      {filteredExpenses.map((exp) => (
+                        <tr key={exp.id} className="hover:bg-rose-50/30 transition">
+                          <td className="px-4 py-3 text-slate-500 text-xs font-mono" dir="ltr">
+                            {format(exp.date, 'yyyy-MM-dd HH:mm')}
+                          </td>
+                          <td className="px-4 py-3 font-medium text-slate-800 text-xs max-w-md">
+                            {exp.description}
+                          </td>
+                          <td className="px-4 py-3 font-bold text-rose-600 text-sm" dir="ltr">
+                            {exp.amount.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">IQD</span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => printExpenseVoucherPopup(exp)}
+                                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
+                                title="چاپکردنی پسوولەی خەرجی"
+                              >
+                                <Printer size={16} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeletingDeal({
+                                    id: exp.id,
+                                    type: 'خەرجی',
+                                    entityName: exp.description || 'خەرجی',
+                                    rawItem: { ...exp, type: 'expense' }
+                                  });
+                                }}
+                                className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                title="سڕینەوەی خەرجی"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredExpenses.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="text-center py-12 text-slate-400">
+                            <div className="flex flex-col items-center justify-center gap-2">
+                              <Receipt size={36} className="text-slate-300" />
+                              <span className="text-sm font-medium">هیچ خەرجییەک لەم بەروار یان فلتەرەدا نەدۆزرایەوە</span>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Footer Totals */}
+                <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+                  <div className="text-xs text-slate-500 font-medium">
+                    کۆی گشتی خەرجی لەم فلتەرەدا:
+                  </div>
+                  <div className="text-base font-bold text-rose-600" dir="ltr">
+                    {totalFilteredExpenseAmount.toLocaleString()} <span className="text-xs text-slate-500 font-normal">دیناری عێراقی</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Deal Modal */}
       {editingDeal && (
