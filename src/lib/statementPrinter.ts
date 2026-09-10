@@ -22,34 +22,71 @@ export interface ReceiptHeaderOptions {
   invoiceNo?: string;
   repName?: string;
   repPhone?: string;
+  marketName?: string;
+  customerName?: string;
   date?: number;
   companyName?: string;
   companyPhone?: string;
+  isSale?: boolean;
 }
 
 export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string {
   const settings = getCompanySettings();
   const cName = options?.companyName || settings.name || 'کۆمپانیای RF';
   const cPhone = options?.companyPhone || settings.phone || '07506144894';
-  const repLine = options?.repPhone ? `
-    <div style="font-size: 13px; color: #0f172a; font-weight: 700; margin-top: 3px;">
-      ژمارەی مەندووب / کاشڤان${options.repName ? ` (${options.repName})` : ''}: <span dir="ltr">${options.repPhone}</span>
+  const isSale = options?.isSale === true;
+
+  const repName = options?.repName || '---';
+  const repPhone = options?.repPhone || '---';
+  const cleanInvoiceNo = options?.invoiceNo ? options.invoiceNo.replace(/^#/, '') : '---';
+  const customer = options?.customerName || options?.marketName || '---';
+
+  const logoSrc = typeof window !== 'undefined' && window.location?.origin 
+    ? `${window.location.origin}/LOGO1.jpg` 
+    : '/LOGO1.jpg';
+
+  const leftContent = isSale ? `
+    <div style="text-align: right; min-width: 170px; max-width: 240px; font-size: 12px; color: #0f172a; line-height: 1.6;">
+      <div><span style="color: #64748b; font-weight: 600;">ناوی مەندووب:</span> <strong style="color: #0f172a;">${repName}</strong></div>
+      <div><span style="color: #64748b; font-weight: 600;">ژمارەی مەندووب:</span> <strong dir="ltr" style="color: #0f172a;">${repPhone}</strong></div>
+      <div><span style="color: #64748b; font-weight: 600;">ژمارەی وەسل:</span> <strong dir="ltr" style="font-family: monospace; color: #0369a1; font-weight: 800;">#${cleanInvoiceNo}</strong></div>
+      <div><span style="color: #64748b; font-weight: 600;">ناوی کڕیار(مارکێت یان کۆگا):</span> <strong style="color: #0f172a;">${customer}</strong></div>
     </div>
-  ` : '';
+  ` : `
+    <div style="min-width: 170px; max-width: 240px;"></div>
+  `;
 
   return `
-    <div style="text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 14px; margin-bottom: 18px;">
-      <div style="display: flex; justify-content: center; margin-bottom: 6px;">
-        <img src="/LOGO1.jpg" alt="Logo" style="width: 75px; height: 75px; object-fit: contain; border-radius: 8px; margin: 0 auto; display: block;" onerror="this.style.display='none'" />
+    <div style="border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 15px; direction: rtl; font-family: system-ui, -apple-system, sans-serif;">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+        <!-- لای ڕاست: لۆگۆ و ناوی کۆمپانیا RF و ژمارە مۆبایلی کۆمپانیا -->
+        <div style="text-align: right; min-width: 170px; max-width: 240px; flex-shrink: 0;">
+          <div style="margin-bottom: 4px;">
+            <img src="${logoSrc}" alt="Logo" style="height: 55px; max-width: 90px; object-fit: contain; display: block;" onerror="this.style.display='none'" />
+          </div>
+          <div style="font-size: 18px; font-weight: 900; color: #0f172a; line-height: 1.2;">${cName}</div>
+          <div style="font-size: 12px; font-weight: 700; color: #334155; margin-top: 3px;">ژمارەی مۆبایلی کۆمپانیا: <span dir="ltr">${cPhone}</span></div>
+        </div>
+
+        <!-- ناوەڕاست: (تەنها) TAM TAM -->
+        <div style="flex: 1; text-align: center; display: flex; align-items: center; justify-content: center; min-height: 60px;">
+          <div style="font-size: 32px; font-weight: 900; letter-spacing: 2px; color: #0f172a; font-family: system-ui, -apple-system, sans-serif;">
+            TAM TAM
+          </div>
+        </div>
+
+        <!-- لای چەپ: ناوی مەندووب، ژمارەی مەندووب، ژمارەی وەسل، ناوی کڕیار(مارکێت یان کۆگا) - تەنها بۆ هەموو فرۆشتنەکان، باقی وەسڵەکانی تر لای چەپیان نابێت -->
+        <div style="flex-shrink: 0;">
+          ${leftContent}
+        </div>
       </div>
-      <div style="font-size: 26px; font-weight: 900; letter-spacing: 1px; color: #0f172a; line-height: 1.1; margin: 2px 0;">${cName}</div>
-      <div style="font-size: 14px; font-weight: 800; color: #0284c7; margin-bottom: 3px;">بریکاری فەرمی TAM TAM</div>
-      <div style="font-size: 13px; color: #475569; font-weight: 700;">ژمارەی کۆمپانیا: <span dir="ltr">${cPhone}</span></div>
-      ${repLine}
-      ${options?.title ? `<h3 style="margin: 8px 0 2px 0; font-size: 17px; font-weight: 800; color: #1e293b;">${options.title}</h3>` : ''}
-      ${options?.subtitle ? `<div style="font-size: 12px; color: #64748b;">${options.subtitle}</div>` : ''}
-      ${options?.invoiceNo ? `<div style="margin-top: 5px;"><span style="display: inline-block; font-family: monospace; font-size: 14px; font-weight: 800; color: #0369a1; background: #e0f2fe; padding: 2px 8px; border-radius: 6px; border: 1px solid #7dd3fc;" dir="ltr">#${options.invoiceNo}</span></div>` : ''}
-      ${options?.date ? `<div style="font-size: 11px; color: #64748b; margin-top: 4px;">بەرواری چاپ: <span dir="ltr">${format(options.date, 'yyyy/MM/dd HH:mm')}</span></div>` : ''}
+
+      ${options?.title ? `
+        <div style="text-align: center; margin-top: 8px; border-top: 1px dashed #cbd5e1; padding-top: 6px;">
+          <div style="font-size: 15px; font-weight: 800; color: #1e293b;">${options.title}</div>
+          ${options.subtitle ? `<div style="font-size: 11px; color: #64748b; margin-top: 2px;">${options.subtitle}</div>` : ''}
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -932,5 +969,212 @@ export function printExpensesListReportPopup(expenses: Transaction[], periodLabe
     win.document.close();
   }
 }
+
+export interface WarehouseInvoicePrintData {
+  invoiceNo: string;
+  supplier: string;
+  date: number;
+  items: Array<{
+    id?: string;
+    name: string;
+    barcode?: string;
+    cartonQuantity?: number;
+    packetQuantity?: number;
+    cartonBonusQuantity?: number;
+    packetBonusQuantity?: number;
+    cartonCostPrice?: number;
+    packetCostPrice?: number;
+    cartonSellingPrice?: number;
+    packetSellingPrice?: number;
+    cartonPurchaseCost?: number;
+    packetPurchaseCost?: number;
+    costPrice?: number;
+    sellingPrice?: number;
+    quantity?: number;
+    unitType?: string;
+  }>;
+  totalCartons?: number;
+  totalPackets?: number;
+  totalCost?: number;
+}
+
+export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
+  const { invoiceNo, supplier, date, items } = data;
+  const cleanInvoiceNo = invoiceNo && invoiceNo !== 'بێ ژمارەی وەسڵ' && invoiceNo !== 'بێ وەسڵ' ? invoiceNo : 'بێ وەسڵ';
+  const cleanSupplier = supplier || 'کۆمپانیای نەزانراو';
+  
+  let totalCartons = 0;
+  let totalPackets = 0;
+  let calculatedTotalCost = 0;
+
+  items.forEach(item => {
+    const cQty = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+    const pQty = item.packetQuantity !== undefined ? item.packetQuantity : 0;
+    totalCartons += cQty;
+    totalPackets += pQty;
+
+    const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
+    const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
+    calculatedTotalCost += (cQty * cCost) + (pQty * pCost);
+  });
+
+  const finalTotalCost = data.totalCost !== undefined ? data.totalCost : calculatedTotalCost;
+  const finalTotalCartons = data.totalCartons !== undefined ? data.totalCartons : totalCartons;
+  const finalTotalPackets = data.totalPackets !== undefined ? data.totalPackets : totalPackets;
+
+  const header = renderReceiptHeaderHtml({
+    title: 'وەسڵی داخڵکردنی کاڵا بۆ کۆگا',
+    subtitle: `کۆمپانیا: ${cleanSupplier} | وەسڵی ژمارە: #${cleanInvoiceNo}`,
+    invoiceNo: cleanInvoiceNo !== 'بێ وەسڵ' ? cleanInvoiceNo : undefined,
+    date: date || Date.now()
+  });
+
+  const rows = items.map((item, idx) => {
+    const cQty = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+    const pQty = item.packetQuantity !== undefined ? item.packetQuantity : 0;
+    const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
+    const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
+    const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
+    const pSell = item.packetSellingPrice || 0;
+    const itemTotalCost = (cQty * cCost) + (pQty * pCost);
+
+    const bonusParts = [];
+    if (item.cartonBonusQuantity && item.cartonBonusQuantity > 0) bonusParts.push(`${item.cartonBonusQuantity} کارتۆن`);
+    if (item.packetBonusQuantity && item.packetBonusQuantity > 0) bonusParts.push(`${item.packetBonusQuantity} پاکەت`);
+    const bonusText = bonusParts.length > 0 ? bonusParts.join(' + ') : '-';
+
+    return `
+      <tr>
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${idx + 1}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 700; color: #0f172a;">
+          ${item.name}
+          ${item.barcode ? `<div style="font-size: 11px; font-family: monospace; color: #64748b;" dir="ltr">${item.barcode}</div>` : ''}
+        </td>
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-weight: 700; font-family: monospace;">
+          ${cQty > 0 ? `${cQty} کارتۆن` : '-'}
+        </td>
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-weight: 700; font-family: monospace;">
+          ${pQty > 0 ? `${pQty} پاکەت` : '-'}
+        </td>
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; color: #d97706; font-weight: 600; font-size: 12px;">
+          ${bonusText}
+        </td>
+        <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: left; font-family: monospace; font-size: 12px;" dir="ltr">
+          ${cCost > 0 ? `ک: ${cCost.toLocaleString()}` : ''}
+          ${pCost > 0 ? ` پ: ${pCost.toLocaleString()}` : ''}
+        </td>
+        <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: left; font-family: monospace; font-size: 12px; color: #2563eb;" dir="ltr">
+          ${cSell > 0 ? `ک: ${cSell.toLocaleString()}` : ''}
+          ${pSell > 0 ? ` پ: ${pSell.toLocaleString()}` : ''}
+        </td>
+        <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: left; font-family: monospace; font-weight: 800; color: #0f172a;" dir="ltr">
+          ${itemTotalCost > 0 ? `${itemTotalCost.toLocaleString()} د.ع` : '-'}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ckb">
+      <head>
+        <meta charset="utf-8" />
+        <title>وەسڵی #${cleanInvoiceNo} - ${cleanSupplier}</title>
+        <style>
+          @page { size: auto; margin: 10mm; }
+          body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 16px; color: #0f172a; }
+          .container { max-width: 820px; margin: 0 auto; }
+          .meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; font-size: 13px; }
+          .meta-item { display: flex; flex-direction: column; gap: 2px; }
+          .meta-label { color: #64748b; font-size: 11px; font-weight: 600; }
+          .meta-value { color: #0f172a; font-weight: 800; font-size: 14px; }
+          table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; text-align: right; }
+          th { background: #f1f5f9; padding: 8px; border-bottom: 2px solid #cbd5e1; font-weight: 700; color: #334155; }
+          .summary-card { background: #eef2ff; border: 2px solid #c7d2fe; border-radius: 10px; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; margin-top: 16px; }
+          .summary-title { font-size: 14px; font-weight: 700; color: #3730a3; }
+          .summary-value { font-size: 22px; font-weight: 900; color: #4338ca; font-family: monospace; }
+          .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 16px; }
+          .sig-box { width: 40%; text-align: center; font-size: 12px; font-weight: 700; color: #475569; }
+          .sig-line { border-bottom: 1px solid #94a3b8; margin-top: 45px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          ${header}
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-label">ناوی کۆمپانیا / سەرچاوە:</span>
+              <span class="meta-value">${cleanSupplier}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">ژمارەی سەر وەسڵ:</span>
+              <span class="meta-value" dir="ltr">#${cleanInvoiceNo}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">بەروار و کات:</span>
+              <span class="meta-value" dir="ltr">${format(date || Date.now(), 'yyyy/MM/dd HH:mm')}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">ژمارەی کاڵاکان:</span>
+              <span class="meta-value">${items.length} جۆر کاڵا</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">کۆی کارتۆن:</span>
+              <span class="meta-value" dir="ltr">${finalTotalCartons} کارتۆن</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">کۆی پاکەت:</span>
+              <span class="meta-value" dir="ltr">${finalTotalPackets} پاکەت</span>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 35px; text-align: center;">#</th>
+                <th>ناوی کاڵا</th>
+                <th style="width: 85px; text-align: center;">کارتۆن</th>
+                <th style="width: 85px; text-align: center;">پاکەت</th>
+                <th style="width: 100px; text-align: center;">دیاری (هەدیە)</th>
+                <th style="width: 100px; text-align: left;">تێچوو</th>
+                <th style="width: 100px; text-align: left;">فرۆشتن</th>
+                <th style="width: 110px; text-align: left;">کۆی تێچوو</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+
+          <div class="summary-card">
+            <div class="summary-title">کۆی گشتی تێچووی وەسڵ:</div>
+            <div class="summary-value" dir="ltr">${finalTotalCost.toLocaleString()} د.ع</div>
+          </div>
+
+          <div class="signatures">
+            <div class="sig-box">
+              <div>واژووی نوێنەری کۆمپانیا / هێنەر</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>واژووی بەرپرسی کۆگا / وەرگر</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+        </div>
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
 
 

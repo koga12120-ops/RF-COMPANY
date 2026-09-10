@@ -8,7 +8,7 @@ import { format, startOfDay, endOfDay, subDays, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
 import MarketDailyScheduleCard from '../common/MarketDailyScheduleCard';
-import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPopup } from '../../lib/statementPrinter';
+import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
 import { getStoredSession } from '../../lib/authService';
 import { getCompanySettings } from '../../lib/companySettings';
@@ -1340,48 +1340,27 @@ export default function OrdersView({
           </style>
         </head>
         <body>
-          <div class="brand-header">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-              <div style="width: 80px; text-align: right;">
-                <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 60px; max-width: 80px; object-fit: contain;" onerror="this.style.display='none'" />
-              </div>
-              <div style="flex: 1; text-align: center;">
-                <h1 class="brand-title">کۆمپانیای RF</h1>
-                <div class="company-sub" style="font-size: 13px; font-weight: 800; color: #0284c7; margin-top: 1px;">بریکاری فەرمی TAM TAM</div>
-                <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
-                ${cashvanPhone ? `<div style="font-size: 12px; font-weight: 700; color: #0f172a; margin-top: 2px;">ژمارەی کاشڤان (${sale.cashvanName}): <span dir="ltr">${cashvanPhone}</span></div>` : ''}
-              </div>
-              <div style="width: 80px;"></div>
-            </div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            isSale: true,
+            repName: sale.cashvanName,
+            repPhone: cashvanPhone,
+            invoiceNo: invoiceId,
+            customerName: sale.marketName,
+            date: sale.date || Date.now()
+          })}
 
-          <div class="invoice-badge-box">
-            <span class="title">پسوڵەی فرۆشتنی کاشڤان (فاتورە)</span>
-            <span class="num" dir="ltr">#${invoiceId}</span>
-          </div>
-
-          <div class="info-grid">
-            <div class="info-item" style="grid-column: span 2;">
-              <span class="label">کڕیار / مارکێت / کۆگا:</span>
-              <span class="val" style="font-size: 13px; color: #1e3a8a;">${sale.marketName}</span>
-            </div>
-            <div class="info-item">
-              <span class="label">ناوی کاشڤان:</span>
-              <span class="val">${sale.cashvanName}</span>
-            </div>
-            <div class="info-item">
-              <span class="label">ژمارەی کاشڤان:</span>
-              <span class="val" dir="ltr">${cashvanPhone}</span>
-            </div>
-            <div class="info-item">
-              <span class="label">شێوازی پارەدان:</span>
-              <span class="val" style="color: ${sale.paymentType === 'cash' ? '#166534' : '#b45309'}; font-weight: 900;">
+          <div style="display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; font-size: 12px;">
+            <div>
+              <span style="color: #64748b; font-weight: 600;">شێوازی پارەدان:</span>
+              <strong style="color: ${sale.paymentType === 'cash' ? '#166534' : '#b45309'}; margin-right: 4px;">
                 ${sale.paymentType === 'cash' ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
-              </span>
+              </strong>
             </div>
-            <div class="info-item">
-              <span class="label">بەروار:</span>
-              <span class="val" dir="ltr">${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}</span>
+            <div>
+              <span style="color: #64748b; font-weight: 600;">بەروار و کات:</span>
+              <span dir="ltr" style="font-weight: 700; color: #0f172a; margin-right: 4px;">
+                ${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}
+              </span>
             </div>
           </div>
 
@@ -1561,46 +1540,27 @@ export default function OrdersView({
           </style>
         </head>
         <body>
-          <div class="brand-header">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-              <div style="width: 80px; text-align: right;">
-                <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 60px; max-width: 80px; object-fit: contain;" onerror="this.style.display='none'" />
-              </div>
-              <div style="flex: 1; text-align: center;">
-                <h1 class="brand-title">کۆمپانیای RF</h1>
-                <div class="company-sub" style="font-size: 13px; font-weight: 800; color: #0284c7; margin-top: 1px;">بریکاری فەرمی TAM TAM</div>
-                <div class="company-phone">ژمارەی پەیوەندی کۆمپانیا: <span dir="ltr">${companySettings.phone}</span></div>
-                ${repPhone ? `<div style="font-size: 12px; font-weight: 700; color: #0f172a; margin-top: 2px;">ژمارەی مەندووب (${order.repName}): <span dir="ltr">${repPhone}</span></div>` : ''}
-              </div>
-              <div style="width: 80px;"></div>
-            </div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            isSale: true,
+            repName: order.repName,
+            repPhone: repPhone,
+            invoiceNo: invoiceId,
+            customerName: order.marketName,
+            date: order.timestamp
+          })}
 
-          <div class="invoice-badge-box">
-            <span style="font-weight: 800; font-size: 13px;">وەسڵی داواکاری (تەڵەبیەی مەندووب)</span>
-            <span style="font-family: monospace; font-size: 15px; font-weight: 900; color: #4338ca; background: #e0e7ff; padding: 2px 8px; border-radius: 6px; border: 1px solid #a5b4fc;" dir="ltr">#${invoiceId}</span>
-          </div>
-
-          <div class="info-grid">
-            <div style="grid-column: span 2; display: flex; justify-content: space-between;">
-              <span style="color: #64748b; font-weight: 600;">کڕیار / مارکێت:</span>
-              <strong style="font-size: 13px; color: #1e3a8a;">${order.marketName}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #64748b; font-weight: 600;">ناوی مەندووب:</span>
-              <strong>${order.repName}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #64748b; font-weight: 600;">ژمارەی مەندووب:</span>
-              <strong dir="ltr">${repPhone}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
+          <div style="display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; font-size: 12px;">
+            <div>
               <span style="color: #64748b; font-weight: 600;">شێوازی پارەدان:</span>
-              <strong style="color: ${order.paymentStatus === 'cash' ? '#166534' : '#b45309'};">${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}</strong>
+              <strong style="color: ${order.paymentStatus === 'cash' ? '#166534' : '#b45309'}; margin-right: 4px;">
+                ${order.paymentStatus === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}
+              </strong>
             </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #64748b; font-weight: 600;">بەروار:</span>
-              <span dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span>
+            <div>
+              <span style="color: #64748b; font-weight: 600;">بەروار و کات:</span>
+              <span dir="ltr" style="font-weight: 700; color: #0f172a; margin-right: 4px;">
+                ${format(order.timestamp, 'yyyy/MM/dd HH:mm')}
+              </span>
             </div>
           </div>
 

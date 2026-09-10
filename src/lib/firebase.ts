@@ -26,6 +26,7 @@ let firestoreInstance: Firestore;
 
 try {
   firestoreInstance = initializeFirestore(app, {
+    experimentalAutoDetectLongPolling: true,
     localCache: persistentLocalCache({
       tabManager: persistentMultipleTabManager()
     })
@@ -33,6 +34,7 @@ try {
 } catch {
   try {
     firestoreInstance = initializeFirestore(app, {
+      experimentalAutoDetectLongPolling: true,
       localCache: memoryLocalCache()
     }, DB_ID);
   } catch {

@@ -66,7 +66,7 @@ import {
   subWeeks,
   subMonths 
 } from 'date-fns';
-import { printDailyRepReceiptPopup, printStatementPopup } from '../../lib/statementPrinter';
+import { printDailyRepReceiptPopup, printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 import ConfirmModal from '../common/ConfirmModal';
 import { getCompanySettings } from '../../lib/companySettings';
 
@@ -1115,32 +1115,26 @@ export default function AdminCashvanView() {
 
     const printContent = `
       <div dir="rtl" style="font-family: sans-serif; padding: 20px;">
-        <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 12px; margin-bottom: 15px;">
-          <div style="text-align: right; width: 180px;">
-            <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 70px; max-width: 120px; object-fit: contain; margin-bottom: 4px;" onerror="this.style.display='none'" />
+        ${renderReceiptHeaderHtml({
+          isSale: true,
+          repName: order.repName,
+          repPhone: repPhone,
+          invoiceNo: invoiceNum,
+          customerName: order.marketName,
+          date: order.timestamp
+        })}
+
+        <div style="display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; font-size: 12px;">
+          <div>
+            <span style="color: #64748b; font-weight: 600;">ژمارەی کڕیار:</span>
+            <strong dir="ltr" style="margin-right: 4px;">${marketPhone || '-'}</strong>
+            ${order.location ? `<span style="margin-right: 12px; color: #64748b;">ناونیشان: <strong>${order.location}</strong></span>` : ''}
           </div>
-          <div style="text-align: center; flex: 1;">
-            <h1 style="margin: 0; color: #1e293b; font-size: 32px; font-weight: 900;">کۆمپانیای RF</h1>
-            <div style="font-size: 14px; font-weight: 800; color: #0284c7; margin-top: 2px;">بریکاری فەرمی TAM TAM</div>
-            <div style="font-size: 14px; font-weight: 800; color: #334155; margin-top: 2px;">وەسڵی ئۆردەر (تەڵەبیەی مەندووب)</div>
-            <div style="font-size: 12px; font-weight: bold; color: #64748b; margin-top: 2px;">
-              ژمارەی کۆمپانیا: <span dir="ltr">${getCompanySettings().phone}</span>
-            </div>
-            ${repPhone ? `<div style="font-size: 12px; font-weight: bold; color: #0f172a; margin-top: 2px;">ژمارەی مەندووب (${order.repName}): <span dir="ltr">${repPhone}</span></div>` : ''}
-          </div>
-          <div style="text-align: left; width: 180px; font-size: 12px;">
-            <p style="margin: 2px 0;"><strong>ژ.وەسڵ:</strong> #${invoiceNum}</p>
-            <p style="margin: 2px 0;"><strong>بەروار:</strong> ${format(order.timestamp, 'yyyy/MM/dd')}</p>
-            <p style="margin: 2px 0;"><strong>کات:</strong> ${format(order.timestamp, 'HH:mm')}</p>
-          </div>
-        </div>
-        
-        <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 14px;">
-          <div style="text-align: right; flex: 1;">
-            <p style="margin: 5px 0;"><strong>بۆ:</strong> ${order.marketName}</p>
-            <p style="margin: 5px 0;"><strong>ژمارەی مۆبایل:</strong> ${marketPhone}</p>
-            <p style="margin: 5px 0;"><strong>ناونیشان:</strong> ${order.location || '-'}</p>
-            <p style="margin: 5px 0;"><strong>مەندووب:</strong> ${order.repName} ${repPhone ? `(${repPhone})` : ''}</p>
+          <div>
+            <span style="color: #64748b; font-weight: 600;">بەروار و کات:</span>
+            <span dir="ltr" style="font-weight: 700; color: #0f172a; margin-right: 4px;">
+              ${format(order.timestamp, 'yyyy/MM/dd HH:mm')}
+            </span>
           </div>
         </div>
         
@@ -1271,32 +1265,29 @@ export default function AdminCashvanView() {
 
     const printContent = `
       <div dir="rtl" style="font-family: sans-serif; padding: 20px;">
-        <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 12px; margin-bottom: 15px;">
-          <div style="text-align: right; width: 180px;">
-            <img src="${window.location.origin}/LOGO1.jpg" alt="Logo" style="height: 70px; max-width: 120px; object-fit: contain; margin-bottom: 4px;" onerror="this.style.display='none'" />
+        ${renderReceiptHeaderHtml({
+          isSale: true,
+          repName: sale.cashvanName,
+          repPhone: cashvanPhone,
+          invoiceNo: invoiceNum,
+          customerName: sale.marketName,
+          date: sale.date
+        })}
+
+        <div style="display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; font-size: 12px;">
+          <div>
+            <span style="color: #64748b; font-weight: 600;">ژمارەی کڕیار:</span>
+            <strong dir="ltr" style="margin-right: 4px;">${marketPhone || '-'}</strong>
+            <span style="margin-right: 12px; color: #64748b;">شێوازی پارەدان:</span>
+            <strong style="color: ${sale.paymentType === 'cash' ? '#166534' : '#b45309'}; margin-right: 4px;">
+              ${sale.paymentType === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}
+            </strong>
           </div>
-          <div style="text-align: center; flex: 1;">
-            <h1 style="margin: 0; color: #1e293b; font-size: 32px; font-weight: 900;">کۆمپانیای RF</h1>
-            <div style="font-size: 14px; font-weight: 800; color: #0284c7; margin-top: 2px;">بریکاری فەرمی TAM TAM</div>
-            <div style="font-size: 14px; font-weight: 800; color: #334155; margin-top: 2px;">وەسڵی فرۆشتنی کاشڤان</div>
-            <div style="font-size: 12px; font-weight: bold; color: #64748b; margin-top: 2px;">
-              ژمارەی کۆمپانیا: <span dir="ltr">${getCompanySettings().phone}</span>
-            </div>
-            ${cashvanPhone ? `<div style="font-size: 12px; font-weight: bold; color: #0f172a; margin-top: 2px;">ژمارەی کاشڤان (${sale.cashvanName}): <span dir="ltr">${cashvanPhone}</span></div>` : ''}
-          </div>
-          <div style="text-align: left; width: 180px; font-size: 12px;">
-            <p style="margin: 2px 0;"><strong>ژ.وەسڵ:</strong> #${invoiceNum}</p>
-            <p style="margin: 2px 0;"><strong>بەروار:</strong> ${format(sale.date, 'yyyy/MM/dd')}</p>
-            <p style="margin: 2px 0;"><strong>کات:</strong> ${format(sale.date, 'HH:mm')}</p>
-          </div>
-        </div>
-        
-        <div style="display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 14px;">
-          <div style="text-align: right; flex: 1;">
-            <p style="margin: 5px 0;"><strong>بۆ:</strong> ${sale.marketName}</p>
-            <p style="margin: 5px 0;"><strong>ژمارەی مۆبایل:</strong> ${marketPhone}</p>
-            <p style="margin: 5px 0;"><strong>کاشڤان:</strong> ${sale.cashvanName} ${cashvanPhone ? `(${cashvanPhone})` : ''}</p>
-            <p style="margin: 5px 0;"><strong>شێوازی پارەدان:</strong> ${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}</p>
+          <div>
+            <span style="color: #64748b; font-weight: 600;">بەروار و کات:</span>
+            <span dir="ltr" style="font-weight: 700; color: #0f172a; margin-right: 4px;">
+              ${format(sale.date, 'yyyy/MM/dd HH:mm')}
+            </span>
           </div>
         </div>
         

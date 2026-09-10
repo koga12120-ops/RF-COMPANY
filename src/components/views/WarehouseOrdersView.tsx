@@ -586,8 +586,10 @@ export default function WarehouseOrdersView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
+            isSale: true,
             title: 'وەسڵی تەڵەبیە و ئامادەکردنی بار بۆ مارکێت',
             subtitle: 'داواکاری مەندووب لە کۆگای سەرەکی بۆ کڕیار',
+            customerName: order.marketName,
             repName: order.repName,
             repPhone: (order as any).repPhone,
             invoiceNo: order.invoiceNo || order.id,
@@ -595,12 +597,9 @@ export default function WarehouseOrdersView() {
           })}
 
           <div class="meta-grid">
-            <div class="meta-item"><span>مارکێت:</span> <strong>${order.marketName}</strong></div>
-            <div class="meta-item"><span>ناوی مەندووب:</span> <strong>${order.repName || 'دیارینەکراو'}</strong></div>
-            <div class="meta-item"><span>ژمارەی وەسڵ:</span> <strong dir="ltr">${order.invoiceNo || order.id}</strong></div>
             <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(order.timestamp, 'yyyy/MM/dd - HH:mm')}</span></div>
             <div class="meta-item"><span>جۆری پارەدان:</span> <strong>${order.paymentType === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}</strong></div>
-            <div class="meta-item"><span>دۆخی داواکاری:</span> <strong>${order.status === 'completed' ? 'ئامادەکراو / تەواوکراو ✅' : 'چاوەڕوانکراو ⏳'}</strong></div>
+            <div class="meta-item" style="grid-column: span 2;"><span>دۆخی داواکاری:</span> <strong>${order.status === 'completed' ? 'ئامادەکراو / تەواوکراو ✅' : 'چاوەڕوانکراو ⏳'}</strong></div>
           </div>
 
           <table>

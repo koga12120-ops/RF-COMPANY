@@ -29,9 +29,16 @@ export interface FirestoreErrorInfo {
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errMsg = error instanceof Error ? error.message : String(error);
   
-  // Suppress harmless browser tab closing / IndexedDB connection closing logs
-  if (errMsg.includes('closing') || errMsg.includes('hidden')) {
-    console.warn('Firestore connection state update:', errMsg);
+  // Suppress harmless browser tab closing / IndexedDB connection closing / temporary offline reconnection notices
+  const isHarmlessNetworkState = 
+    errMsg.includes('closing') || 
+    errMsg.includes('hidden') || 
+    errMsg.includes('unavailable') ||
+    errMsg.includes('offline') ||
+    (error as any)?.code === 'unavailable';
+
+  if (isHarmlessNetworkState) {
+    console.warn('Firestore offline/connection update (operating with local cache):', errMsg);
     return {
       error: errMsg,
       authInfo: {},

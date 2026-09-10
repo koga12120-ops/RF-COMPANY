@@ -40,12 +40,13 @@ import AdminCashvanView from './views/AdminCashvanView';
 import ReturnsView from './views/ReturnsView';
 import RepScheduleView from './views/RepScheduleView';
 import AdminScheduleView from './views/AdminScheduleView';
-import { Truck, Undo2, ClipboardList, Calendar } from 'lucide-react';
+import { Truck, Undo2, ClipboardList, Calendar, PackagePlus } from 'lucide-react';
 
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import StockHistoryView from './views/StockHistoryView';
+import StockEntryView from './views/StockEntryView';
 
 interface DashboardProps {
   role: Role;
@@ -145,7 +146,8 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
   }, [role]);
 
   const adminMenu = [
-    { id: 'inventory', label: 'داخڵکردن و کۆگا', icon: Package },
+    { id: 'stock_entry', label: 'داخڵکردنی کاڵا', icon: PackagePlus },
+    { id: 'inventory', label: 'کۆگا', icon: Package },
     { id: 'stock_history', label: 'مێژووی هاتنی کاڵا', icon: History },
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
     { id: 'admin_cashvan', label: 'حساباتی مەندووب و کاشڤان', icon: Truck },
@@ -156,7 +158,8 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
   ];
 
   const warehouseMenu = [
-    { id: 'inventory', label: 'داخڵکردن و کۆگا', icon: Package },
+    { id: 'stock_entry', label: 'داخڵکردنی کاڵا', icon: PackagePlus },
+    { id: 'inventory', label: 'کۆگا', icon: Package },
     { id: 'stock_history', label: 'مێژووی هاتنی کاڵا', icon: History },
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
     { id: 'warehouse_orders', label: 'داواکارییەکان', icon: ClipboardList },
@@ -184,7 +187,8 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'inventory': return <InventoryView role={role} />;
+      case 'stock_entry': return <StockEntryView role={role} onNavigateToInventory={() => setActiveTab('inventory')} />;
+      case 'inventory': return <InventoryView role={role} onNavigateToEntry={() => setActiveTab('stock_entry')} />;
       case 'admin_cashvan': return <AdminCashvanView />;
       case 'warehouse_orders': return <WarehouseOrdersView />;
       case 'warehouse_cashvan': return <WarehouseOrdersView />;
