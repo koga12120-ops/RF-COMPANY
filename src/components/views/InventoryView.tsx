@@ -21,7 +21,9 @@ interface InvoiceGroup {
   date: number;
   items: Item[];
   totalCartons: number;
+  totalCartonBonus: number;
   totalPackets: number;
+  totalPacketBonus: number;
   totalCost: number;
   totalSelling: number;
 }
@@ -102,9 +104,29 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
 
   const formatStock = (item: Item) => {
     const parts = [];
+    const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+    const cBonus = item.cartonBonusQuantity || 0;
+    const cPurchased = Math.max(0, cTotal - cBonus);
+
+    const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+    const pBonus = item.packetBonusQuantity || 0;
+    const pPurchased = Math.max(0, pTotal - pBonus);
+
     if (item.cartonQuantity !== undefined || item.packetQuantity !== undefined) {
-      if (item.cartonQuantity !== undefined && item.cartonQuantity > 0) parts.push(`${item.cartonQuantity} کارتۆن`);
-      if (item.packetQuantity !== undefined && item.packetQuantity > 0) parts.push(`${item.packetQuantity} پاکەت`);
+      if (cTotal > 0) {
+        if (cBonus > 0) {
+          parts.push(`${cPurchased.toLocaleString()} + ${cBonus.toLocaleString()} هەدیە کارتۆن`);
+        } else {
+          parts.push(`${cPurchased.toLocaleString()} کارتۆن`);
+        }
+      }
+      if (pTotal > 0) {
+        if (pBonus > 0) {
+          parts.push(`${pPurchased.toLocaleString()} + ${pBonus.toLocaleString()} هەدیە پاکەت`);
+        } else {
+          parts.push(`${pPurchased.toLocaleString()} پاکەت`);
+        }
+      }
       if (parts.length === 0) {
         return `${item.quantity || 0} ${item.packetSellingPrice && !item.cartonSellingPrice ? 'پاکەت' : 'کارتۆن'}`;
       }
@@ -290,15 +312,22 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
       const supp = item.supplier && item.supplier.trim() ? item.supplier.trim() : 'کۆمپانیای نەزانراو';
       const key = `${invNo}___${supp}`;
 
-      const cQty = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-      const pQty = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+      const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+      const cBonus = item.cartonBonusQuantity || 0;
+      const cPurchased = Math.max(0, cTotal - cBonus);
+
+      const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+      const pBonus = item.packetBonusQuantity || 0;
+      const pPurchased = Math.max(0, pTotal - pBonus);
+
       const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
       const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
       const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
       const pSell = item.packetSellingPrice || 0;
 
-      const itemCost = (cQty * cCost) + (pQty * pCost);
-      const itemSelling = (cQty * cSell) + (pQty * pSell);
+      // دیاری بە پارەی ٠ حساب دەکرێت، تەنها بڕی کڕدراو لێکدانی تێچوو دەکرێت
+      const itemCost = (cPurchased * cCost) + (pPurchased * pCost);
+      const itemSelling = (cTotal * cSell) + (pTotal * pSell);
       const itemDate = item.createdAt || Date.now();
 
       if (!map.has(key)) {
@@ -308,16 +337,20 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
           supplier: supp,
           date: itemDate,
           items: [item],
-          totalCartons: cQty,
-          totalPackets: pQty,
+          totalCartons: cPurchased,
+          totalCartonBonus: cBonus,
+          totalPackets: pPurchased,
+          totalPacketBonus: pBonus,
           totalCost: itemCost,
           totalSelling: itemSelling
         });
       } else {
         const group = map.get(key)!;
         group.items.push(item);
-        group.totalCartons += cQty;
-        group.totalPackets += pQty;
+        group.totalCartons += cPurchased;
+        group.totalCartonBonus += cBonus;
+        group.totalPackets += pPurchased;
+        group.totalPacketBonus += pBonus;
         group.totalCost += itemCost;
         group.totalSelling += itemSelling;
         if (itemDate > group.date) {
@@ -338,8 +371,19 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
 
   // Calculate totals
   const totalItemsCount = items.length;
-  const totalCartonsInStock = items.reduce((acc, i) => acc + (i.cartonQuantity || (i.unitType === 'carton' ? (i.quantity || 0) : 0)), 0);
-  const totalPacketsInStock = items.reduce((acc, i) => acc + (i.packetQuantity || 0), 0);
+  const totalPurchasedCartons = items.reduce((acc, i) => {
+    const cTotal = i.cartonQuantity || (i.unitType === 'carton' ? (i.quantity || 0) : 0);
+    const cBonus = i.cartonBonusQuantity || 0;
+    return acc + Math.max(0, cTotal - cBonus);
+  }, 0);
+  const totalCartonBonusCount = items.reduce((acc, i) => acc + (i.cartonBonusQuantity || 0), 0);
+
+  const totalPurchasedPackets = items.reduce((acc, i) => {
+    const pTotal = i.packetQuantity || 0;
+    const pBonus = i.packetBonusQuantity || 0;
+    return acc + Math.max(0, pTotal - pBonus);
+  }, 0);
+  const totalPacketBonusCount = items.reduce((acc, i) => acc + (i.packetBonusQuantity || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -366,11 +410,19 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
           {/* Warehouse quick stats pill */}
           <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 font-bold">
             <span>کۆی کۆگا:</span>
-            <span className="text-indigo-700 font-mono">{totalCartonsInStock.toLocaleString()} کارتۆن</span>
-            {totalPacketsInStock > 0 && (
+            <span className="text-indigo-700 font-mono">
+              {totalCartonBonusCount > 0
+                ? `${totalPurchasedCartons.toLocaleString()} + ${totalCartonBonusCount.toLocaleString()} هەدیە کارتۆن`
+                : `${totalPurchasedCartons.toLocaleString()} کارتۆن`}
+            </span>
+            {(totalPurchasedPackets > 0 || totalPacketBonusCount > 0) && (
               <>
                 <span>و</span>
-                <span className="text-emerald-700 font-mono">{totalPacketsInStock.toLocaleString()} پاکەت</span>
+                <span className="text-emerald-700 font-mono">
+                  {totalPacketBonusCount > 0
+                    ? `${totalPurchasedPackets.toLocaleString()} + ${totalPacketBonusCount.toLocaleString()} هەدیە پاکەت`
+                    : `${totalPurchasedPackets.toLocaleString()} پاکەت`}
+                </span>
               </>
             )}
           </div>
@@ -615,17 +667,21 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
                         {/* 5. کۆی ماوە لە کۆگا */}
                         <td className="px-4 py-3.5 text-slate-800 font-bold" dir="ltr">
                           <div className="flex flex-col gap-0.5 text-xs">
-                            {group.totalCartons > 0 && (
+                            {(group.totalCartons > 0 || group.totalCartonBonus > 0) && (
                               <span className="text-indigo-700 font-mono">
-                                {group.totalCartons.toLocaleString()} کارتۆن
+                                {group.totalCartonBonus > 0
+                                  ? `${group.totalCartons.toLocaleString()} + ${group.totalCartonBonus.toLocaleString()} هەدیە کارتۆن`
+                                  : `${group.totalCartons.toLocaleString()} کارتۆن`}
                               </span>
                             )}
-                            {group.totalPackets > 0 && (
+                            {(group.totalPackets > 0 || group.totalPacketBonus > 0) && (
                               <span className="text-emerald-700 font-mono">
-                                {group.totalPackets.toLocaleString()} پاکەت
+                                {group.totalPacketBonus > 0
+                                  ? `${group.totalPackets.toLocaleString()} + ${group.totalPacketBonus.toLocaleString()} هەدیە پاکەت`
+                                  : `${group.totalPackets.toLocaleString()} پاکەت`}
                               </span>
                             )}
-                            {group.totalCartons === 0 && group.totalPackets === 0 && (
+                            {group.totalCartons === 0 && group.totalCartonBonus === 0 && group.totalPackets === 0 && group.totalPacketBonus === 0 && (
                               <span className="text-slate-400">0</span>
                             )}
                           </div>
@@ -653,7 +709,9 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
                                   date: group.date,
                                   items: group.items,
                                   totalCartons: group.totalCartons,
+                                  totalCartonBonus: group.totalCartonBonus,
                                   totalPackets: group.totalPackets,
+                                  totalPacketBonus: group.totalPacketBonus,
                                   totalCost: group.totalCost
                                 });
                               }}

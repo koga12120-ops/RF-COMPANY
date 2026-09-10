@@ -4,14 +4,37 @@ import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
-import { Plus, Trash2, Printer, FileText, Calendar, Search, DollarSign, Clock, X, TrendingUp } from 'lucide-react';
+import { Plus, Trash2, Printer, FileText, Calendar, Search, DollarSign, Clock, X, TrendingUp, Layers, List, Package, ChevronDown, ChevronUp } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml, printCompanyInvoiceCashPopup } from '../../lib/statementPrinter';
+
+export interface InvoiceCashGroup {
+  id: string;
+  invoiceNo: string;
+  relatedEntityId: string;
+  date: number;
+  totalAmount: number;
+  items: Transaction[];
+}
 
 export default function CashView({ type = 'cash', targetName = 'مارکێت' }: { type?: 'cash' | 'company_cash', targetName?: string }) {
   const [cashSales, setCashSales] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingSale, setDeletingSale] = useState<Transaction | null>(null);
+  const [deletingInvoiceGroup, setDeletingInvoiceGroup] = useState<InvoiceCashGroup | null>(null);
+
+  // View Mode: default to by_invoice for company cash
+  const [viewMode, setViewMode] = useState<'by_invoice' | 'by_item'>(type.includes('company') ? 'by_invoice' : 'by_item');
+  const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
+
+  const toggleExpandInvoice = (key: string) => {
+    setExpandedInvoices(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   // Filters
   const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | 'this_week' | 'this_month' | 'custom_day' | 'range'>('all');
@@ -119,6 +142,21 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
     }
   };
 
+  const confirmDeleteInvoiceGroup = async () => {
+    if (!deletingInvoiceGroup) return;
+    try {
+      for (const it of deletingInvoiceGroup.items) {
+        if (it.id) {
+          await deleteDoc(doc(db, 'transactions', it.id));
+        }
+      }
+      setDeletingInvoiceGroup(null);
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە');
+    }
+  };
+
   const isDateInFilter = (timestamp: number) => {
     if (filterPeriod === 'all') return true;
     const now = new Date();
@@ -159,6 +197,38 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
 
   const totalFilteredCash = useMemo(() => {
     return filteredSales.reduce((acc, curr) => acc + (curr.amount || 0), 0);
+  }, [filteredSales]);
+
+  const invoiceCashGroups = useMemo<InvoiceCashGroup[]>(() => {
+    const map = new Map<string, InvoiceCashGroup>();
+
+    filteredSales.forEach((sale) => {
+      const invNo = sale.invoiceNo && sale.invoiceNo.trim() ? sale.invoiceNo.trim() : 'بێ وەسڵ';
+      const entity = sale.relatedEntityId && sale.relatedEntityId.trim() ? sale.relatedEntityId.trim() : 'نەزانراو';
+      const key = `${invNo}___${entity}`;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          id: key,
+          invoiceNo: invNo,
+          relatedEntityId: entity,
+          date: sale.date,
+          totalAmount: Number(sale.amount) || 0,
+          items: [sale]
+        });
+      } else {
+        const grp = map.get(key)!;
+        grp.items.push(sale);
+        grp.totalAmount += Number(sale.amount) || 0;
+        if (sale.date > grp.date) {
+          grp.date = sale.date;
+        }
+      }
+    });
+
+    const list = Array.from(map.values());
+    list.sort((a, b) => b.date - a.date);
+    return list;
   }, [filteredSales]);
 
   const avgCash = filteredSales.length > 0 ? Math.round(totalFilteredCash / filteredSales.length) : 0;
@@ -510,12 +580,36 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
 
       {/* Cash Table */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+        <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row justify-between md:items-center gap-3">
           <h4 className="font-bold text-slate-700 flex items-center gap-2">💵 لیستی نەقدەکان</h4>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
-              پیشاندانی {filteredSales.length} لە {cashSales.length} تۆمار
-            </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* View Mode Toggle: Default by invoice for company cash */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setViewMode('by_invoice')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  viewMode === 'by_invoice'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+              >
+                <Layers size={14} />
+                <span>بەپێی ژمارەی وەسڵ ({invoiceCashGroups.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('by_item')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  viewMode === 'by_item'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+              >
+                <List size={14} />
+                <span>ئایتم بە ئایتم ({filteredSales.length})</span>
+              </button>
+            </div>
           </div>
         </div>
         
@@ -527,53 +621,170 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                 <tr>
                   <th className="px-4 py-3 font-semibold">ناو</th>
-                  <th className="px-4 py-3 font-semibold">وردەکاری</th>
-                  <th className="px-4 py-3 font-semibold">بڕی پارە</th>
+                  <th className="px-4 py-3 font-semibold">
+                    {viewMode === 'by_invoice' ? 'ژمارەی وەسڵ و کاڵاکان' : 'وردەکاری و وەسڵ'}
+                  </th>
+                  <th className="px-4 py-3 font-semibold">بڕی نەقد</th>
                   <th className="px-4 py-3 font-semibold">بەروار</th>
-                  <th className="px-4 py-3 font-semibold w-16"></th>
+                  <th className="px-4 py-3 font-semibold text-center">کردارەکان</th>
                 </tr>
               </thead>
               <tbody className="text-sm divide-y divide-slate-50">
-                {filteredSales.map(sale => (
-                  <tr key={sale.id} className="hover:bg-slate-50/50 transition">
-                    <td className="px-4 py-4 font-medium text-slate-900">{sale.relatedEntityId}</td>
-                    <td className="px-4 py-4 text-slate-600">
-                      <div>{sale.description}</div>
-                      {sale.invoiceNo && (
-                        <span className="inline-block mt-0.5 text-[11px] font-mono bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200" dir="ltr">
-                          وەسڵ: #{sale.invoiceNo}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-4 font-bold text-green-600" dir="ltr">{sale.amount.toLocaleString()}</td>
-                    <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">{format(sale.date, 'yyyy-MM-dd HH:mm')}</td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => printTransaction(sale)}
-                          className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
-                          title="چاپکردنی تەنها ئەمە"
-                        >
-                          <Printer size={16} />
-                        </button>
-                        <button
-                          onClick={() => printStatement(sale.relatedEntityId || sale.description)}
-                          className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
-                          title="کەشف حیساب"
-                        >
-                          <FileText size={16} />
-                        </button>
-                        <button
-                          onClick={() => setDeletingSale(sale)}
-                          className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
-                          title="سڕینەوە"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {viewMode === 'by_invoice' ? (
+                  invoiceCashGroups.map(group => {
+                    const isExpanded = expandedInvoices.has(group.id);
+                    return (
+                      <React.Fragment key={group.id}>
+                        <tr className={`hover:bg-slate-50/70 transition ${isExpanded ? 'bg-emerald-50/20' : ''}`}>
+                          <td className="px-4 py-4 font-bold text-slate-900">{group.relatedEntityId}</td>
+                          <td className="px-4 py-4 text-slate-600">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-block text-xs font-mono font-bold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-lg border border-emerald-300" dir="ltr">
+                                وەسڵ: #{group.invoiceNo}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandInvoice(group.id)}
+                                className="inline-flex items-center gap-1 text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg transition font-medium border border-indigo-200 cursor-pointer"
+                              >
+                                <Package size={13} />
+                                <span>{group.items.length} کاڵا</span>
+                                {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                              </button>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="font-black text-emerald-600 text-base" dir="ltr">
+                              {group.totalAmount.toLocaleString()} د.ع
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">
+                            {format(group.date, 'yyyy-MM-dd HH:mm')}
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => printCompanyInvoiceCashPopup({
+                                  invoiceNo: group.invoiceNo,
+                                  companyName: group.relatedEntityId,
+                                  date: group.date,
+                                  totalAmount: group.totalAmount,
+                                  items: group.items
+                                })}
+                                className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition cursor-pointer"
+                                title="چاپکردنی وەسڵ"
+                              >
+                                <Printer size={16} />
+                              </button>
+                              <button
+                                onClick={() => printStatement(group.relatedEntityId)}
+                                className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition cursor-pointer"
+                                title="کەشف حیسابی کۆمپانیا"
+                              >
+                                <FileText size={16} />
+                              </button>
+                              <button
+                                onClick={() => setDeletingInvoiceGroup(group)}
+                                className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition cursor-pointer"
+                                title="سڕینەوەی وەسڵ"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* Accordion view for items in this invoice */}
+                        {isExpanded && (
+                          <tr className="bg-emerald-50/30 border-y border-emerald-100">
+                            <td colSpan={5} className="px-6 py-3">
+                              <div className="bg-white rounded-xl border border-emerald-200/80 p-3 shadow-inner">
+                                <div className="text-xs font-bold text-slate-700 mb-2 flex items-center justify-between">
+                                  <span className="flex items-center gap-1.5 text-emerald-900">
+                                    <Package size={14} className="text-emerald-600" />
+                                    کاڵاکانی وەسڵی #{group.invoiceNo} ({group.items.length} کاڵا):
+                                  </span>
+                                  <span className="text-[11px] text-slate-400 font-normal">
+                                    دەتوانیت هەر کاڵایەک بە جیا بسڕیتەوە
+                                  </span>
+                                </div>
+                                <table className="w-full text-right text-xs">
+                                  <thead className="bg-slate-50 text-slate-500">
+                                    <tr>
+                                      <th className="px-3 py-1.5 font-semibold w-8 text-center">#</th>
+                                      <th className="px-3 py-1.5 font-semibold">وردەکاری کاڵا</th>
+                                      <th className="px-3 py-1.5 font-semibold">بڕی نەقد</th>
+                                      <th className="px-3 py-1.5 font-semibold w-12 text-center"></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {group.items.map((item, idx) => (
+                                      <tr key={item.id} className="hover:bg-slate-50/50">
+                                        <td className="px-3 py-2 text-center text-slate-400 font-mono">{idx + 1}</td>
+                                        <td className="px-3 py-2 font-medium text-slate-800">{item.description}</td>
+                                        <td className="px-3 py-2 font-mono font-bold text-emerald-700" dir="ltr">{(Number(item.amount) || 0).toLocaleString()} د.ع</td>
+                                        <td className="px-3 py-2 text-center">
+                                          <button
+                                            onClick={() => setDeletingSale(item)}
+                                            className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition cursor-pointer"
+                                            title="سڕینەوەی ئەم ئایتمە"
+                                          >
+                                            <Trash2 size={14} />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                ) : (
+                  filteredSales.map(sale => (
+                    <tr key={sale.id} className="hover:bg-slate-50/50 transition">
+                      <td className="px-4 py-4 font-medium text-slate-900">{sale.relatedEntityId}</td>
+                      <td className="px-4 py-4 text-slate-600">
+                        <div>{sale.description}</div>
+                        {sale.invoiceNo && (
+                          <span className="inline-block mt-0.5 text-[11px] font-mono bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200" dir="ltr">
+                            وەسڵ: #{sale.invoiceNo}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 font-bold text-green-600" dir="ltr">{sale.amount.toLocaleString()}</td>
+                      <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">{format(sale.date, 'yyyy-MM-dd HH:mm')}</td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => printTransaction(sale)}
+                            className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
+                            title="چاپکردنی تەنها ئەمە"
+                          >
+                            <Printer size={16} />
+                          </button>
+                          <button
+                            onClick={() => printStatement(sale.relatedEntityId || sale.description)}
+                            className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
+                            title="کەشف حیساب"
+                          >
+                            <FileText size={16} />
+                          </button>
+                          <button
+                            onClick={() => setDeletingSale(sale)}
+                            className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
+                            title="سڕینەوە"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
                 {filteredSales.length === 0 && (
                   <tr>
                     <td colSpan={5} className="text-center py-8 text-slate-500">
@@ -587,7 +798,7 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
         )}
       </section>
 
-      {/* Delete Confirmation Modal */}
+      {/* Delete Confirmation Modal for Single Cash Item */}
       <ConfirmModal
         isOpen={!!deletingSale}
         onClose={() => setDeletingSale(null)}
@@ -598,6 +809,21 @@ export default function CashView({ type = 'cash', targetName = 'مارکێت' }:
           { label: targetName, value: deletingSale.relatedEntityId || '-' },
           { label: 'بڕی پارە', value: `${(deletingSale.amount || 0).toLocaleString()} د.ع` },
           { label: 'وردەکاری', value: deletingSale.description || '-' }
+        ] : []}
+      />
+
+      {/* Delete Confirmation Modal for Invoice Group */}
+      <ConfirmModal
+        isOpen={!!deletingInvoiceGroup}
+        onClose={() => setDeletingInvoiceGroup(null)}
+        onConfirm={confirmDeleteInvoiceGroup}
+        title="سڕینەوەی وەسڵی نەقد"
+        message={`ئایا دڵنیایت لە سڕینەوەی سەرجەم تۆمارەکانی وەسڵی #${deletingInvoiceGroup?.invoiceNo}؟`}
+        details={deletingInvoiceGroup ? [
+          { label: 'ژمارەی سەر وەسڵ', value: `#${deletingInvoiceGroup.invoiceNo}` },
+          { label: targetName, value: deletingInvoiceGroup.relatedEntityId },
+          { label: 'ژمارەی کاڵاکان', value: `${deletingInvoiceGroup.items.length} کاڵا` },
+          { label: 'کۆی نەقدی وەسڵ', value: `${deletingInvoiceGroup.totalAmount.toLocaleString()} د.ع` }
         ] : []}
       />
     </div>

@@ -80,13 +80,6 @@ export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string 
           ${leftContent}
         </div>
       </div>
-
-      ${options?.title ? `
-        <div style="text-align: center; margin-top: 8px; border-top: 1px dashed #cbd5e1; padding-top: 6px;">
-          <div style="font-size: 15px; font-weight: 800; color: #1e293b;">${options.title}</div>
-          ${options.subtitle ? `<div style="font-size: 11px; color: #64748b; margin-top: 2px;">${options.subtitle}</div>` : ''}
-        </div>
-      ` : ''}
     </div>
   `;
 }
@@ -994,7 +987,9 @@ export interface WarehouseInvoicePrintData {
     unitType?: string;
   }>;
   totalCartons?: number;
+  totalCartonBonus?: number;
   totalPackets?: number;
+  totalPacketBonus?: number;
   totalCost?: number;
 }
 
@@ -1003,45 +998,74 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
   const cleanInvoiceNo = invoiceNo && invoiceNo !== 'بێ ژمارەی وەسڵ' && invoiceNo !== 'بێ وەسڵ' ? invoiceNo : 'بێ وەسڵ';
   const cleanSupplier = supplier || 'کۆمپانیای نەزانراو';
   
-  let totalCartons = 0;
-  let totalPackets = 0;
+  let totalPurchasedCartons = 0;
+  let totalCartonBonus = 0;
+  let totalPurchasedPackets = 0;
+  let totalPacketBonus = 0;
   let calculatedTotalCost = 0;
 
   items.forEach(item => {
-    const cQty = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-    const pQty = item.packetQuantity !== undefined ? item.packetQuantity : 0;
-    totalCartons += cQty;
-    totalPackets += pQty;
+    const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+    const cBonus = item.cartonBonusQuantity || 0;
+    const cPurchased = Math.max(0, cTotal - cBonus);
+
+    const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : 0;
+    const pBonus = item.packetBonusQuantity || 0;
+    const pPurchased = Math.max(0, pTotal - pBonus);
+
+    totalPurchasedCartons += cPurchased;
+    totalCartonBonus += cBonus;
+    totalPurchasedPackets += pPurchased;
+    totalPacketBonus += pBonus;
 
     const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
     const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
-    calculatedTotalCost += (cQty * cCost) + (pQty * pCost);
+    
+    // دیاری (هەدیە) ٠ حساب دەکرێت، تەنها بڕی کڕدراو لێکدانی نرخ دەکرێت
+    calculatedTotalCost += (cPurchased * cCost) + (pPurchased * pCost);
   });
 
   const finalTotalCost = data.totalCost !== undefined ? data.totalCost : calculatedTotalCost;
-  const finalTotalCartons = data.totalCartons !== undefined ? data.totalCartons : totalCartons;
-  const finalTotalPackets = data.totalPackets !== undefined ? data.totalPackets : totalPackets;
+  const finalPurchasedCartons = data.totalCartons !== undefined ? data.totalCartons : totalPurchasedCartons;
+  const finalCartonBonus = data.totalCartonBonus !== undefined ? data.totalCartonBonus : totalCartonBonus;
+  const finalPurchasedPackets = data.totalPackets !== undefined ? data.totalPackets : totalPurchasedPackets;
+  const finalPacketBonus = data.totalPacketBonus !== undefined ? data.totalPacketBonus : totalPacketBonus;
 
   const header = renderReceiptHeaderHtml({
-    title: 'وەسڵی داخڵکردنی کاڵا بۆ کۆگا',
-    subtitle: `کۆمپانیا: ${cleanSupplier} | وەسڵی ژمارە: #${cleanInvoiceNo}`,
     invoiceNo: cleanInvoiceNo !== 'بێ وەسڵ' ? cleanInvoiceNo : undefined,
     date: date || Date.now()
   });
 
   const rows = items.map((item, idx) => {
-    const cQty = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-    const pQty = item.packetQuantity !== undefined ? item.packetQuantity : 0;
+    const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+    const cBonus = item.cartonBonusQuantity || 0;
+    const cPurchased = Math.max(0, cTotal - cBonus);
+
+    const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : 0;
+    const pBonus = item.packetBonusQuantity || 0;
+    const pPurchased = Math.max(0, pTotal - pBonus);
+
     const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
     const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
     const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
     const pSell = item.packetSellingPrice || 0;
-    const itemTotalCost = (cQty * cCost) + (pQty * pCost);
+
+    // دیاری بە پارە ئەژمار ناکرێت
+    const itemTotalCost = (cPurchased * cCost) + (pPurchased * pCost);
 
     const bonusParts = [];
-    if (item.cartonBonusQuantity && item.cartonBonusQuantity > 0) bonusParts.push(`${item.cartonBonusQuantity} کارتۆن`);
-    if (item.packetBonusQuantity && item.packetBonusQuantity > 0) bonusParts.push(`${item.packetBonusQuantity} پاکەت`);
+    if (cBonus > 0) bonusParts.push(`${cBonus} کارتۆن`);
+    if (pBonus > 0) bonusParts.push(`${pBonus} پاکەت`);
     const bonusText = bonusParts.length > 0 ? bonusParts.join(' + ') : '-';
+
+    // نیشاندانی بڕ: بۆ نموونە 100 + 2 هەدیە
+    const cartonDisplay = (cPurchased > 0 || cBonus > 0)
+      ? (cBonus > 0 ? `${cPurchased} + ${cBonus} هەدیە` : `${cPurchased}`)
+      : '-';
+
+    const packetDisplay = (pPurchased > 0 || pBonus > 0)
+      ? (pBonus > 0 ? `${pPurchased} + ${pBonus} هەدیە` : `${pPurchased}`)
+      : '-';
 
     return `
       <tr>
@@ -1050,13 +1074,13 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
           ${item.name}
           ${item.barcode ? `<div style="font-size: 11px; font-family: monospace; color: #64748b;" dir="ltr">${item.barcode}</div>` : ''}
         </td>
-        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-weight: 700; font-family: monospace;">
-          ${cQty > 0 ? `${cQty} کارتۆن` : '-'}
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-weight: 700; font-family: monospace;" dir="rtl">
+          ${cartonDisplay}
         </td>
-        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-weight: 700; font-family: monospace;">
-          ${pQty > 0 ? `${pQty} پاکەت` : '-'}
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-weight: 700; font-family: monospace;" dir="rtl">
+          ${packetDisplay}
         </td>
-        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; color: #d97706; font-weight: 600; font-size: 12px;">
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; color: #d97706; font-weight: 700; font-size: 12px;">
           ${bonusText}
         </td>
         <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: left; font-family: monospace; font-size: 12px;" dir="ltr">
@@ -1073,6 +1097,14 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
       </tr>
     `;
   }).join('');
+
+  const cartonMetaStr = finalCartonBonus > 0 
+    ? `${finalPurchasedCartons} + ${finalCartonBonus} هەدیە کارتۆن` 
+    : `${finalPurchasedCartons} کارتۆن`;
+
+  const packetMetaStr = finalPacketBonus > 0 
+    ? `${finalPurchasedPackets} + ${finalPacketBonus} هەدیە پاکەت` 
+    : `${finalPurchasedPackets} پاکەت`;
 
   const html = `
     <!DOCTYPE html>
@@ -1120,11 +1152,11 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
             </div>
             <div class="meta-item">
               <span class="meta-label">کۆی کارتۆن:</span>
-              <span class="meta-value" dir="ltr">${finalTotalCartons} کارتۆن</span>
+              <span class="meta-value" dir="rtl">${cartonMetaStr}</span>
             </div>
             <div class="meta-item">
               <span class="meta-label">کۆی پاکەت:</span>
-              <span class="meta-value" dir="ltr">${finalTotalPackets} پاکەت</span>
+              <span class="meta-value" dir="rtl">${packetMetaStr}</span>
             </div>
           </div>
 
@@ -1133,11 +1165,11 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
               <tr>
                 <th style="width: 35px; text-align: center;">#</th>
                 <th>ناوی کاڵا</th>
-                <th style="width: 85px; text-align: center;">کارتۆن</th>
-                <th style="width: 85px; text-align: center;">پاکەت</th>
-                <th style="width: 100px; text-align: center;">دیاری (هەدیە)</th>
-                <th style="width: 100px; text-align: left;">تێچوو</th>
-                <th style="width: 100px; text-align: left;">فرۆشتن</th>
+                <th style="width: 105px; text-align: center;">کارتۆن</th>
+                <th style="width: 95px; text-align: center;">پاکەت</th>
+                <th style="width: 105px; text-align: center;">دیاری (هەدیە)</th>
+                <th style="width: 95px; text-align: left;">تێچوو</th>
+                <th style="width: 95px; text-align: left;">فرۆشتن</th>
                 <th style="width: 110px; text-align: left;">کۆی تێچوو</th>
               </tr>
             </thead>
@@ -1147,7 +1179,10 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
           </table>
 
           <div class="summary-card">
-            <div class="summary-title">کۆی گشتی تێچووی وەسڵ:</div>
+            <div>
+              <div class="summary-title">کۆی گشتی تێچووی وەسڵ:</div>
+              <div style="font-size: 11px; color: #4f46e5; margin-top: 3px;">(دیاری و هەدیە بە ٠ د.ع ئەژمار کراوە و لەسەر کۆی گشتی هەژمار نەکراوە)</div>
+            </div>
             <div class="summary-value" dir="ltr">${finalTotalCost.toLocaleString()} د.ع</div>
           </div>
 
@@ -1158,6 +1193,353 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
             </div>
             <div class="sig-box">
               <div>واژووی بەرپرسی کۆگا / وەرگر</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+        </div>
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
+export function printCompanyInvoiceDebtPopup(data: {
+  invoiceNo: string;
+  companyName: string;
+  date: number;
+  originalAmount: number;
+  paidAmount: number;
+  remainingAmount: number;
+  items: Array<{ description: string; originalAmount: number; paidAmount?: number; remainingAmount?: number }>;
+}) {
+  const cleanInv = data.invoiceNo ? data.invoiceNo.replace(/^#/, '') : 'بێ وەسڵ';
+  const cleanComp = data.companyName || 'کۆمپانیا';
+
+  const rows = data.items.map((it, idx) => `
+    <tr>
+      <td style="text-align: center; color: #64748b; font-family: monospace;">${idx + 1}</td>
+      <td style="font-weight: 600; color: #1e293b;">${it.description || 'کاڵا / مامەڵەی کڕین'}</td>
+      <td style="text-align: left; font-family: monospace; font-weight: 700; color: #0f172a;" dir="ltr">${(it.originalAmount || 0).toLocaleString()} د.ع</td>
+      ${data.paidAmount > 0 ? `<td style="text-align: left; font-family: monospace; color: #16a34a;" dir="ltr">${(it.paidAmount || 0).toLocaleString()} د.ع</td>` : ''}
+      <td style="text-align: left; font-family: monospace; font-weight: 800; color: #d97706;" dir="ltr">${((it.remainingAmount !== undefined ? it.remainingAmount : it.originalAmount) || 0).toLocaleString()} د.ع</td>
+    </tr>
+  `).join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ku">
+      <head>
+        <meta charset="utf-8" />
+        <title>وەسڵی قەرز #${cleanInv} - ${cleanComp}</title>
+        <style>
+          @page { size: A4 portrait; margin: 12mm; }
+          * { box-sizing: border-box; }
+          body {
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 12px;
+            color: #0f172a;
+            background: #fff;
+            direction: rtl;
+          }
+          .invoice-box {
+            max-width: 800px;
+            margin: 0 auto;
+          }
+          .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 15px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 10px 14px;
+          }
+          .meta-item { display: flex; flex-direction: column; gap: 2px; }
+          .meta-label { font-size: 11px; color: #64748b; font-weight: 600; }
+          .meta-value { font-size: 13px; font-weight: 800; color: #0f172a; }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 16px;
+            font-size: 12px;
+          }
+          th {
+            background-color: #f1f5f9;
+            color: #475569;
+            font-weight: 700;
+            padding: 8px 10px;
+            border-bottom: 2px solid #cbd5e1;
+            text-align: right;
+          }
+          td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #e2e8f0;
+          }
+          .summary-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #fffbeb;
+            border: 1.5px solid #fde68a;
+            border-radius: 12px;
+            padding: 12px 18px;
+            margin-top: 10px;
+          }
+          .summary-title { font-size: 13px; font-weight: 700; color: #92400e; }
+          .summary-value { font-size: 18px; font-weight: 900; color: #b45309; font-family: monospace; }
+          .signatures {
+            margin-top: 40px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            font-weight: bold;
+            color: #475569;
+          }
+          .sig-box { text-align: center; width: 200px; }
+          .sig-line { border-bottom: 1px dashed #94a3b8; margin-top: 35px; }
+          @media print {
+            body { padding: 0; }
+            .invoice-box { max-width: 100%; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="invoice-box">
+          ${renderReceiptHeaderHtml({
+            invoiceNo: cleanInv,
+            customerName: cleanComp,
+            date: data.date,
+            isSale: false
+          })}
+
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-label">ژمارەی وەسڵ:</span>
+              <span class="meta-value" dir="ltr" style="font-family: monospace; color: #d97706;">#${cleanInv}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">ناوی کۆمپانیا:</span>
+              <span class="meta-value">${cleanComp}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">بەروار:</span>
+              <span class="meta-value" dir="ltr">${format(data.date, 'yyyy-MM-dd HH:mm')}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">ژمارەی کاڵاکان:</span>
+              <span class="meta-value">${data.items.length} کاڵا</span>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 35px; text-align: center;">#</th>
+                <th>وردەکاری کاڵا / کڕین</th>
+                <th style="width: 140px; text-align: left;">بڕی سەرەتایی</th>
+                ${data.paidAmount > 0 ? '<th style="width: 130px; text-align: left;">دراوە</th>' : ''}
+                <th style="width: 140px; text-align: left;">ماوەی قەرز</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+
+          <div class="summary-card">
+            <div>
+              <div class="summary-title">کۆی ماوەی قەرزی ئەم وەسڵە:</div>
+              ${data.paidAmount > 0 ? `<div style="font-size: 11px; color: #16a34a; margin-top: 2px;">(کۆی سەرەتایی: ${(data.originalAmount || 0).toLocaleString()} د.ع - دراوە: ${(data.paidAmount || 0).toLocaleString()} د.ع)</div>` : ''}
+            </div>
+            <div class="summary-value" dir="ltr">${(data.remainingAmount || 0).toLocaleString()} د.ع</div>
+          </div>
+
+          <div class="signatures">
+            <div class="sig-box">
+              <div>واژووی نوێنەری کۆمپانیا</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>واژووی وەرگر / ژمێریار</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+        </div>
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
+export function printCompanyInvoiceCashPopup(data: {
+  invoiceNo: string;
+  companyName: string;
+  date: number;
+  totalAmount: number;
+  items: Array<{ description?: string; amount?: number }>;
+}) {
+  const cleanInv = data.invoiceNo ? data.invoiceNo.replace(/^#/, '') : 'بێ وەسڵ';
+  const cleanComp = data.companyName || 'کۆمپانیا';
+
+  const rows = data.items.map((it, idx) => `
+    <tr>
+      <td style="text-align: center; color: #64748b; font-family: monospace;">${idx + 1}</td>
+      <td style="font-weight: 600; color: #1e293b;">${it.description || 'کاڵا / مامەڵەی کڕین'}</td>
+      <td style="text-align: left; font-family: monospace; font-weight: 800; color: #047857;" dir="ltr">${(it.amount || 0).toLocaleString()} د.ع</td>
+    </tr>
+  `).join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ku">
+      <head>
+        <meta charset="utf-8" />
+        <title>وەسڵی نەقدی #${cleanInv} - ${cleanComp}</title>
+        <style>
+          @page { size: A4 portrait; margin: 12mm; }
+          * { box-sizing: border-box; }
+          body {
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 12px;
+            color: #0f172a;
+            background: #fff;
+            direction: rtl;
+          }
+          .invoice-box {
+            max-width: 800px;
+            margin: 0 auto;
+          }
+          .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 15px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 10px 14px;
+          }
+          .meta-item { display: flex; flex-direction: column; gap: 2px; }
+          .meta-label { font-size: 11px; color: #64748b; font-weight: 600; }
+          .meta-value { font-size: 13px; font-weight: 800; color: #0f172a; }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 16px;
+            font-size: 12px;
+          }
+          th {
+            background-color: #f1f5f9;
+            color: #475569;
+            font-weight: 700;
+            padding: 8px 10px;
+            border-bottom: 2px solid #cbd5e1;
+            text-align: right;
+          }
+          td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #e2e8f0;
+          }
+          .summary-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #ecfdf5;
+            border: 1.5px solid #a7f3d0;
+            border-radius: 12px;
+            padding: 12px 18px;
+            margin-top: 10px;
+          }
+          .summary-title { font-size: 13px; font-weight: 700; color: #065f46; }
+          .summary-value { font-size: 18px; font-weight: 900; color: #047857; font-family: monospace; }
+          .signatures {
+            margin-top: 40px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            font-weight: bold;
+            color: #475569;
+          }
+          .sig-box { text-align: center; width: 200px; }
+          .sig-line { border-bottom: 1px dashed #94a3b8; margin-top: 35px; }
+          @media print {
+            body { padding: 0; }
+            .invoice-box { max-width: 100%; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="invoice-box">
+          ${renderReceiptHeaderHtml({
+            invoiceNo: cleanInv,
+            customerName: cleanComp,
+            date: data.date,
+            isSale: false
+          })}
+
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-label">ژمارەی وەسڵ:</span>
+              <span class="meta-value" dir="ltr" style="font-family: monospace; color: #059669;">#${cleanInv}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">ناوی کۆمپانیا:</span>
+              <span class="meta-value">${cleanComp}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">بەروار:</span>
+              <span class="meta-value" dir="ltr">${format(data.date, 'yyyy-MM-dd HH:mm')}</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">ژمارەی کاڵاکان:</span>
+              <span class="meta-value">${data.items.length} کاڵا</span>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 35px; text-align: center;">#</th>
+                <th>وردەکاری کاڵا / کڕین</th>
+                <th style="width: 160px; text-align: left;">بڕی نەقد (د.ع)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+
+          <div class="summary-card">
+            <div class="summary-title">کۆی گشتی نەقدی وەسڵ:</div>
+            <div class="summary-value" dir="ltr">${(data.totalAmount || 0).toLocaleString()} د.ع</div>
+          </div>
+
+          <div class="signatures">
+            <div class="sig-box">
+              <div>واژووی نوێنەری کۆمپانیا</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>واژووی وەرگر / ژمێریار</div>
               <div class="sig-line"></div>
             </div>
           </div>
