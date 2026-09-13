@@ -203,8 +203,9 @@ export async function syncAllRepsAndCashvans() {
       if (name) cashvansMap.set(name.toLowerCase(), { id: d.id, ...data });
     });
 
-    // 1. If in reps but not in cashvans, create in cashvans
+    // 1. If in reps but not in cashvans, create in cashvans (if both or not restricted to rep)
     for (const [key, rep] of repsMap.entries()) {
+      if (rep.userType === 'rep') continue;
       if (!cashvansMap.has(key)) {
         try {
           await setDoc(doc(db, 'cashvans', rep.id), {
@@ -216,6 +217,9 @@ export async function syncAllRepsAndCashvans() {
             vehicleNumber: '',
             status: rep.status || 'active',
             balance: 0,
+            userType: rep.userType || 'both',
+            isRep: true,
+            isCashvan: true,
             createdAt: rep.createdAt || Date.now()
           }, { merge: true });
         } catch (e) {
@@ -224,8 +228,9 @@ export async function syncAllRepsAndCashvans() {
       }
     }
 
-    // 2. If in cashvans but not in reps, create in reps
+    // 2. If in cashvans but not in reps, create in reps (if both or not restricted to cashvan)
     for (const [key, cv] of cashvansMap.entries()) {
+      if (cv.userType === 'cashvan') continue;
       if (!repsMap.has(key)) {
         try {
           await setDoc(doc(db, 'reps', cv.id), {
@@ -235,6 +240,9 @@ export async function syncAllRepsAndCashvans() {
             accessCode: cv.accessCode || cv.password || '43629',
             password: cv.password || cv.accessCode || '43629',
             status: cv.status || 'active',
+            userType: cv.userType || 'both',
+            isRep: true,
+            isCashvan: true,
             createdAt: cv.createdAt || Date.now(),
             totalSales: 0,
             totalProfit: 0

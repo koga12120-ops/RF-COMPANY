@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy, where, deleteDoc, doc, updateDoc, getDoc, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, where, deleteDoc, doc, updateDoc, getDoc, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { StockHistory } from '../../types';
-import { Package, Search, Calendar, Trash2, Edit2, Printer, FileText, X, Check } from 'lucide-react';
+import { Package, Search, Calendar, Trash2, Edit2, Printer, FileText, X, Check, RotateCcw, Sparkles, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import { syncHistoryInvoice } from '../../lib/invoiceSync';
@@ -13,26 +13,33 @@ export default function StockHistoryView() {
   const [history, setHistory] = useState<StockHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterMode, setFilterMode] = useState<'all' | 'date'>('all');
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [deletingHistory, setDeletingHistory] = useState<StockHistory | null>(null);
   const [editingHistory, setEditingHistory] = useState<StockHistory | null>(null);
   const [newQtyInput, setNewQtyInput] = useState('');
   const [newInvoiceInput, setNewInvoiceInput] = useState('');
   const [isProcessingEdit, setIsProcessingEdit] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    // Only query by selectedDate to filter locally, or use Firestore where
-    // For simplicity with Firestore index, we will query all and filter locally for search, 
-    // but use a timestamp range for the selected day.
-    const start = startOfDay(new Date(selectedDate)).getTime();
-    const end = endOfDay(new Date(selectedDate)).getTime();
-
-    const q = query(
-      collection(db, 'stock_history'),
-      where('date', '>=', start),
-      where('date', '<=', end),
-      orderBy('date', 'desc')
-    );
+    let q;
+    if (filterMode === 'date') {
+      const start = startOfDay(new Date(selectedDate)).getTime();
+      const end = endOfDay(new Date(selectedDate)).getTime();
+      q = query(
+        collection(db, 'stock_history'),
+        where('date', '>=', start),
+        where('date', '<=', end),
+        orderBy('date', 'desc')
+      );
+    } else {
+      q = query(
+        collection(db, 'stock_history'),
+        orderBy('date', 'desc')
+      );
+    }
 
     const unsub = onSnapshot(
       q,
@@ -46,11 +53,82 @@ export default function StockHistoryView() {
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, 'stock_history');
+        setLoading(false);
       }
     );
 
     return () => unsub();
-  }, [selectedDate]);
+  }, [selectedDate, filterMode]);
+
+  const handleRestoreFromItems = async () => {
+    if (!window.confirm('ئایا دڵنیایت دەتەوێت تۆمارەکانی مێژووی هاتنی کاڵا لەسەر بنەمای کاڵاکانی ئێستای ناو کۆگا (Items) دروست بکەیتەوە؟\nئەم کردارە داتاکانی مێژووی هاتنی کاڵا لە داتابەیس نوێ دەکاتەوە.')) {
+      return;
+    }
+
+    setIsRestoring(true);
+    setRestoreMessage('خەریکی پشکنین و گەڕاندنەوەی مێژووی کاڵاکانە لە کۆگاوە...');
+    try {
+      // 1. Fetch current items in inventory
+      const itemsSnap = await getDocs(collection(db, 'items'));
+      if (itemsSnap.empty) {
+        alert('هیچ کاڵایەک لە بەشی کۆگادا (items) نەدۆزرایەوە.');
+        setIsRestoring(false);
+        setRestoreMessage(null);
+        return;
+      }
+
+      // 2. Fetch current stock history to avoid duplicates
+      const historySnap = await getDocs(collection(db, 'stock_history'));
+      const existingItemIds = new Set<string>();
+      const existingNames = new Set<string>();
+      historySnap.forEach(d => {
+        const dData = d.data();
+        if (dData.itemId) existingItemIds.add(dData.itemId);
+        if (dData.itemName) existingNames.add(dData.itemName.trim().toLowerCase());
+      });
+
+      let restoredCount = 0;
+      for (const itemDoc of itemsSnap.docs) {
+        const item = itemDoc.data();
+        const itemId = itemDoc.id;
+        const itemName = (item.name || '').trim();
+
+        // If not already in stock_history or if history was empty
+        if (!existingItemIds.has(itemId) && !existingNames.has(itemName.toLowerCase())) {
+          const qty = Number(item.quantity || item.cartonQuantity || item.packetQuantity || 0);
+          const cBonus = Number(item.cartonBonusQuantity || 0);
+          const pBonus = Number(item.packetBonusQuantity || 0);
+          const totalBonus = cBonus + pBonus;
+
+          await addDoc(collection(db, 'stock_history'), {
+            itemId: itemId,
+            itemName: itemName || 'کاڵا',
+            quantityAdded: qty > 0 ? qty : 1,
+            purchasedQuantity: Number(item.cartonPurchasedQuantity || item.packetPurchasedQuantity || qty || 0),
+            bonusQuantity: totalBonus,
+            cartonBonus: cBonus,
+            packetBonus: pBonus,
+            unit: item.unitType || (item.cartonQuantity ? 'carton' : 'packet'),
+            date: Number(item.createdAt) || Date.now(),
+            invoiceNo: item.invoiceNo || '',
+            supplier: item.supplier || '',
+            notes: 'گەڕێندراوەتەوە لە تۆماری کاڵاکانی کۆگا'
+          });
+          restoredCount++;
+        }
+      }
+
+      const msg = `بەسەرکەوتوویی (${restoredCount}) کاڵا لە کۆگاوە مێژووەکەیان گەڕێندرایەوە بۆ ناو فایەرستۆر`;
+      setRestoreMessage(msg);
+      alert(`سەرکەوتوو بوو!\n${msg}`);
+      setTimeout(() => setRestoreMessage(null), 8000);
+    } catch (error) {
+      console.error('Error restoring stock history:', error);
+      alert('هەڵەیەک ڕوویدا لە کاتی گەڕاندنەوەی مێژووی کاڵاکان');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
 
 
   const confirmDeleteHistory = async () => {
@@ -245,39 +323,136 @@ export default function StockHistoryView() {
 
   return (
     <div className="space-y-6">
+      {/* Recovery Success / Progress Notification */}
+      {restoreMessage && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 px-4 py-3 rounded-2xl flex items-center justify-between text-xs sm:text-sm font-bold shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={20} className="text-emerald-600 shrink-0" />
+            <span>{restoreMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRestoreMessage(null)}
+            className="text-emerald-700 hover:text-emerald-900 font-bold px-2 py-1"
+          >
+            داخستن
+          </button>
+        </div>
+      )}
+
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-50">
-          <h4 className="font-bold text-slate-700 flex items-center gap-2">
-            <Package size={20} /> ڕاپۆرتی هاتنی کاڵا
-          </h4>
-          <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-            <div className="relative">
-              <input
-                type="date"
-                className="w-full pl-4 pr-10 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono text-slate-600"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-              />
-              <Calendar className="absolute right-3 top-2.5 text-slate-400" size={18} />
+        <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4 bg-slate-50">
+          <div className="flex flex-wrap items-center gap-3">
+            <h4 className="font-bold text-slate-700 flex items-center gap-2 text-base">
+              <Package size={20} /> ڕاپۆرتی هاتنی کاڵا
+            </h4>
+
+            {/* Filter Mode Toggle */}
+            <div className="flex items-center bg-slate-200/80 p-1 rounded-xl text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setFilterMode('all')}
+                className={`px-3 py-1.5 rounded-lg transition ${
+                  filterMode === 'all'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                هەموو هاتنەکان ({history.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterMode('date')}
+                className={`px-3 py-1.5 rounded-lg transition ${
+                  filterMode === 'date'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                بەپێی بەروار
+              </button>
             </div>
-            <div className="relative">
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Quick Restore Button */}
+            <button
+              type="button"
+              onClick={handleRestoreFromItems}
+              disabled={isRestoring}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shadow-xs border ${
+                isRestoring
+                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200 active:scale-98'
+              }`}
+              title="دروستکردنەوەی مێژووی کاڵاکان لەسەر بنەمای کۆگای ئێستا"
+            >
+              <RotateCcw size={15} className={isRestoring ? 'animate-spin' : ''} />
+              <span>{isRestoring ? 'خەریکی گەڕاندنەوەیە...' : 'گەڕاندنەوە لە کۆگاوە'}</span>
+            </button>
+
+            {/* Date Picker (only active when filterMode is date) */}
+            {filterMode === 'date' && (
+              <div className="relative">
+                <input
+                  type="date"
+                  className="pl-3 pr-9 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono text-slate-700 bg-white shadow-2xs"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                />
+                <Calendar className="absolute right-2.5 top-2.5 text-slate-400 pointer-events-none" size={16} />
+              </div>
+            )}
+
+            {/* Search Input */}
+            <div className="relative flex-1 sm:w-56">
               <input
                 type="text"
-                placeholder="گەڕان بەدوای کاڵا..."
-                className="w-full pr-10 pl-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                placeholder="گەڕان بەدوای کاڵا یان وەسڵ..."
+                className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs bg-white shadow-2xs"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
-              <Search className="absolute right-3 top-2.5 text-slate-400" size={18} />
+              <Search className="absolute right-3 top-2.5 text-slate-400 pointer-events-none" size={16} />
             </div>
           </div>
         </div>
 
         {loading ? (
-          <div className="text-center py-10 text-slate-500">خەریکی هێنانە...</div>
+          <div className="text-center py-12 text-slate-500 text-sm">خەریکی هێنانی داتاکانە...</div>
         ) : filteredHistory.length === 0 ? (
-          <div className="text-center py-12 text-slate-500">
-            هیچ کاڵایەک نەهاتووە لەم ڕۆژەدا
+          <div className="py-12 px-4 text-center max-w-lg mx-auto space-y-4">
+            <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+              <Package size={28} />
+            </div>
+            <div>
+              <h5 className="font-bold text-slate-800 text-base">هیچ تۆمارێکی هاتنی کاڵا نەدۆزرایەوە</h5>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                ئەگەر کۆڵێکشن یان فایلی <code className="text-indigo-600 font-mono font-bold bg-indigo-50 px-1 py-0.5 rounded">stock_history</code> لە فایەرستۆر سڕاوەتەوە، نیگەران مەبە! هەموو کاڵاکانت لە بەشی کۆگا پارێزراون. دەتوانیت بە یەک کرتە تۆماری مێژووەکەیان لێرە دروست بکەیتەوە.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleRestoreFromItems}
+                disabled={isRestoring}
+                className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-2 active:scale-95"
+              >
+                <Sparkles size={16} />
+                <span>{isRestoring ? 'خەریکی دروستکردنەوەیە...' : 'گەڕاندنەوەی مێژووی کاڵاکان لە کۆگاوە'}</span>
+              </button>
+
+              {filterMode === 'date' && (
+                <button
+                  type="button"
+                  onClick={() => setFilterMode('all')}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition"
+                >
+                  پیشاندانی هەموو بەروارەکان
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           <div className="flex-1 overflow-x-auto">

@@ -209,7 +209,7 @@ export default function WarehouseCashvanView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی بارکردنی کاڵا بۆ کاشڤان - ${transfer.cashvanName}</title>
+          <title></title>
           <style>
             @page { size: A4; margin: 15mm; }
             body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
@@ -750,7 +750,7 @@ export default function WarehouseCashvanView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی داواکاری پێشوەختە (تەڵەبیە) - ${req.cashvanName}</title>
+          <title></title>
           <style>
             @page { size: A4; margin: 15mm; }
             body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }

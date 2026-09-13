@@ -72,7 +72,7 @@ import { getCompanySettings } from '../../lib/companySettings';
 
 export default function AdminCashvanView() {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'rep_sales' | 'cashvan_sales' | 'period_stats' | 'transfers' | 'cashvan_accounts' | 'daily_statement'>('rep_sales');
+  const [activeTab, setActiveTab] = useState<'rep_sales' | 'cashvan_sales' | 'period_stats' | 'transfers' | 'daily_statement'>('rep_sales');
 
   // Core Data
   const [orders, setOrders] = useState<Order[]>([]);
@@ -271,13 +271,15 @@ export default function AdminCashvanView() {
       accessCode: string;
       password?: string;
       vehicleNumber?: string;
-      status: 'active' | 'disabled';
+      status: 'active' | 'disabled' | 'deleted';
+      isDeleted?: boolean;
     }>();
 
     // 1. Add all reps
     reps.forEach(r => {
       const name = (r.name || '').trim();
       if (!name) return;
+      const isDel = !!r.isDeleted || r.status === 'deleted';
       map.set(name.toLowerCase(), {
         id: r.id,
         repId: r.id,
@@ -287,7 +289,8 @@ export default function AdminCashvanView() {
         accessCode: r.accessCode || r.password || '',
         password: r.password || r.accessCode || '',
         vehicleNumber: '',
-        status: r.status === 'disabled' ? 'disabled' : 'active',
+        status: isDel ? 'deleted' : (r.status === 'disabled' ? 'disabled' : 'active'),
+        isDeleted: isDel,
       });
     });
 
@@ -297,6 +300,7 @@ export default function AdminCashvanView() {
       if (!name) return;
       const key = name.toLowerCase();
       const existing = map.get(key);
+      const isDel = !!c.isDeleted || c.status === 'deleted';
       if (existing) {
         existing.cvId = c.id;
         if (!existing.phone && c.phone) existing.phone = c.phone;
@@ -305,7 +309,12 @@ export default function AdminCashvanView() {
           existing.password = c.password || c.accessCode;
         }
         if (c.vehicleNumber) existing.vehicleNumber = c.vehicleNumber;
-        if (c.status === 'disabled') existing.status = 'disabled';
+        if (isDel && existing.status !== 'active') {
+          existing.status = 'deleted';
+          existing.isDeleted = true;
+        } else if (c.status === 'disabled' && existing.status !== 'deleted') {
+          existing.status = 'disabled';
+        }
       } else {
         map.set(key, {
           id: c.id,
@@ -316,7 +325,8 @@ export default function AdminCashvanView() {
           accessCode: c.accessCode || c.password || '',
           password: c.password || c.accessCode || '',
           vehicleNumber: c.vehicleNumber || '',
-          status: c.status === 'disabled' ? 'disabled' : 'active',
+          status: isDel ? 'deleted' : (c.status === 'disabled' ? 'disabled' : 'active'),
+          isDeleted: isDel,
         });
       }
     });
@@ -1028,23 +1038,42 @@ export default function AdminCashvanView() {
     if (!deletingCVItem) return;
     const personName = deletingCVItem.name.trim();
     try {
+      const now = Date.now();
+      // 1. Soft delete in cashvans - preserve accounting & transaction integrity
       const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
       for (const d of cvSnap.docs) {
-        await deleteDoc(doc(db, 'cashvans', d.id));
+        await setDoc(doc(db, 'cashvans', d.id), {
+          isDeleted: true,
+          status: 'deleted',
+          deletedAt: now,
+          forceReauth: true
+        }, { merge: true });
       }
 
+      // 2. Soft delete in reps
       const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
       for (const d of repSnap.docs) {
-        await deleteDoc(doc(db, 'reps', d.id));
+        await setDoc(doc(db, 'reps', d.id), {
+          isDeleted: true,
+          status: 'deleted',
+          deletedAt: now,
+          forceReauth: true
+        }, { merge: true });
       }
 
+      // 3. Disable user login in users collection
       const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
       for (const d of usersSnap.docs) {
-        await deleteDoc(doc(db, 'users', d.id));
+        await setDoc(doc(db, 'users', d.id), {
+          status: 'banned',
+          isDeleted: true,
+          deletedAt: now,
+          forceReauth: true
+        }, { merge: true });
       }
 
       setDeletingCVItem(null);
-      alert(`بەکارهێنەر (${personName}) سڕدرایەوە.`);
+      alert(`هەژماری (${personName}) سڕدرایەوە و دەستڕاگەیشتنی داخرا.\nتەواوی حیسابات، وەسڵەکان و مامەڵەکانی بە تەواوی پارێزراون و لە دەفتەری حیساباتدا دەمێننەوە.`);
     } catch (e) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا لە سڕینەوە');
@@ -1177,7 +1206,7 @@ export default function AdminCashvanView() {
             <p>.......................................</p>
           </div>
           <div>
-            <p style="margin-bottom: 40px;">واژووی وەرگر (مارکێت)</p>
+            <p style="margin-bottom: 40px;">واژووی مارکێت</p>
             <p>.......................................</p>
           </div>
         </div>
@@ -1187,7 +1216,7 @@ export default function AdminCashvanView() {
     printWindow.document.write(`
       <html>
         <head>
-          <title>وەسڵی ئۆردەر - #${invoiceNum}</title>
+          <title></title>
           <style>
             @media print {
               body { margin: 0; padding: 0; }
@@ -1332,7 +1361,7 @@ export default function AdminCashvanView() {
             <p>.......................................</p>
           </div>
           <div>
-            <p style="margin-bottom: 40px;">واژووی وەرگر (مارکێت)</p>
+            <p style="margin-bottom: 40px;">واژووی مارکێت</p>
             <p>.......................................</p>
           </div>
         </div>
@@ -1342,7 +1371,7 @@ export default function AdminCashvanView() {
     printWindow.document.write(`
       <html>
         <head>
-          <title>وەسڵی کاشڤان - #${invoiceNum}</title>
+          <title></title>
           <style>
             @media print {
               body { margin: 0; padding: 0; }
@@ -2390,21 +2419,6 @@ export default function AdminCashvanView() {
         </button>
 
         <button
-          onClick={() => setActiveTab('cashvan_accounts')}
-          className={`py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
-            activeTab === 'cashvan_accounts' 
-              ? 'bg-indigo-600 text-white shadow-sm' 
-              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-          }`}
-        >
-          <User size={18} />
-          <span>هەژمارەکانی کاشڤان</span>
-          <span className="text-[11px] px-2 py-0.5 rounded-full font-mono bg-indigo-100 text-indigo-800">
-            {unifiedUsers.length}
-          </span>
-        </button>
-
-        <button
           onClick={() => setActiveTab('daily_statement')}
           className={`py-3 px-5 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
             activeTab === 'daily_statement' 
@@ -2530,7 +2544,9 @@ export default function AdminCashvanView() {
                           <div className="text-[11px] text-slate-500 font-mono" dir="ltr">{u.phone || u.username || 'بێ ژمارە'}</div>
                         </div>
                       </div>
-                      {u.status === 'disabled' ? (
+                      {u.status === 'deleted' ? (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">سڕاوەتەوە (حسابات پارێزراوە)</span>
+                      ) : u.status === 'disabled' ? (
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
                       ) : isSelected ? (
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-600 text-white">دیاریکراو</span>
@@ -2577,7 +2593,9 @@ export default function AdminCashvanView() {
                   >
                     <option value="all">سەرجەم مەندووبەکان ({unifiedUsers.length})</option>
                     {unifiedUsers.map(r => (
-                      <option key={`rep-filter-${r.name}`} value={r.name}>{r.name}</option>
+                      <option key={`rep-filter-${r.name}`} value={r.name}>
+                        {r.name} {r.status === 'deleted' ? ' (سڕاوەتەوە - حساباتی پارێزراوە)' : r.status === 'disabled' ? ' (ڕاگیراوە)' : ''}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -2910,7 +2928,9 @@ export default function AdminCashvanView() {
                           <div className="text-[11px] text-slate-500 font-mono" dir="ltr">{u.phone || u.username || 'بێ ژمارە'}</div>
                         </div>
                       </div>
-                      {u.status === 'disabled' ? (
+                      {u.status === 'deleted' ? (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">سڕاوەتەوە (حسابات پارێزراوە)</span>
+                      ) : u.status === 'disabled' ? (
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
                       ) : isSelected ? (
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">دیاریکراو</span>
@@ -2957,7 +2977,9 @@ export default function AdminCashvanView() {
                   >
                     <option value="all">سەرجەم کاشڤانەکان ({unifiedUsers.length})</option>
                     {unifiedUsers.map(c => (
-                      <option key={`cv-filter-${c.name}`} value={c.name}>{c.name}</option>
+                      <option key={`cv-filter-${c.name}`} value={c.name}>
+                        {c.name} {c.status === 'deleted' ? ' (سڕاوەتەوە - حساباتی پارێزراوە)' : c.status === 'disabled' ? ' (ڕاگیراوە)' : ''}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -3919,10 +3941,8 @@ export default function AdminCashvanView() {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 5: CASHVAN ACCOUNTS & AUTHENTICATION MANAGEMENT                        */}
-      {/* ========================================================================= */}
-      {activeTab === 'cashvan_accounts' && (
+      {/* TAB 5: CASHVAN ACCOUNTS & AUTHENTICATION MANAGEMENT (REMOVED - UNIFIED IN REPS & CASHVANS VIEW) */}
+      {false && (
         <div className="space-y-6" dir="rtl">
           {/* Header Bar */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50">
@@ -4357,13 +4377,14 @@ export default function AdminCashvanView() {
         isOpen={!!deletingCVItem}
         onClose={() => setDeletingCVItem(null)}
         onConfirm={confirmDeleteCashvan}
-        title="سڕینەوەی کاشڤان"
-        message={`ئایا دڵنیایت لە سڕینەوەی هەژماری کاشڤان (${deletingCVItem?.name})؟`}
+        title="سڕینەوە و ڕاگرتنی کاشڤان / مەندووب"
+        message={`ئایا دڵنیایت لە سڕینەوەی ئەم کارمەندە (${deletingCVItem?.name})؟ تێبینی: بە سڕینەوەی ئەم هەژمارە تەنها دەستڕاگەیشتنی دادەخرێت؛ تەواوی حیسابات، وەسڵەکان، قەرزەکان و مامەڵەکانی بە پارێزراوی لە دەفتەری حیساباتدا دەمێننەوە و ناسڕێنەوە.`}
         itemName={deletingCVItem?.name}
         details={deletingCVItem ? [
-          { label: 'ناوی کاشڤان', value: deletingCVItem.name },
+          { label: 'ناوی کارمەند', value: deletingCVItem.name },
           { label: 'تەلەفۆن', value: deletingCVItem.phone || '-' },
-          { label: 'پاسوۆرد', value: deletingCVItem.accessCode || deletingCVItem.password || 'دیاری نەکراوە' }
+          { label: 'پاسوۆرد', value: deletingCVItem.accessCode || deletingCVItem.password || 'دیاری نەکراوە' },
+          { label: 'دۆخی حیسابات', value: 'پارێزراوە لە دەفتەری حیسابات (ناسڕێتەوە)' }
         ] : []}
       />
 

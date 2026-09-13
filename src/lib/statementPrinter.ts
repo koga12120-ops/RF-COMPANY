@@ -360,7 +360,7 @@ export function generatePaymentReceiptHtml(data: PaymentReceiptData): string {
 
         <div class="signatures">
           <div class="sig-block">
-            <div>واژووی ڕادەستکەر (پێدەر)</div>
+            <div>واژووی مارکێت</div>
             <div class="sig-line"></div>
           </div>
           <div class="sig-block">
@@ -463,7 +463,7 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
   return `
     <html dir="rtl">
       <head>
-        <title>وەسڵی ڕۆژانەی ${data.roleTitle} - ${data.repName}</title>
+        <title></title>
         <meta charset="utf-8" />
         <style>
           body { font-family: Tahoma, 'Segoe UI', Arial, sans-serif; padding: 24px; color: #1e293b; line-height: 1.5; background: #fff; }
@@ -649,7 +649,7 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
     <html dir="rtl" lang="ckb">
       <head>
         <meta charset="utf-8" />
-        <title>وەسڵی وەرگرتنی پارەی قەرز - ${data.marketName}</title>
+        <title></title>
         <style>
           * { box-sizing: border-box; margin: 0; padding: 0; }
           body {
@@ -785,7 +785,7 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
 
           <div class="signatures">
             <div class="sig-block">
-              <div>واژووی کڕیار / مارکێت</div>
+              <div>واژووی مارکێت</div>
               <div class="sig-line"></div>
             </div>
             <div class="sig-block">
@@ -973,8 +973,11 @@ export interface WarehouseInvoicePrintData {
     barcode?: string;
     cartonQuantity?: number;
     packetQuantity?: number;
+    cartonPurchasedQuantity?: number;
+    packetPurchasedQuantity?: number;
     cartonBonusQuantity?: number;
     packetBonusQuantity?: number;
+    bonusQuantity?: number;
     cartonCostPrice?: number;
     packetCostPrice?: number;
     cartonSellingPrice?: number;
@@ -985,6 +988,7 @@ export interface WarehouseInvoicePrintData {
     sellingPrice?: number;
     quantity?: number;
     unitType?: string;
+    [key: string]: any;
   }>;
   totalCartons?: number;
   totalCartonBonus?: number;
@@ -1006,12 +1010,12 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
 
   items.forEach(item => {
     const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-    const cBonus = item.cartonBonusQuantity || 0;
-    const cPurchased = Math.max(0, cTotal - cBonus);
+    const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+    const cPurchased = item.cartonPurchasedQuantity !== undefined ? item.cartonPurchasedQuantity : Math.max(0, cTotal - cBonus);
 
-    const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : 0;
-    const pBonus = item.packetBonusQuantity || 0;
-    const pPurchased = Math.max(0, pTotal - pBonus);
+    const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+    const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+    const pPurchased = item.packetPurchasedQuantity !== undefined ? item.packetPurchasedQuantity : Math.max(0, pTotal - pBonus);
 
     totalPurchasedCartons += cPurchased;
     totalCartonBonus += cBonus;
@@ -1038,12 +1042,12 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
 
   const rows = items.map((item, idx) => {
     const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-    const cBonus = item.cartonBonusQuantity || 0;
-    const cPurchased = Math.max(0, cTotal - cBonus);
+    const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+    const cPurchased = item.cartonPurchasedQuantity !== undefined ? item.cartonPurchasedQuantity : Math.max(0, cTotal - cBonus);
 
-    const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : 0;
-    const pBonus = item.packetBonusQuantity || 0;
-    const pPurchased = Math.max(0, pTotal - pBonus);
+    const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+    const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+    const pPurchased = item.packetPurchasedQuantity !== undefined ? item.packetPurchasedQuantity : Math.max(0, pTotal - pBonus);
 
     const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
     const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
@@ -1111,7 +1115,7 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
     <html dir="rtl" lang="ckb">
       <head>
         <meta charset="utf-8" />
-        <title>وەسڵی #${cleanInvoiceNo} - ${cleanSupplier}</title>
+        <title></title>
         <style>
           @page { size: auto; margin: 10mm; }
           body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 16px; color: #0f172a; }
@@ -1135,7 +1139,7 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
           ${header}
           <div class="meta-grid">
             <div class="meta-item">
-              <span class="meta-label">ناوی کۆمپانیا / سەرچاوە:</span>
+              <span class="meta-label">ناوی کۆمپانیا:</span>
               <span class="meta-value">${cleanSupplier}</span>
             </div>
             <div class="meta-item">
@@ -1238,7 +1242,7 @@ export function printCompanyInvoiceDebtPopup(data: {
     <html dir="rtl" lang="ku">
       <head>
         <meta charset="utf-8" />
-        <title>وەسڵی قەرز #${cleanInv} - ${cleanComp}</title>
+        <title></title>
         <style>
           @page { size: A4 portrait; margin: 12mm; }
           * { box-sizing: border-box; }
@@ -1412,7 +1416,7 @@ export function printCompanyInvoiceCashPopup(data: {
     <html dir="rtl" lang="ku">
       <head>
         <meta charset="utf-8" />
-        <title>وەسڵی نەقدی #${cleanInv} - ${cleanComp}</title>
+        <title></title>
         <style>
           @page { size: A4 portrait; margin: 12mm; }
           * { box-sizing: border-box; }

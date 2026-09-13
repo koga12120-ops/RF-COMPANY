@@ -105,12 +105,12 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
   const formatStock = (item: Item) => {
     const parts = [];
     const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-    const cBonus = item.cartonBonusQuantity || 0;
-    const cPurchased = Math.max(0, cTotal - cBonus);
+    const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+    const cPurchased = item.cartonPurchasedQuantity !== undefined ? item.cartonPurchasedQuantity : Math.max(0, cTotal - cBonus);
 
     const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
-    const pBonus = item.packetBonusQuantity || 0;
-    const pPurchased = Math.max(0, pTotal - pBonus);
+    const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+    const pPurchased = item.packetPurchasedQuantity !== undefined ? item.packetPurchasedQuantity : Math.max(0, pTotal - pBonus);
 
     if (item.cartonQuantity !== undefined || item.packetQuantity !== undefined) {
       if (cTotal > 0) {
@@ -228,6 +228,7 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
         wholesalePrice: cWholesale || pWholesale || 0,
         
         cartonQuantity: editHasCarton ? cTotal : 0,
+        cartonPurchasedQuantity: editHasCarton ? cPurchased : 0,
         cartonBonusQuantity: cBonus,
         cartonPurchaseCost: cCost,
         cartonCostPrice: cCost,
@@ -235,6 +236,7 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
         cartonWholesalePrice: cWholesale,
 
         packetQuantity: editHasPacket ? pTotal : 0,
+        packetPurchasedQuantity: editHasPacket ? pPurchased : 0,
         packetBonusQuantity: pBonus,
         packetPurchaseCost: pCost,
         packetCostPrice: pCost,
@@ -313,12 +315,12 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
       const key = `${invNo}___${supp}`;
 
       const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-      const cBonus = item.cartonBonusQuantity || 0;
-      const cPurchased = Math.max(0, cTotal - cBonus);
+      const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+      const cPurchased = item.cartonPurchasedQuantity !== undefined ? item.cartonPurchasedQuantity : Math.max(0, cTotal - cBonus);
 
       const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
-      const pBonus = item.packetBonusQuantity || 0;
-      const pPurchased = Math.max(0, pTotal - pBonus);
+      const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+      const pPurchased = item.packetPurchasedQuantity !== undefined ? item.packetPurchasedQuantity : Math.max(0, pTotal - pBonus);
 
       const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
       const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
@@ -1042,7 +1044,7 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
         details={deletingItem ? [
           { label: 'بارکۆد', value: deletingItem.barcode || '-' },
           { label: 'بڕی ماوە لە کۆگا', value: formatStock(deletingItem) },
-          { label: 'کۆمپانیا / سەرچاوە', value: deletingItem.supplier || '-' },
+          { label: 'کۆمپانیا', value: deletingItem.supplier || '-' },
           { label: 'ژمارەی وەسڵ', value: deletingItem.invoiceNo ? `#${deletingItem.invoiceNo}` : '-' }
         ] : []}
       />

@@ -28,10 +28,12 @@ export interface Item {
   cartonSellingPrice?: number;
   cartonWholesalePrice?: number;
   cartonQuantity?: number;
+  cartonPurchasedQuantity?: number; // بڕی کڕدراوی کارتۆن
   cartonBonusQuantity?: number; // بڕی دیاری / هەدیەی کارتۆن (تێچوو 0)
   cartonPurchaseCost?: number; // تێچووی کڕینی سەرەکی بەبێ دیاری
 
   packetBonusQuantity?: number; // بڕی دیاری / هەدیەی پاکەت (تێچوو 0)
+  packetPurchasedQuantity?: number; // بڕی کڕدراوی پاکەت
   packetPurchaseCost?: number; // تێچووی کڕینی سەرەکی پاکەت بەبێ دیاری
 
   // Backward compatibility fields
@@ -94,10 +96,15 @@ export interface SalesRep {
   email?: string;
   uid?: string;
   accessCode?: string; // کۆدی ئەمنی تایبەت یان پاسوۆرد
-  status?: 'active' | 'pending' | 'disabled';
+  status?: 'active' | 'pending' | 'disabled' | 'deleted' | 'archived';
+  userType?: 'both' | 'rep' | 'cashvan';
+  isRep?: boolean;
+  isCashvan?: boolean;
   totalSales: number;
   totalProfit: number;
   createdAt?: number;
+  isDeleted?: boolean;
+  deletedAt?: number;
 }
 
 export interface CashvanAccount {
@@ -107,10 +114,12 @@ export interface CashvanAccount {
   password?: string;
   accessCode?: string;
   phone?: string;
-  status?: 'active' | 'pending' | 'disabled';
+  status?: 'active' | 'pending' | 'disabled' | 'deleted' | 'archived';
   totalSales?: number;
   totalProfit?: number;
   createdAt?: number;
+  isDeleted?: boolean;
+  deletedAt?: number;
 }
 
 
@@ -130,6 +139,7 @@ export interface Order {
   invoiceId?: string;
   invoiceNo?: string; // ژمارەی ڕیزبەندی وەسڵ (00001, 00002...)
   repName: string;
+  repId?: string;
   marketName: string;
   location: string;
   totalAmount: number;
@@ -200,6 +210,7 @@ export interface CashvanSale {
   invoiceId?: string;
   paymentType?: 'cash' | 'debt';
   cashvanName: string;
+  cashvanId?: string;
   cashvanPhone?: string;
   marketName: string;
   items: {

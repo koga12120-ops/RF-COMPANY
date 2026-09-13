@@ -8,8 +8,12 @@ export interface UserSession {
   name: string;
   id?: string;
   repId?: string;
+  repName?: string;
   cashvanName?: string;
   accessCode?: string;
+  isRep?: boolean;
+  isCashvan?: boolean;
+  userType?: 'both' | 'rep' | 'cashvan';
   loggedInAt: number;
 }
 
@@ -147,12 +151,23 @@ export async function loginWithCredentials(
         const exactName = rep.name || cleanId || rep.username || 'مەندووب';
         const exactUsername = rep.username || cleanId || rep.name || 'مەندووب';
 
+        const uType: 'both' | 'rep' | 'cashvan' = rep.userType 
+          ? rep.userType 
+          : ((rep.isCashvan === true && rep.isRep !== false) ? 'both' : (rep.isCashvan === true ? 'cashvan' : 'rep'));
+        const isRepVal = uType === 'both' || uType === 'rep';
+        const isCashvanVal = uType === 'both' || uType === 'cashvan';
+
         const session: UserSession = {
           role: 'sales_rep',
           username: exactUsername,
           name: exactName,
           id: docSnap.id,
           repId: docSnap.id,
+          repName: exactName,
+          cashvanName: exactName,
+          isRep: isRepVal,
+          isCashvan: isCashvanVal,
+          userType: uType,
           accessCode: rep.accessCode || cleanSecret,
           loggedInAt: Date.now(),
         };
@@ -202,13 +217,23 @@ export async function loginWithCredentials(
         const exactName = cv.name || cleanId || cv.username || 'کاشڤان';
         const exactUsername = cv.username || cleanId || cv.name || 'کاشڤان';
 
+        const uType: 'both' | 'rep' | 'cashvan' = cv.userType 
+          ? cv.userType 
+          : ((cv.isRep === true && cv.isCashvan !== false) ? 'both' : (cv.isRep === true ? 'rep' : 'cashvan'));
+        const isRepVal = uType === 'both' || uType === 'rep';
+        const isCashvanVal = uType === 'both' || uType === 'cashvan';
+
         const session: UserSession = {
           role: 'sales_rep',
           username: exactUsername,
           name: exactName,
           id: docSnap.id,
           repId: docSnap.id,
+          repName: exactName,
           cashvanName: exactName,
+          isRep: isRepVal,
+          isCashvan: isCashvanVal,
+          userType: uType,
           accessCode: cv.accessCode || cleanSecret,
           loggedInAt: Date.now(),
         };
@@ -232,6 +257,10 @@ export async function loginWithCredentials(
       username: cleanId || (isCv ? 'cashvan' : 'sales_rep'),
       name: cleanId || (isCv ? 'کاشڤان' : 'مەندووب'),
       cashvanName: isCv ? (cleanId || 'کاشڤان') : undefined,
+      repName: !isCv ? (cleanId || 'مەندووب') : undefined,
+      userType: isCv ? 'cashvan' : 'rep',
+      isRep: !isCv,
+      isCashvan: isCv,
       accessCode: cleanSecret,
       loggedInAt: Date.now(),
     };
@@ -285,6 +314,9 @@ export async function loginWithSingleCode(code: string): Promise<{ success: bool
         username: 'cashvan',
         name: 'کاشڤان',
         cashvanName: 'کاشڤان',
+        userType: 'cashvan',
+        isRep: false,
+        isCashvan: true,
         accessCode: '47953',
         loggedInAt: Date.now(),
       }
@@ -298,6 +330,10 @@ export async function loginWithSingleCode(code: string): Promise<{ success: bool
         role: 'sales_rep',
         username: 'sales_rep',
         name: 'مەندووب',
+        repName: 'مەندووب',
+        userType: 'rep',
+        isRep: true,
+        isCashvan: false,
         accessCode: '43629',
         loggedInAt: Date.now(),
       }
@@ -314,6 +350,12 @@ export async function loginWithSingleCode(code: string): Promise<{ success: bool
       if (repData.status === 'disabled' || repData.isDeleted) {
         return { success: false, error: 'ئەم هەژمارەی مەندووب لەلایەن بەڕێوەبەرەوە ڕاگیراوە.' };
       }
+      const uType: 'both' | 'rep' | 'cashvan' = repData.userType 
+        ? repData.userType 
+        : ((repData.isCashvan === true && repData.isRep !== false) ? 'both' : (repData.isCashvan === true ? 'cashvan' : 'rep'));
+      const isRepVal = uType === 'both' || uType === 'rep';
+      const isCashvanVal = uType === 'both' || uType === 'cashvan';
+
       return {
         success: true,
         session: {
@@ -322,6 +364,11 @@ export async function loginWithSingleCode(code: string): Promise<{ success: bool
           name: repData.name || 'مەندووب',
           id: repDoc.id,
           repId: repDoc.id,
+          repName: repData.name || 'مەندووب',
+          cashvanName: isCashvanVal ? (repData.name || 'کاشڤان') : undefined,
+          userType: uType,
+          isRep: isRepVal,
+          isCashvan: isCashvanVal,
           accessCode: cleanCode,
           loggedInAt: Date.now(),
         }
@@ -341,6 +388,12 @@ export async function loginWithSingleCode(code: string): Promise<{ success: bool
       if (cvData.status === 'disabled' || cvData.isDeleted) {
         return { success: false, error: 'ئەم هەژمارەی کاشڤان لەلایەن بەڕێوەبەرەوە ڕاگیراوە.' };
       }
+      const uType: 'both' | 'rep' | 'cashvan' = cvData.userType 
+        ? cvData.userType 
+        : ((cvData.isRep === true && cvData.isCashvan !== false) ? 'both' : (cvData.isRep === true ? 'rep' : 'cashvan'));
+      const isRepVal = uType === 'both' || uType === 'rep';
+      const isCashvanVal = uType === 'both' || uType === 'cashvan';
+
       return {
         success: true,
         session: {
@@ -350,6 +403,10 @@ export async function loginWithSingleCode(code: string): Promise<{ success: bool
           id: cvDoc.id,
           repId: cvDoc.id,
           cashvanName: cvData.name,
+          repName: isRepVal ? (cvData.name || 'مەندووب') : undefined,
+          userType: uType,
+          isRep: isRepVal,
+          isCashvan: isCashvanVal,
           accessCode: cleanCode,
           loggedInAt: Date.now(),
         }

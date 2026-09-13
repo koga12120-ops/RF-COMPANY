@@ -15,7 +15,8 @@ import {
   Phone,
   MapPin,
   Search,
-  X
+  X,
+  Lock
 } from 'lucide-react';
 
 export interface MarketDailyScheduleCardProps {
@@ -27,6 +28,8 @@ export interface MarketDailyScheduleCardProps {
   onSelectForDebtPay: (market: Market, debtAmount: number) => void;
   onOpenMarketActions?: (market: Market, debt: number, isVisited: boolean) => void;
   marketDebtMap?: Map<string, number>;
+  isRepAllowed?: boolean;
+  isCashvanAllowed?: boolean;
 }
 
 const DAYS = [
@@ -56,7 +59,9 @@ export default function MarketDailyScheduleCard({
   onSelectForCashvan,
   onSelectForDebtPay,
   onOpenMarketActions,
-  marketDebtMap
+  marketDebtMap,
+  isRepAllowed,
+  isCashvanAllowed
 }: MarketDailyScheduleCardProps) {
   const [repDocId, setRepDocId] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<Record<string, string[]>>({});
@@ -76,6 +81,14 @@ export default function MarketDailyScheduleCard({
   const sessionRepId = storedSession?.repId || storedSession?.id || sessionStorage.getItem('active_rep_id') || '';
   const sessionRepName = storedSession?.name || storedSession?.username || sessionStorage.getItem('active_rep_name') || '';
   const effectiveName = activeRepName || activeCashvanName || sessionRepName || '';
+
+  const rawUserType = storedSession?.userType;
+  const userType: 'both' | 'rep' | 'cashvan' = rawUserType 
+    ? rawUserType 
+    : (storedSession ? (storedSession.isRep && storedSession.isCashvan ? 'both' : (storedSession.isCashvan ? 'cashvan' : 'rep')) : 'both');
+  
+  const effectiveIsRep = isRepAllowed !== undefined ? isRepAllowed : (role === 'admin' || role === 'warehouse' || userType === 'both' || userType === 'rep');
+  const effectiveIsCashvan = isCashvanAllowed !== undefined ? isCashvanAllowed : (role === 'admin' || role === 'warehouse' || userType === 'both' || userType === 'cashvan');
 
   // Calculate week days with dates for header pills (like the screenshot)
   const weekDays = useMemo(() => {
@@ -560,24 +573,46 @@ export default function MarketDailyScheduleCard({
               {/* Option 1: تەڵەبیە */}
               <button
                 onClick={() => {
+                  if (!effectiveIsRep) {
+                    alert('بەشی تەڵەبیە قوفڵکراوە!\nهەژماری تۆ تەنها وەک «کاشڤان» دیاریکراوە و بەشی مەندووب (تەڵەبیە) قوفڵە.\nبۆ کاراکردنی ئەم بەشە داوا لە بەڕێوەبەر بکە لە لیستی مەندووب و کاشڤانەکان هەژمارەکەت بکاتە «مەندووب و کاشڤان».');
+                    return;
+                  }
                   const m = actionMarket.market;
                   setActionMarket(null);
                   onSelectForOrder(m);
                 }}
-                className="w-full p-2.5 bg-indigo-50/70 hover:bg-indigo-100 text-slate-900 rounded-xl flex items-center gap-2.5 transition border border-indigo-100 text-right active:scale-98"
+                className={`w-full p-2.5 rounded-xl flex items-center gap-2.5 transition text-right ${
+                  !effectiveIsRep
+                    ? 'bg-slate-50 border border-dashed border-red-200 opacity-60 cursor-not-allowed'
+                    : 'bg-indigo-50/70 hover:bg-indigo-100 text-slate-900 border border-indigo-100 active:scale-98'
+                }`}
               >
-                <div className="p-2 bg-indigo-600 text-white rounded-lg shadow-xs shrink-0">
-                  <ShoppingCart size={16} />
+                <div className={`p-2 rounded-lg shadow-xs shrink-0 ${!effectiveIsRep ? 'bg-slate-200 text-slate-500' : 'bg-indigo-600 text-white'}`}>
+                  {!effectiveIsRep ? <Lock size={16} className="text-red-500" /> : <ShoppingCart size={16} />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-indigo-950">١. تەڵەبیە</div>
-                  <div className="text-[11px] text-slate-500 truncate">تۆمارکردنی داواکاری کاڵاکانی کۆگا</div>
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs sm:text-sm text-indigo-950">١. تەڵەبیە</div>
+                    {!effectiveIsRep && (
+                      <span className="text-[10px] font-bold text-red-600 bg-red-100 px-1.5 py-0.5 rounded flex items-center gap-1">
+                        <Lock size={10} />
+                        قوفڵە
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate">
+                    {!effectiveIsRep ? 'تەنها بۆ مەندووبە و بۆ تۆ قوفڵکراوە' : 'تۆمارکردنی داواکاری کاڵاکانی کۆگا'}
+                  </div>
                 </div>
               </button>
 
               {/* Option 2: کاشڤان */}
               <button
                 onClick={() => {
+                  if (!effectiveIsCashvan) {
+                    alert('بەشی فرۆشتنی کاشڤان قوفڵکراوە!\nهەژماری تۆ تەنها وەک «مەندووب» دیاریکراوە و بەشی کاشڤان قوفڵە.\nبۆ کاراکردنی ئەم بەشە داوا لە بەڕێوەبەر بکە لە لیستی مەندووب و کاشڤانەکان هەژمارەکەت بکاتە «مەندووب و کاشڤان».');
+                    return;
+                  }
                   const m = actionMarket.market;
                   setActionMarket(null);
                   if (onSelectForCashvan) {
@@ -586,14 +621,28 @@ export default function MarketDailyScheduleCard({
                     onSelectForOrder(m);
                   }
                 }}
-                className="w-full p-2.5 bg-amber-50/70 hover:bg-amber-100 text-slate-900 rounded-xl flex items-center gap-2.5 transition border border-amber-100 text-right active:scale-98"
+                className={`w-full p-2.5 rounded-xl flex items-center gap-2.5 transition text-right ${
+                  !effectiveIsCashvan
+                    ? 'bg-slate-50 border border-dashed border-red-200 opacity-60 cursor-not-allowed'
+                    : 'bg-amber-50/70 hover:bg-amber-100 text-slate-900 border border-amber-100 active:scale-98'
+                }`}
               >
-                <div className="p-2 bg-amber-600 text-white rounded-lg shadow-xs shrink-0">
-                  <Truck size={16} />
+                <div className={`p-2 rounded-lg shadow-xs shrink-0 ${!effectiveIsCashvan ? 'bg-slate-200 text-slate-500' : 'bg-amber-600 text-white'}`}>
+                  {!effectiveIsCashvan ? <Lock size={16} className="text-red-500" /> : <Truck size={16} />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-amber-950">٢. کاشڤان</div>
-                  <div className="text-[11px] text-slate-500 truncate">فرۆشتن لە کاڵاکانی ناو ڤان</div>
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs sm:text-sm text-amber-950">٢. کاشڤان</div>
+                    {!effectiveIsCashvan && (
+                      <span className="text-[10px] font-bold text-red-600 bg-red-100 px-1.5 py-0.5 rounded flex items-center gap-1">
+                        <Lock size={10} />
+                        قوفڵە
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate">
+                    {!effectiveIsCashvan ? 'تەنها بۆ کاشڤانە و بۆ تۆ قوفڵکراوە' : 'فرۆشتن لە کاڵاکانی ناو ڤان'}
+                  </div>
                 </div>
               </button>
 

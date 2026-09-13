@@ -315,8 +315,8 @@ export default function MarketsView() {
           <div class="amount" dir="ltr">${amount.toLocaleString()} د.ع</div>
 
           <div style="display: flex; justify-content: space-between; margin-top: 40px;">
-            <div style="text-align: center;">واژووی پێدەر<div style="margin-top: 30px; border-top: 1px solid #333; width: 120px;"></div></div>
-            <div style="text-align: center;">واژووی وەرگر<div style="margin-top: 30px; border-top: 1px solid #333; width: 120px;"></div></div>
+            <div style="text-align: center;">واژووی مەندووب / کاشڤان<div style="margin-top: 30px; border-top: 1px solid #333; width: 120px;"></div></div>
+            <div style="text-align: center;">واژووی مارکێت<div style="margin-top: 30px; border-top: 1px solid #333; width: 120px;"></div></div>
           </div>
           <script>window.onload = () => window.print();</script>
         </body>

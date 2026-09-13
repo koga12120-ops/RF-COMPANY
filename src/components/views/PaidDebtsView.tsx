@@ -221,11 +221,11 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
           
           <div style="display: flex; justify-content: space-between; margin-top: 50px;">
             <div style="text-align: center;">
-              <div>واژووی پێدەر</div>
+              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی نوێنەر / کاشڤان'}</div>
               <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
-              <div>واژووی وەرگر</div>
+              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
               <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
             </div>
           </div>

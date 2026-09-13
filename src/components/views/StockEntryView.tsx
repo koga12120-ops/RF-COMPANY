@@ -128,6 +128,7 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
       wholesalePrice: cWholesale || pWholesale || 0,
       
       cartonQuantity: hasCarton ? cTotal : 0,
+      cartonPurchasedQuantity: hasCarton ? cPurchased : 0,
       cartonBonusQuantity: cBonus,
       cartonPurchaseCost: cCost,
       cartonCostPrice: cCost,
@@ -135,6 +136,7 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
       cartonWholesalePrice: cWholesale,
 
       packetQuantity: hasPacket ? pTotal : 0,
+      packetPurchasedQuantity: hasPacket ? pPurchased : 0,
       packetBonusQuantity: pBonus,
       packetPurchaseCost: pCost,
       packetCostPrice: pCost,
@@ -315,7 +317,7 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
               />
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-600 mb-1">کۆمپانیا / سەرچاوە</label>
+              <label className="block text-xs font-bold text-slate-600 mb-1">کۆمپانیا</label>
               <input
                 type="text"
                 list="entry-companies-list"

@@ -562,7 +562,7 @@ export default function WarehouseOrdersView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی تەڵەبیە - ${order.marketName}</title>
+          <title></title>
           <style>
             @page { size: A4; margin: 15mm; }
             body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
@@ -636,8 +636,8 @@ export default function WarehouseOrdersView() {
               <div class="sig-line">ناو و واژۆ</div>
             </div>
             <div>
-              <div>واژۆی مەندووب / وەرگر</div>
-              <div class="sig-line">${order.repName || 'مەندووب'}</div>
+              <div>واژووی مارکێت</div>
+              <div class="sig-line">واژوو یان مۆری مارکێت</div>
             </div>
           </div>
 
@@ -781,7 +781,7 @@ export default function WarehouseOrdersView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی تەڵەبیەی کاشڤان - ${req.cashvanName}</title>
+          <title></title>
           <style>
             @page { size: A4; margin: 15mm; }
             body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
@@ -926,7 +926,7 @@ export default function WarehouseOrdersView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی بارکردنی کاڵا بۆ کاشڤان - ${transfer.cashvanName}</title>
+          <title></title>
           <style>
             @page { size: A4; margin: 15mm; }
             body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }

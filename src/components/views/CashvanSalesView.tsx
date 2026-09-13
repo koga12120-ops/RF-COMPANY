@@ -345,7 +345,7 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی گەڕاندنەوەی کاڵا بۆ کۆگا - ${ret.cashvanName}</title>
+          <title></title>
           <style>
             @page { size: A4; margin: 15mm; }
             body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }

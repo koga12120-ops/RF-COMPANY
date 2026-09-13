@@ -62,11 +62,23 @@ export default function App() {
             handleLogout('کۆدی چوونەژوورەوە لەلایەن بەڕێوەبەرەوە نوێکراوەتەوە. تکایە بە کۆدە نوێیەکەت بچۆ ژوورەوە.');
             return;
           }
+
+          // Live sync role changes (rep / cashvan / both)
+          const uType = repData.userType 
+            ? repData.userType 
+            : ((repData.isCashvan === true && repData.isRep !== false) ? 'both' : (repData.isCashvan === true ? 'cashvan' : 'rep'));
+          const isRepVal = uType === 'both' || uType === 'rep';
+          const isCashvanVal = uType === 'both' || uType === 'cashvan';
+          if (session.userType !== uType || session.isRep !== isRepVal || session.isCashvan !== isCashvanVal) {
+            const updated: UserSession = { ...session, userType: uType, isRep: isRepVal, isCashvan: isCashvanVal };
+            setSession(updated);
+            saveUserSession(updated);
+          }
         }
       }, (err) => {
         console.error("Error listening to rep status:", err);
       });
-    } else if (session.role === 'cashvan' && session.id) {
+    } else if ((session.role === 'cashvan' || session.role === 'sales_rep') && session.id) {
       unsubDoc = onSnapshot(doc(db, 'cashvans', session.id), (docSnap) => {
         if (docSnap.exists()) {
           const cvData = docSnap.data();
@@ -77,6 +89,16 @@ export default function App() {
           if (cvData.forceReauth) {
             handleLogout('تێپەڕەوشە لەلایەن بەڕێوەبەرەوە نوێکراوەتەوە. تکایە دووبارە بچۆ ژوورەوە.');
             return;
+          }
+          const uType = cvData.userType 
+            ? cvData.userType 
+            : ((cvData.isRep === true && cvData.isCashvan !== false) ? 'both' : (cvData.isRep === true ? 'rep' : 'cashvan'));
+          const isRepVal = uType === 'both' || uType === 'rep';
+          const isCashvanVal = uType === 'both' || uType === 'cashvan';
+          if (session.userType !== uType || session.isRep !== isRepVal || session.isCashvan !== isCashvanVal) {
+            const updated: UserSession = { ...session, userType: uType, isRep: isRepVal, isCashvan: isCashvanVal };
+            setSession(updated);
+            saveUserSession(updated);
           }
         }
       }, (err) => {
@@ -126,5 +148,5 @@ export default function App() {
     );
   }
 
-  return <Dashboard role={role} onLogout={() => handleLogout()} />;
+  return <Dashboard role={role} onLogout={() => handleLogout()} session={session} />;
 }

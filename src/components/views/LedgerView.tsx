@@ -526,6 +526,8 @@ export default function LedgerView() {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
+    const isCompany = d.entityType === 'company' || (d.type && d.type.includes('کۆمپانیا'));
+
     const html = `
       <html dir="rtl">
         <head>
@@ -582,11 +584,11 @@ export default function LedgerView() {
           
           <div style="display: flex; justify-content: space-between; margin-top: 50px;">
             <div style="text-align: center;">
-              <div>واژووی پێدەر</div>
+              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی پێدەر'}</div>
               <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
-              <div>واژووی وەرگر</div>
+              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
               <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
             </div>
           </div>

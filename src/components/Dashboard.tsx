@@ -47,13 +47,15 @@ import { db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import StockHistoryView from './views/StockHistoryView';
 import StockEntryView from './views/StockEntryView';
+import { UserSession, getStoredSession } from '../lib/authService';
 
 interface DashboardProps {
   role: Role;
   onLogout: () => void;
+  session?: UserSession | null;
 }
 
-export default function Dashboard({ role, onLogout }: DashboardProps) {
+export default function Dashboard({ role, onLogout, session }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<string>('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'sepia'>(() => {
@@ -154,7 +156,7 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
     { id: 'companies_group', label: 'کۆمپانیا و حیسابات', icon: Building2 },
     { id: 'markets_group', label: 'مارکێت و حیسابات', icon: Store },
     { id: 'ledger', label: 'دەفتەری حیسابات', icon: Calculator },
-    { id: 'reps', label: 'لیستی مەندووبەکان', icon: Users },
+    { id: 'reps', label: 'لیستی مەندووب و کاشڤانەکان', icon: Users },
   ];
 
   const warehouseMenu = [
@@ -167,10 +169,34 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
     { id: 'markets_group', label: 'مارکێت و حیسابات', icon: Store },
   ];
 
+  const currentSession = session || getStoredSession();
+  const rawUserType = currentSession?.userType;
+  const userType: 'both' | 'rep' | 'cashvan' = rawUserType 
+    ? rawUserType 
+    : (currentSession ? (currentSession.isRep && currentSession.isCashvan ? 'both' : (currentSession.isCashvan ? 'cashvan' : 'rep')) : 'both');
+  
+  const isRepAllowed = role === 'admin' || role === 'warehouse' || userType === 'both' || userType === 'rep';
+  const isCashvanAllowed = role === 'admin' || role === 'warehouse' || userType === 'both' || userType === 'cashvan';
+
   const repMenu = [
-    { id: 'rep_sales', label: 'فرۆشتن', icon: Store, desc: 'خشتەی هەفتانە و سەردانی مارکێتەکان' },
-    { id: 'rep_sales_info', label: 'زانیاری لەسەر فرۆشەکان', icon: FileText, desc: 'کۆی فرۆش بە کارتۆن و پارە' },
-    { id: 'rep_cashvan_preorder', label: 'تەڵەبیەی پێشوەختەی کاشڤان', icon: Send, desc: 'داواکاری لە کۆگای سەرەکی' },
+    { 
+      id: 'rep_sales', 
+      label: 'فرۆشتن', 
+      icon: Store, 
+      desc: userType === 'cashvan' ? 'خشتەی هەفتانە و فرۆشتنی کاشڤان' : (userType === 'rep' ? 'خشتەی هەفتانە و تەڵەبیەی مەندووب' : 'خشتەی هەفتانە، تەڵەبیە و کاشڤان')
+    },
+    { 
+      id: 'rep_sales_info', 
+      label: 'زانیاری لەسەر فرۆشەکان', 
+      icon: FileText, 
+      desc: 'کۆی فرۆش بە کارتۆن و پارە' 
+    },
+    { 
+      id: 'rep_cashvan_preorder', 
+      label: isCashvanAllowed ? 'تەڵەبیەی پێشوەختەی کاشڤان' : 'تەڵەبیەی پێشوەختەی کاشڤان (قوفڵە)', 
+      icon: isCashvanAllowed ? Send : Lock, 
+      desc: isCashvanAllowed ? 'داواکاری لە کۆگای سەرەکی' : 'تەنها بۆ کاشڤان (قوفڵکراوە)' 
+    },
   ];
 
   const menu = role === 'admin' ? adminMenu : role === 'warehouse' ? warehouseMenu : repMenu;
@@ -212,7 +238,31 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
       case 'rep_sales_info': return <OrdersView role={role} initialTab="info" onTabChange={(tab) => {
         if (tab === 'schedule') setActiveTab('rep_sales');
       }} />;
-      case 'rep_cashvan_preorder': return <CashvanSalesView onlyPreorder={true} />;
+      case 'rep_cashvan_preorder': 
+        if (!isCashvanAllowed) {
+          return (
+            <div className="max-w-md mx-auto my-12 p-8 bg-white rounded-3xl border-2 border-red-200 shadow-sm text-center space-y-4" dir="rtl">
+              <div className="w-14 h-14 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+                <Lock size={28} />
+              </div>
+              <h2 className="text-lg font-black text-slate-900">بەشی کاشڤان قوفڵکراوە</h2>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                هەژماری تۆ تەنها وەک <strong className="text-indigo-600">مەندووب</strong> دیاریکراوە. بەشی تەڵەبیەی پێشوەختەی کاشڤان لەلایەن بەڕێوەبەرەوە قوفڵکراوە.
+              </p>
+              <div className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200 text-right">
+                💡 گەر دەتەوێت بەشی کاشڤانت بۆ کارا بێت، پێویستە لە بەڕێوەبەرایەتی هەژمارەکەت بکرێتە <strong>«مەندووب و کاشڤان»</strong>.
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('rep_sales')}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition shadow-xs"
+              >
+                گەڕانەوە بۆ بەشی فرۆشتن
+              </button>
+            </div>
+          );
+        }
+        return <CashvanSalesView onlyPreorder={true} />;
       default: {
         if (isStaffRep) {
           return (
@@ -234,7 +284,11 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
                         فرۆشتن
                       </h3>
                       <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed">
-                        خشتەی هەفتانەی سەردان، فرۆشی کاشڤان و قەرز
+                        {userType === 'rep'
+                          ? 'خشتەی هەفتانە، تەڵەبیە و قەرز (کاشڤان قوفڵە)'
+                          : (userType === 'cashvan'
+                            ? 'خشتەی هەفتانە، فرۆشی کاشڤان و قەرز (مەندووب قوفڵە)'
+                            : 'خشتەی هەفتانەی سەردان، فرۆشی کاشڤان و قەرز')}
                       </p>
                     </div>
                   </div>
@@ -276,25 +330,51 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
                 {/* 3. تەڵەبیەی پێشوەختەی کاشڤان */}
                 <button
                   type="button"
-                  onClick={() => setActiveTab('rep_cashvan_preorder')}
-                  className="group bg-white hover:bg-amber-50/70 p-6 sm:p-8 rounded-3xl border-2 border-slate-200 hover:border-amber-500 shadow-sm hover:shadow-lg transition-all duration-200 flex flex-col justify-between items-stretch gap-5 active:scale-[0.98] text-right"
+                  onClick={() => {
+                    if (!isCashvanAllowed) {
+                      alert('بەشی کاشڤان قوفڵکراوە!\nهەژماری تۆ تەنها وەک «مەندووب» دیاریکراوە و بەشی کاشڤانت بۆ قوفڵە.\nبۆ کاراکردنی ئەم بەشە داوا لە بەڕێوەبەر بکە لە لیستی مەندووب و کاشڤانەکان هەژمارەکەت بگۆڕێت بۆ «مەندووب و کاشڤان».');
+                      return;
+                    }
+                    setActiveTab('rep_cashvan_preorder');
+                  }}
+                  className={`group p-6 sm:p-8 rounded-3xl border-2 transition-all duration-200 flex flex-col justify-between items-stretch gap-5 text-right relative overflow-hidden ${
+                    !isCashvanAllowed
+                      ? 'bg-slate-50/90 border-dashed border-red-300 opacity-75 cursor-not-allowed'
+                      : 'bg-white hover:bg-amber-50/70 border-slate-200 hover:border-amber-500 shadow-sm hover:shadow-lg active:scale-[0.98]'
+                  }`}
                 >
+                  {!isCashvanAllowed && (
+                    <div className="absolute top-4 left-4 bg-red-100 text-red-700 px-2.5 py-1 rounded-full text-[11px] font-bold flex items-center gap-1 border border-red-200 shadow-2xs">
+                      <Lock size={12} />
+                      <span>قوفڵکراوە</span>
+                    </div>
+                  )}
                   <div className="flex flex-col items-start gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-amber-600 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
-                      <Send size={30} />
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-md transition-transform ${
+                      !isCashvanAllowed ? 'bg-slate-300 text-slate-600' : 'bg-amber-600 text-white group-hover:scale-110'
+                    }`}>
+                      {!isCashvanAllowed ? <Lock size={28} className="text-red-500" /> : <Send size={30} />}
                     </div>
                     <div>
-                      <h3 className="text-lg sm:text-xl font-black text-slate-900 group-hover:text-amber-600 transition-colors">
+                      <h3 className={`text-lg sm:text-xl font-black transition-colors ${
+                        !isCashvanAllowed ? 'text-slate-500' : 'text-slate-900 group-hover:text-amber-600'
+                      }`}>
                         تەڵەبیەی پێشوەختەی کاشڤان
                       </h3>
                       <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed">
-                        داواکردنی پێشوەختەی کاڵا لە کۆگای سەرەکی
+                        {!isCashvanAllowed
+                          ? 'تەنها بۆ کاشڤانە، بۆ هەژماری مەندووب قوفڵکراوە'
+                          : 'داواکردنی پێشوەختەی کاڵا لە کۆگای سەرەکی'}
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between pt-4 border-t border-slate-100 text-amber-600 font-bold text-xs sm:text-sm">
-                    <span>داواکردن بۆ ناو ڤان</span>
-                    <div className="p-2 bg-amber-50 rounded-xl group-hover:bg-amber-600 group-hover:text-white transition">
+                  <div className={`flex items-center justify-between pt-4 border-t border-slate-100 font-bold text-xs sm:text-sm ${
+                    !isCashvanAllowed ? 'text-slate-400' : 'text-amber-600'
+                  }`}>
+                    <span>{!isCashvanAllowed ? 'ئەم بەشە قوفڵە' : 'داواکردن بۆ ناو ڤان'}</span>
+                    <div className={`p-2 rounded-xl transition ${
+                      !isCashvanAllowed ? 'bg-slate-100 text-slate-400' : 'bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white'
+                    }`}>
                       <ChevronLeft size={18} className="group-hover:-translate-x-0.5 transition-transform" />
                     </div>
                   </div>
@@ -454,8 +534,16 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
               </div>
               <div>
                 <h1 className="text-sm font-black text-slate-800 leading-tight">کۆمپانیای RF</h1>
-                <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
-                  بەشی مەندووب
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                  userType === 'both' 
+                    ? 'text-indigo-700 bg-indigo-50 border border-indigo-200' 
+                    : userType === 'cashvan' 
+                    ? 'text-amber-800 bg-amber-50 border border-amber-200' 
+                    : 'text-indigo-800 bg-indigo-50 border border-indigo-200'
+                }`}>
+                  {userType === 'both' && 'مەندووب و کاشڤان'}
+                  {userType === 'cashvan' && 'کاشڤان (مەندووب قوفڵە)'}
+                  {userType === 'rep' && 'مەندووب (کاشڤان قوفڵە)'}
                 </span>
               </div>
             </div>
@@ -548,6 +636,10 @@ export default function Dashboard({ role, onLogout }: DashboardProps) {
                   <button
                     key={item.id}
                     onClick={() => {
+                      if (item.id === 'rep_cashvan_preorder' && !isCashvanAllowed) {
+                        alert('بەشی کاشڤان قوفڵکراوە!\nهەژماری تۆ تەنها وەک «مەندووب» دیاریکراوە و بەشی کاشڤانت بۆ قوفڵە.');
+                        return;
+                      }
                       setActiveTab(item.id);
                       setIsMobileMenuOpen(false);
                     }}

@@ -24,7 +24,8 @@ import {
   User,
   Power,
   Eye,
-  EyeOff
+  EyeOff,
+  RotateCcw
 } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
 import { renameRepOrCashvan, syncAllRepsAndCashvans } from '../../lib/syncHelper';
@@ -33,17 +34,19 @@ export default function RepsView() {
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'disabled' | 'deleted'>('active');
 
   // Delete modal
   const [deletingItem, setDeletingItem] = useState<{ id: string; name: string; phone?: string; accessCode?: string; totalSales?: number; uid?: string } | null>(null);
 
   // Edit Rep Info modal
-  const [editingItem, setEditingItem] = useState<{ id: string; name: string; username?: string; phone?: string; accessCode?: string; password?: string; status?: string } | null>(null);
+  const [editingItem, setEditingItem] = useState<{ id: string; name: string; username?: string; phone?: string; accessCode?: string; password?: string; status?: string; userType?: 'both' | 'rep' | 'cashvan'; isRep?: boolean; isCashvan?: boolean } | null>(null);
   const [editName, setEditName] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editPassword, setEditPassword] = useState('');
   const [editStatus, setEditStatus] = useState<'active' | 'disabled'>('active');
+  const [editUserType, setEditUserType] = useState<'both' | 'rep' | 'cashvan'>('both');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Add New Modal
@@ -52,6 +55,7 @@ export default function RepsView() {
   const [newUsername, setNewUsername] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [newUserType, setNewUserType] = useState<'both' | 'rep' | 'cashvan'>('both');
   const [isSavingNew, setIsSavingNew] = useState(false);
 
   // Manage Credentials Modal
@@ -78,7 +82,17 @@ export default function RepsView() {
       repsRaw.forEach(r => {
         const name = (r.name || '').trim();
         if (!name) return;
-        map.set(name.toLowerCase(), { ...r });
+        const isDel = !!r.isDeleted || r.status === 'deleted';
+        map.set(name.toLowerCase(), { 
+          ...r,
+          isRep: true,
+          isCashvan: false,
+          userType: (r as any).userType || 'rep',
+          repSales: r.totalSales || 0,
+          cashvanSales: 0,
+          isDeleted: isDel,
+          status: isDel ? 'deleted' : (r.status === 'disabled' ? 'disabled' : 'active'),
+        } as any);
       });
 
       cashvansRaw.forEach(c => {
@@ -86,13 +100,22 @@ export default function RepsView() {
         if (!name) return;
         const key = name.toLowerCase();
         const existing = map.get(key);
+        const isDel = !!c.isDeleted || c.status === 'deleted';
         if (existing) {
+          existing.isCashvan = true;
+          existing.userType = (existing as any).userType === 'rep' ? 'both' : (existing as any).userType || 'both';
+          (existing as any).cashvanSales = c.totalSales || 0;
           if (!existing.phone && c.phone) existing.phone = c.phone;
           if (!existing.accessCode && (c.accessCode || c.password)) {
             existing.accessCode = c.accessCode || c.password;
             existing.password = c.password || c.accessCode;
           }
-          if (c.status === 'disabled') existing.status = 'disabled';
+          if (isDel && (existing as any).isDeleted) {
+            existing.status = 'deleted';
+            (existing as any).isDeleted = true;
+          } else if (c.status === 'disabled' && existing.status !== 'deleted') {
+            existing.status = 'disabled';
+          }
         } else {
           map.set(key, {
             id: c.id,
@@ -101,11 +124,17 @@ export default function RepsView() {
             phone: c.phone || '',
             accessCode: c.accessCode || c.password || '',
             password: c.password || c.accessCode || '',
-            status: c.status === 'disabled' ? 'disabled' : 'active',
+            status: isDel ? 'deleted' : (c.status === 'disabled' ? 'disabled' : 'active'),
+            isDeleted: isDel,
             createdAt: c.createdAt || Date.now(),
-            totalSales: 0,
-            totalProfit: 0
-          });
+            totalSales: c.totalSales || 0,
+            totalProfit: c.totalProfit || 0,
+            isRep: false,
+            isCashvan: true,
+            userType: (c as any).userType || 'cashvan',
+            repSales: 0,
+            cashvanSales: c.totalSales || 0,
+          } as any);
         }
       });
 
@@ -219,12 +248,13 @@ export default function RepsView() {
   };
 
   const handleEditInfo = (item: SalesRep) => {
-    setEditingItem(item);
+    setEditingItem(item as any);
     setEditName(item.name || '');
     setEditUsername(item.username || item.name || '');
     setEditPhone(item.phone || '');
     setEditPassword(item.accessCode || item.password || '');
     setEditStatus((item.status as any) || 'active');
+    setEditUserType(item.userType || ((item.isRep && item.isCashvan) ? 'both' : (item.isCashvan ? 'cashvan' : 'rep')));
   };
 
   const handleSaveInfo = async (e: React.FormEvent) => {
@@ -238,49 +268,82 @@ export default function RepsView() {
       const newUsernameTrimmed = editUsername.trim() || newNameTrimmed;
       const newPhoneTrimmed = editPhone.trim();
       const newPasswordTrimmed = editPassword.trim();
+      const isRep = editUserType === 'both' || editUserType === 'rep';
+      const isCashvan = editUserType === 'both' || editUserType === 'cashvan';
 
       // 1. Sync name globally across all system records if name was modified
       if (oldName !== newNameTrimmed) {
-        await renameRepOrCashvan(oldName, newNameTrimmed, { isRep: true, entityId: editingItem.id, phone: newPhoneTrimmed });
+        await renameRepOrCashvan(oldName, newNameTrimmed, { isRep, isCashvan, entityId: editingItem.id, phone: newPhoneTrimmed });
       }
 
-      // 2. Update rep doc
       const updateData: any = {
         name: newNameTrimmed,
         username: newUsernameTrimmed,
         phone: newPhoneTrimmed,
         status: editStatus,
+        userType: editUserType,
+        isRep,
+        isCashvan,
       };
       if (newPasswordTrimmed) {
         updateData.accessCode = newPasswordTrimmed;
         updateData.password = newPasswordTrimmed;
       }
 
-      await setDoc(doc(db, 'reps', editingItem.id), updateData, { merge: true });
+      // 2. Handle reps collection
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', 'in', [oldName, newNameTrimmed])));
+      if (isRep) {
+        if (!repSnap.empty) {
+          for (const d of repSnap.docs) {
+            await setDoc(doc(db, 'reps', d.id), updateData, { merge: true });
+          }
+        } else {
+          await addDoc(collection(db, 'reps'), {
+            ...updateData,
+            totalSales: 0,
+            totalProfit: 0,
+            createdAt: Date.now()
+          });
+        }
+      } else {
+        for (const d of repSnap.docs) {
+          await setDoc(doc(db, 'reps', d.id), { isRep: false, userType: editUserType }, { merge: true });
+        }
+      }
 
-      // 3. Update user doc if exists
+      // 3. Handle cashvans collection
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', 'in', [oldName, newNameTrimmed])));
+      if (isCashvan) {
+        if (!cvSnap.empty) {
+          for (const d of cvSnap.docs) {
+            await setDoc(doc(db, 'cashvans', d.id), updateData, { merge: true });
+          }
+        } else {
+          await addDoc(collection(db, 'cashvans'), {
+            ...updateData,
+            createdAt: Date.now()
+          });
+        }
+      } else {
+        for (const d of cvSnap.docs) {
+          await setDoc(doc(db, 'cashvans', d.id), { isCashvan: false, userType: editUserType }, { merge: true });
+        }
+      }
+
+      // 4. Update user auth doc
       await setDoc(doc(db, 'users', editingItem.id), {
         name: newNameTrimmed,
         username: newUsernameTrimmed,
         phone: newPhoneTrimmed,
         status: editStatus,
+        userType: editUserType,
+        isRep,
+        isCashvan,
+        role: isRep ? 'sales_rep' : 'cashvan',
         accessCode: newPasswordTrimmed || editingItem.accessCode || '',
       }, { merge: true });
 
-      // 4. Update cashvans collection
-      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', 'in', [oldName, newNameTrimmed])));
-      if (!cvSnap.empty) {
-        for (const d of cvSnap.docs) {
-          await setDoc(doc(db, 'cashvans', d.id), updateData, { merge: true });
-        }
-      } else {
-        await addDoc(collection(db, 'cashvans'), {
-          ...updateData,
-          createdAt: Date.now()
-        });
-      }
-
-      showToast(`زانیارییەکانی بەکارهێنەر (${newNameTrimmed}) بۆ مەندووب و کاشڤان لە سەرانسەری سیستەمدا نوێکرایەوە.`);
+      showToast(`زانیارییەکانی (${newNameTrimmed}) نوێکرایەوە.`);
       setEditingItem(null);
     } catch (error) {
       console.error(error);
@@ -329,62 +392,86 @@ export default function RepsView() {
       const trimmedU = newUsername.trim() || trimmedN;
       const trimmedP = newPhone.trim();
       const trimmedPass = newPassword.trim() || Math.floor(10000 + Math.random() * 90000).toString();
+      const isRep = newUserType === 'both' || newUserType === 'rep';
+      const isCashvan = newUserType === 'both' || newUserType === 'cashvan';
 
-      // Create in collection
-      const docRef = await addDoc(collection(db, 'reps'), {
-        name: trimmedN,
-        username: trimmedU,
-        phone: trimmedP,
-        accessCode: trimmedPass,
-        password: trimmedPass,
-        status: 'active',
-        totalSales: 0,
-        totalProfit: 0,
-        createdAt: Date.now()
-      });
+      let docRefId = '';
 
-      // Create in users collection for authentication
-      await setDoc(doc(db, 'users', docRef.id), {
-        role: 'sales_rep',
-        username: trimmedU,
-        accessCode: trimmedPass,
-        status: 'active',
-        name: trimmedN,
-        phone: trimmedP,
-        repId: docRef.id,
-        isDeleted: false
-      }, { merge: true });
-
-      // Also create in cashvans collection so the person is both rep and cashvan
-      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', trimmedN)));
-      if (cvSnap.empty) {
-        await addDoc(collection(db, 'cashvans'), {
+      // 1. If rep, create in reps collection
+      if (isRep) {
+        const docRef = await addDoc(collection(db, 'reps'), {
           name: trimmedN,
           username: trimmedU,
+          phone: trimmedP,
           accessCode: trimmedPass,
           password: trimmedPass,
-          phone: trimmedP,
           status: 'active',
+          userType: newUserType,
+          isRep: true,
+          isCashvan,
+          totalSales: 0,
+          totalProfit: 0,
           createdAt: Date.now()
         });
-      } else {
-        for (const d of cvSnap.docs) {
-          await setDoc(doc(db, 'cashvans', d.id), {
+        docRefId = docRef.id;
+      }
+
+      // 2. If cashvan, create in cashvans collection
+      if (isCashvan) {
+        const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', trimmedN)));
+        if (cvSnap.empty) {
+          const cvRef = await addDoc(collection(db, 'cashvans'), {
+            name: trimmedN,
             username: trimmedU,
             accessCode: trimmedPass,
             password: trimmedPass,
             phone: trimmedP,
-            status: 'active'
-          }, { merge: true });
+            status: 'active',
+            userType: newUserType,
+            isRep,
+            isCashvan: true,
+            createdAt: Date.now()
+          });
+          if (!docRefId) docRefId = cvRef.id;
+        } else {
+          for (const d of cvSnap.docs) {
+            await setDoc(doc(db, 'cashvans', d.id), {
+              username: trimmedU,
+              accessCode: trimmedPass,
+              password: trimmedPass,
+              phone: trimmedP,
+              status: 'active',
+              userType: newUserType,
+              isRep,
+              isCashvan: true
+            }, { merge: true });
+          }
         }
       }
 
-      showToast(`بەکارهێنەر (${trimmedN}) وەک مەندووب و کاشڤان بە یوزەری [${trimmedU}] و تێپەڕەوشەی [${trimmedPass}] دروستکرا.`);
+      // 3. Create in users collection for authentication
+      await setDoc(doc(db, 'users', docRefId || trimmedU), {
+        role: isRep ? 'sales_rep' : 'cashvan',
+        username: trimmedU,
+        accessCode: trimmedPass,
+        status: 'active',
+        name: trimmedN,
+        phone: trimmedP,
+        userType: newUserType,
+        isRep,
+        isCashvan,
+        repId: docRefId,
+        isDeleted: false
+      }, { merge: true });
+
+      const roleLabel = newUserType === 'both' ? 'مەندووب و کاشڤان' : (newUserType === 'rep' ? 'مەندووب' : 'کاشڤان');
+      showToast(`بەکارهێنەر (${trimmedN}) وەک ${roleLabel} دروستکرا: یوزەر [${trimmedU}] و تێپەڕەوشەی [${trimmedPass}].`);
       setShowAddModal(false);
       setNewName('');
       setNewUsername('');
       setNewPhone('');
       setNewPassword('');
+      setNewUserType('both');
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە کاتی زیادکردن');
@@ -396,27 +483,79 @@ export default function RepsView() {
   const confirmDelete = async () => {
     if (!deletingItem) return;
     try {
-      // 1. Remove from collection
-      await deleteDoc(doc(db, 'reps', deletingItem.id));
-
-      // 2. Disable user access
-      await setDoc(doc(db, 'users', deletingItem.id), {
-        role: null,
-        status: 'banned',
-        isDeleted: true
-      }, { merge: true });
-
-      // 3. Remove from cashvans
-      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', deletingItem.name)));
-      for (const d of cvSnap.docs) {
-        await deleteDoc(doc(db, 'cashvans', d.id));
+      const now = Date.now();
+      // 1. Soft delete in reps collection
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', deletingItem.name)));
+      for (const d of repSnap.docs) {
+        await setDoc(doc(db, 'reps', d.id), {
+          isDeleted: true,
+          status: 'deleted',
+          deletedAt: now,
+          forceReauth: true
+        }, { merge: true });
       }
 
-      showToast(`بەکارهێنەر (${deletingItem.name}) سڕدرایەوە.`);
+      // 2. Disable user access in users
+      await setDoc(doc(db, 'users', deletingItem.id), {
+        status: 'banned',
+        isDeleted: true,
+        deletedAt: now,
+        forceReauth: true
+      }, { merge: true });
+
+      // 3. Soft delete in cashvans
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', deletingItem.name)));
+      for (const d of cvSnap.docs) {
+        await setDoc(doc(db, 'cashvans', d.id), {
+          isDeleted: true,
+          status: 'deleted',
+          deletedAt: now,
+          forceReauth: true
+        }, { merge: true });
+      }
+
+      showToast(`هەژماری (${deletingItem.name}) سڕدرایەوە و دەستڕاگەیشتنی داخرا. حیسابات و مامەڵەکانی بەتەواوی پارێزراون.`);
       setDeletingItem(null);
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە');
+    }
+  };
+
+  const handleRestoreUser = async (item: SalesRep) => {
+    try {
+      // 1. Restore reps
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', item.name)));
+      for (const d of repSnap.docs) {
+        await setDoc(doc(db, 'reps', d.id), {
+          isDeleted: false,
+          status: 'active',
+          forceReauth: false
+        }, { merge: true });
+      }
+
+      // 2. Restore cashvans
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', item.name)));
+      for (const d of cvSnap.docs) {
+        await setDoc(doc(db, 'cashvans', d.id), {
+          isDeleted: false,
+          status: 'active',
+          forceReauth: false
+        }, { merge: true });
+      }
+
+      // 3. Restore user
+      await setDoc(doc(db, 'users', item.id), {
+        status: 'active',
+        isDeleted: false,
+        role: item.isRep ? 'sales_rep' : 'cashvan',
+        forceReauth: false
+      }, { merge: true });
+
+      showToast(`هەژماری (${item.name}) بە سەرکەوتوویی گەڕێندرایەوە بۆ دۆخی چالاک.`);
+    } catch (error) {
+      console.error(error);
+      alert('هەڵەیەک ڕوویدا لە کاتی گەڕاندنەوەی بەکارهێنەر');
     }
   };
 
@@ -428,14 +567,24 @@ export default function RepsView() {
     showToast('زانیارییەکانی یوزەر و تێپەڕەوشە کۆپیکرا.');
   };
 
+  const activeCount = reps.filter(r => !r.isDeleted && r.status !== 'disabled' && r.status !== 'deleted').length;
+  const disabledCount = reps.filter(r => !r.isDeleted && r.status === 'disabled').length;
+  const deletedCount = reps.filter(r => r.isDeleted || r.status === 'deleted').length;
+
   const filteredList = reps.filter(item => {
+    const isDel = !!item.isDeleted || item.status === 'deleted';
+    const isDis = !isDel && item.status === 'disabled';
+    const isAct = !isDel && !isDis;
+
+    if (statusFilter === 'active' && !isAct) return false;
+    if (statusFilter === 'disabled' && !isDis) return false;
+    if (statusFilter === 'deleted' && !isDel) return false;
+
     const nameMatch = (item.name || '').toLowerCase().includes(searchTerm.toLowerCase());
     const userMatch = (item.username || '').toLowerCase().includes(searchTerm.toLowerCase());
     const phoneMatch = (item.phone || '').includes(searchTerm);
     return nameMatch || userMatch || phoneMatch;
   });
-
-  const activeRepsCount = reps.filter(r => r.status !== 'disabled').length;
 
   return (
     <div className="space-y-6" dir="rtl">
@@ -448,13 +597,13 @@ export default function RepsView() {
       )}
 
       {/* Header Info Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
             <Users size={24} />
           </div>
           <div>
-            <div className="text-xs text-slate-500 font-bold">کۆی مەندووبەکان</div>
+            <div className="text-xs text-slate-500 font-bold">کۆی کارمەندە تۆمارکراوەکان</div>
             <div className="text-2xl font-bold text-slate-800 font-mono mt-0.5">{reps.length}</div>
           </div>
         </div>
@@ -465,17 +614,27 @@ export default function RepsView() {
           </div>
           <div>
             <div className="text-xs text-slate-500 font-bold">هەژماری چالاک</div>
-            <div className="text-2xl font-bold text-emerald-600 font-mono mt-0.5">{activeRepsCount}</div>
+            <div className="text-2xl font-bold text-emerald-600 font-mono mt-0.5">{activeCount}</div>
           </div>
         </div>
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+            <AlertTriangle size={24} />
+          </div>
+          <div>
+            <div className="text-xs text-slate-500 font-bold">ڕاگیراوەکان</div>
+            <div className="text-2xl font-bold text-amber-600 font-mono mt-0.5">{disabledCount}</div>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-slate-100 text-slate-700 rounded-xl">
             <KeyRound size={24} />
           </div>
           <div>
-            <div className="text-xs text-slate-500 font-bold">سیستەمی چوونەژوورەوە</div>
-            <div className="text-xs font-bold text-amber-800 mt-1">یوزەرنەیم و تێپەڕەوشە</div>
+            <div className="text-xs text-slate-500 font-bold">سڕاوە (حسابات پارێزراو)</div>
+            <div className="text-2xl font-bold text-slate-700 font-mono mt-0.5">{deletedCount}</div>
           </div>
         </div>
       </div>
@@ -487,7 +646,7 @@ export default function RepsView() {
           <div className="flex items-center gap-2">
             <h2 className="font-bold text-slate-800 text-base flex items-center gap-2">
               <Users size={20} className="text-indigo-600" />
-              <span>بەڕێوەبردنی هەژماری مەندووبەکان ({reps.length})</span>
+              <span>بەڕێوەبردنی هەژماری مەندووب و کاشڤانەکان ({reps.length})</span>
             </h2>
           </div>
 
@@ -509,21 +668,65 @@ export default function RepsView() {
                 setNewUsername('');
                 setNewPhone('');
                 setNewPassword(Math.floor(10000 + Math.random() * 90000).toString());
+                setNewUserType('both');
                 setShowAddModal(true);
               }}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-sm"
             >
               <Plus size={16} />
-              <span>دروستکردنی هەژماری مەندووب</span>
+              <span>زیادکردنی مەندووب / کاشڤان</span>
             </button>
           </div>
+        </div>
+
+        {/* Status Filter Tabs */}
+        <div className="px-4 py-2.5 border-b border-slate-100 bg-white flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setStatusFilter('active')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              statusFilter === 'active' ? 'bg-emerald-600 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <CheckCircle2 size={13} />
+            <span>چالاکەکان ({activeCount})</span>
+          </button>
+
+          <button
+            onClick={() => setStatusFilter('disabled')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              statusFilter === 'disabled' ? 'bg-amber-600 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <AlertTriangle size={13} />
+            <span>ڕاگیراوەکان ({disabledCount})</span>
+          </button>
+
+          <button
+            onClick={() => setStatusFilter('deleted')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              statusFilter === 'deleted' ? 'bg-slate-800 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <ShieldCheck size={13} />
+            <span>سڕاوە (حسابات پارێزراو) ({deletedCount})</span>
+          </button>
+
+          <button
+            onClick={() => setStatusFilter('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              statusFilter === 'all' ? 'bg-indigo-600 text-white shadow-2xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <Users size={13} />
+            <span>سەرجەمیان ({reps.length})</span>
+          </button>
         </div>
 
         {/* Info Banner */}
         <div className="bg-indigo-50/70 border-b border-indigo-100 px-4 py-2.5 text-xs text-indigo-900 flex items-center gap-2">
           <ShieldCheck size={16} className="text-indigo-600 shrink-0" />
           <span>
-            <strong>تایبەتمەندی نوێ:</strong> مەندووبەکان ڕاستەوخۆ بە <strong>یوزەرنەیم و تێپەڕەوشەکەیان</strong> بەبێ پێویستی بە گۆگڵ دەچنە ژوورەوە. دەتوانیت لەم خشتەیەدا تێپەڕەوشەیان بگۆڕیت یان هەژمارەکەیان ڕابگریت.
+            <strong>سیستەمی پارێزراوی حیسابات:</strong> لە کاتی سڕینەوە یان ڕاگرتنی هەر مەندووب یان کاشڤانێک، تەواوی حسابات، فرۆش، وەسڵ و مامەڵەکانی بە پارێزراوی لە سیستمدا دەمێننەوە.
           </span>
         </div>
 
@@ -534,27 +737,56 @@ export default function RepsView() {
             <table className="w-full text-right">
               <thead className="bg-slate-50 text-slate-500 text-xs font-bold uppercase border-b border-slate-100">
                 <tr>
-                  <th className="px-5 py-3.5">ناوی مەندووب</th>
+                  <th className="px-5 py-3.5">ناوی کارمەند</th>
+                  <th className="px-5 py-3.5">ڕۆڵ لە سیستەم</th>
                   <th className="px-5 py-3.5">یوزەرنەیم (Username)</th>
                   <th className="px-5 py-3.5">تێپەڕەوشە / کۆد</th>
                   <th className="px-5 py-3.5">تەلەفۆن</th>
                   <th className="px-5 py-3.5">دۆخی هەژمار</th>
-                  <th className="px-5 py-3.5">کۆی فرۆش</th>
+                  <th className="px-5 py-3.5">حسابی فرۆشتن</th>
                   <th className="px-5 py-3.5 text-center">کردارەکان</th>
                 </tr>
               </thead>
               <tbody className="text-sm divide-y divide-slate-100">
                 {filteredList.map(item => {
                   const pass = item.accessCode || item.password || '43629';
-                  const isDisabled = item.status === 'disabled';
+                  const isDeleted = !!item.isDeleted || item.status === 'deleted';
+                  const isDisabled = !isDeleted && item.status === 'disabled';
+                  const isBoth = item.userType === 'both' || (item.isRep && item.isCashvan);
+                  const isCash = item.userType === 'cashvan' || (!item.isRep && item.isCashvan);
 
                   return (
-                    <tr key={item.id} className={`hover:bg-slate-50/80 transition ${isDisabled ? 'bg-red-50/30 opacity-70' : ''}`}>
+                    <tr key={item.id} className={`transition ${
+                      isDeleted 
+                        ? 'bg-slate-100/70 hover:bg-slate-100 text-slate-600' 
+                        : isDisabled 
+                          ? 'bg-red-50/30 hover:bg-red-50/50' 
+                          : 'hover:bg-slate-50/80'
+                    }`}>
                       <td className="px-5 py-4">
                         <div className="font-bold text-slate-900 flex items-center gap-2">
-                          <Users size={16} className={isDisabled ? 'text-slate-400' : 'text-indigo-600'} />
-                          <span>{item.name || 'مەندووبی بێ ناو'}</span>
+                          <Users size={16} className={isDeleted ? 'text-slate-400' : isDisabled ? 'text-amber-500' : 'text-indigo-600'} />
+                          <span className={isDeleted ? 'line-through text-slate-500' : ''}>{item.name || 'بێ ناو'}</span>
                         </div>
+                      </td>
+
+                      <td className="px-5 py-4">
+                        {isBoth ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 flex items-center gap-1.5 w-fit">
+                            <span>🔄</span>
+                            <span>مەندووب و کاشڤان</span>
+                          </span>
+                        ) : isCash ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1.5 w-fit">
+                            <span>🚚</span>
+                            <span>تەنها کاشڤان</span>
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1.5 w-fit">
+                            <span>👤</span>
+                            <span>تەنها مەندووب</span>
+                          </span>
+                        )}
                       </td>
 
                       <td className="px-5 py-4">
@@ -583,61 +815,112 @@ export default function RepsView() {
                       </td>
 
                       <td className="px-5 py-4">
-                        {isDisabled ? (
+                        {isDeleted ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-700 border border-slate-300 flex items-center gap-1.5 w-fit">
+                            <ShieldCheck size={13} className="text-indigo-600" />
+                            <span>سڕاوەتەوە (حسابات پارێزراوە)</span>
+                          </span>
+                        ) : isDisabled ? (
                           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700 flex items-center gap-1 w-fit">
                             <AlertTriangle size={12} />
-                            ڕاگیراوە
+                            <span>ڕاگیراوە</span>
                           </span>
                         ) : (
                           <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700 flex items-center gap-1 w-fit">
                             <CheckCircle2 size={12} />
-                            چالاکە
+                            <span>چالاکە</span>
                           </span>
                         )}
                       </td>
 
-                      <td className="px-5 py-4 text-slate-900 font-bold font-mono" dir="ltr">
-                        {(item.totalSales || 0).toLocaleString()} د.ع
+                      <td className="px-5 py-4 text-xs">
+                        {isBoth ? (
+                          <div className="flex flex-col gap-0.5 min-w-[130px]">
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-slate-500 text-[11px]">وەک مەندووب:</span>
+                              <strong className="font-mono text-indigo-700">{((item as any).repSales || item.totalSales || 0).toLocaleString()} د.ع</strong>
+                            </div>
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-slate-500 text-[11px]">وەک کاشڤان:</span>
+                              <strong className="font-mono text-amber-700">{((item as any).cashvanSales || 0).toLocaleString()} د.ع</strong>
+                            </div>
+                            <div className="flex justify-between items-center gap-2 pt-1 border-t border-slate-200 mt-0.5">
+                              <span className="text-slate-700 font-bold text-[11px]">کۆی گشتی:</span>
+                              <strong className="font-mono text-slate-900">{(((item as any).repSales || item.totalSales || 0) + ((item as any).cashvanSales || 0)).toLocaleString()} د.ع</strong>
+                            </div>
+                          </div>
+                        ) : isCash ? (
+                          <div className="font-bold font-mono text-amber-700" dir="ltr">
+                            {((item as any).cashvanSales || item.totalSales || 0).toLocaleString()} د.ع
+                          </div>
+                        ) : (
+                          <div className="font-bold font-mono text-indigo-700" dir="ltr">
+                            {((item as any).repSales || item.totalSales || 0).toLocaleString()} د.ع
+                          </div>
+                        )}
                       </td>
 
                       <td className="px-5 py-4 text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => handleOpenCodeModal(item)}
-                            className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg transition flex items-center gap-1"
-                            title="گۆڕینی تێپەڕەوشە"
-                          >
-                            <KeyRound size={14} />
-                            <span>گۆڕینی پاسوۆرد</span>
-                          </button>
+                          {isDeleted ? (
+                            <>
+                              <button
+                                onClick={() => handleRestoreUser(item)}
+                                className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs rounded-lg transition flex items-center gap-1.5 border border-emerald-200 shadow-2xs"
+                                title="گەڕاندنەوە بۆ دۆخی چالاک"
+                              >
+                                <RotateCcw size={14} />
+                                <span>گەڕاندنەوە بۆ چالاک</span>
+                              </button>
 
-                          <button
-                            onClick={() => handleToggleStatus(item)}
-                            className={`p-1.5 rounded-lg transition ${
-                              isDisabled
-                                ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
-                                : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                            }`}
-                            title={isDisabled ? 'چالاککردنەوە' : 'ڕاگرتن'}
-                          >
-                            <Power size={15} />
-                          </button>
+                              <button
+                                onClick={() => handleEditInfo(item)}
+                                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition"
+                                title="دەستکاری زانیاری"
+                              >
+                                <Edit2 size={15} />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleOpenCodeModal(item)}
+                                className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg transition flex items-center gap-1"
+                                title="گۆڕینی تێپەڕەوشە"
+                              >
+                                <KeyRound size={14} />
+                                <span>گۆڕینی پاسوۆرد</span>
+                              </button>
 
-                          <button
-                            onClick={() => handleEditInfo(item)}
-                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition"
-                            title="دەستکاری زانیاری"
-                          >
-                            <Edit2 size={15} />
-                          </button>
+                              <button
+                                onClick={() => handleToggleStatus(item)}
+                                className={`p-1.5 rounded-lg transition ${
+                                  isDisabled
+                                    ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                                    : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                }`}
+                                title={isDisabled ? 'چالاککردنەوە' : 'ڕاگرتن'}
+                              >
+                                <Power size={15} />
+                              </button>
 
-                          <button
-                            onClick={() => setDeletingItem({ ...item })}
-                            className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                            title="سڕینەوە"
-                          >
-                            <Trash2 size={15} />
-                          </button>
+                              <button
+                                onClick={() => handleEditInfo(item)}
+                                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition"
+                                title="دەستکاری زانیاری"
+                              >
+                                <Edit2 size={15} />
+                              </button>
+
+                              <button
+                                onClick={() => setDeletingItem({ ...item })}
+                                className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                                title="سڕینەوە"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -646,10 +929,10 @@ export default function RepsView() {
 
                 {filteredList.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="text-center py-12 text-slate-500">
+                    <td colSpan={8} className="text-center py-12 text-slate-500">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Users size={32} className="text-slate-300" />
-                        <p className="font-bold text-sm">هیچ مەندووبێک نەدۆزرایەوە</p>
+                        <p className="font-bold text-sm">هیچ کارمەندێک نەدۆزرایەوە</p>
                       </div>
                     </td>
                   </tr>
@@ -660,14 +943,14 @@ export default function RepsView() {
         )}
       </section>
 
-      {/* Add New Rep Modal */}
+      {/* Add New Rep/Cashvan Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50/80">
               <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
                 <Users className="text-indigo-600" size={20} />
-                دروستکردنی هەژماری مەندووبی نوێ
+                دروستکردنی هەژماری نوێ
               </h3>
               <button 
                 onClick={() => setShowAddModal(false)} 
@@ -680,7 +963,52 @@ export default function RepsView() {
 
             <form onSubmit={handleAddNew} className="p-6 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی تەواوی مەندووب *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">ڕۆڵ لە سیستەم (جۆری هەژمار) *</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewUserType('both')}
+                    className={`py-2.5 px-2 text-xs font-bold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      newUserType === 'both'
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-800 shadow-xs ring-2 ring-indigo-500/20'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">🔄</span>
+                    <span>مەندووب و کاشڤان</span>
+                    <span className="text-[10px] text-indigo-500 font-normal">هەردووکیان</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewUserType('rep')}
+                    className={`py-2.5 px-2 text-xs font-bold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      newUserType === 'rep'
+                        ? 'border-blue-600 bg-blue-50 text-blue-800 shadow-xs ring-2 ring-blue-500/20'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">👤</span>
+                    <span>تەنها مەندووب</span>
+                    <span className="text-[10px] text-blue-500 font-normal">داواکاری وەسڵ</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewUserType('cashvan')}
+                    className={`py-2.5 px-2 text-xs font-bold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      newUserType === 'cashvan'
+                        ? 'border-amber-600 bg-amber-50 text-amber-800 shadow-xs ring-2 ring-amber-500/20'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">🚚</span>
+                    <span>تەنها کاشڤان</span>
+                    <span className="text-[10px] text-amber-500 font-normal">فرۆشی سەیارە</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی تەواوی کارمەند *</label>
                 <input
                   type="text"
                   required
@@ -699,7 +1027,7 @@ export default function RepsView() {
                 <label className="block text-xs font-bold text-slate-700 mb-1">ناوی بەکارهێنەر بۆ چوونەژوورەوە (Username)</label>
                 <input
                   type="text"
-                  placeholder="ahmed_rep"
+                  placeholder="ahmed_user"
                   value={newUsername}
                   onChange={(e) => setNewUsername(e.target.value)}
                   className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold font-mono"
@@ -855,7 +1183,7 @@ export default function RepsView() {
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-indigo-50">
               <h3 className="font-bold text-indigo-900 text-base flex items-center gap-2">
                 <Edit2 size={18} className="text-indigo-600" />
-                دەستکاری زانیاری مەندووب
+                دەستکاری زانیاری مەندووب / کاشڤان
               </h3>
               <button 
                 onClick={() => setEditingItem(null)} 
@@ -868,7 +1196,52 @@ export default function RepsView() {
 
             <form onSubmit={handleSaveInfo} className="p-6 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی مەندووب *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">ڕۆڵ لە سیستەم (جۆری هەژمار) *</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditUserType('both')}
+                    className={`py-2.5 px-2 text-xs font-bold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      editUserType === 'both'
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-800 shadow-xs ring-2 ring-indigo-500/20'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">🔄</span>
+                    <span>مەندووب و کاشڤان</span>
+                    <span className="text-[10px] text-indigo-500 font-normal">هەردووکیان</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditUserType('rep')}
+                    className={`py-2.5 px-2 text-xs font-bold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      editUserType === 'rep'
+                        ? 'border-blue-600 bg-blue-50 text-blue-800 shadow-xs ring-2 ring-blue-500/20'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">👤</span>
+                    <span>تەنها مەندووب</span>
+                    <span className="text-[10px] text-blue-500 font-normal">داواکاری وەسڵ</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditUserType('cashvan')}
+                    className={`py-2.5 px-2 text-xs font-bold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      editUserType === 'cashvan'
+                        ? 'border-amber-600 bg-amber-50 text-amber-800 shadow-xs ring-2 ring-amber-500/20'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">🚚</span>
+                    <span>تەنها کاشڤان</span>
+                    <span className="text-[10px] text-amber-500 font-normal">فرۆشی سەیارە</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ناوی کارمەند *</label>
                 <input
                   type="text"
                   required
@@ -952,13 +1325,15 @@ export default function RepsView() {
         isOpen={!!deletingItem}
         onClose={() => setDeletingItem(null)}
         onConfirm={confirmDelete}
-        title="سڕینەوەی مەندووب"
-        message={`ئایا دڵنیایت لە سڕینەوەی هەژماری (${deletingItem?.name})؟`}
+        title="سڕینەوەی مەندووب / کاشڤان"
+        message={`ئایا دڵنیایت لە سڕینەوەی هەژماری (${deletingItem?.name})؟ ئاگاداربە: دەستڕاگەیشتنی ئەم کەسە دادەخرێت، بەڵام سەرجەم فرۆش، وەسڵ و حساباتەکانی لە سیستەمدا بە تەواوی و بە پارێزراوی دەمێننەوە و ناسڕدرێنەوە.`}
+        confirmText="سڕینەوە و داخستنی هەژمار"
+        cancelText="پاشگەزبوونەوە"
         itemName={deletingItem?.name}
         details={deletingItem ? [
           { label: 'ژمارەی مۆبایل', value: deletingItem.phone || '-' },
           { label: 'کۆدی ئەمنی', value: deletingItem.accessCode || 'دیاری نەکراوە' },
-          { label: 'کۆی فرۆش', value: `${(deletingItem.totalSales || 0).toLocaleString()} د.ع` }
+          { label: 'کۆی فرۆش (پارێزراوە)', value: `${(deletingItem.totalSales || 0).toLocaleString()} د.ع` }
         ] : []}
       />
     </div>

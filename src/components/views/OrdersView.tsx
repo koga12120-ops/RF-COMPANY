@@ -66,6 +66,15 @@ export default function OrdersView({
     return session?.name || session?.username || sessionStorage.getItem('active_rep_name') || '';
   });
 
+  // User role permissions for Rep vs Cashvan locking
+  const storedSession = getStoredSession();
+  const rawUserType = storedSession?.userType;
+  const userType: 'both' | 'rep' | 'cashvan' = rawUserType
+    ? rawUserType
+    : (storedSession ? (storedSession.isRep && storedSession.isCashvan ? 'both' : (storedSession.isCashvan ? 'cashvan' : 'rep')) : 'both');
+  const isRepAllowed = role === 'admin' || role === 'warehouse' || isWarehouseMode || userType === 'both' || userType === 'rep';
+  const isCashvanAllowed = role === 'admin' || role === 'warehouse' || isWarehouseMode || userType === 'both' || userType === 'cashvan';
+
   // Main Tabs
   const [activeMainTab, setActiveMainTab] = useState<'schedule' | 'info'>(initialTab);
 
@@ -377,6 +386,10 @@ export default function OrdersView({
   };
 
   const handleSelectMarketForOrder = (market: Market) => {
+    if (!isRepAllowed) {
+      alert('بەشی تەڵەبیەی مەندووب قوفڵکراوە!\nهەژماری تۆ تەنها وەک «کاشڤان» تۆمارکراوە و بەشی تەڵەبیەت بۆ قوفڵە.\nبۆ کاراکردنی ئەم بەشە داوا لە بەڕێوەبەر بکە لە لیستی مەندووب و کاشڤانەکان هەژمارەکەت بگۆڕێت بۆ «مەندووب و کاشڤان».');
+      return;
+    }
     setOrderMarketName(market.name);
     setOrderLocation(market.location || '');
     setOrderSelectedItems([]);
@@ -387,6 +400,10 @@ export default function OrdersView({
   };
 
   const handleSelectMarketForCashvan = (market: Market) => {
+    if (!isCashvanAllowed) {
+      alert('بەشی فرۆشتنی کاشڤان قوفڵکراوە!\nهەژماری تۆ تەنها وەک «مەندووب» تۆمارکراوە و بەشی کاشڤانت بۆ قوفڵە.\nبۆ کاراکردنی ئەم بەشە داوا لە بەڕێوەبەر بکە لە لیستی مەندووب و کاشڤانەکان هەژمارەکەت بگۆڕێت بۆ «مەندووب و کاشڤان».');
+      return;
+    }
     setVanMarketName(market.name);
     setVanCart([]);
     setVanItemSearch('');
@@ -1402,7 +1419,7 @@ export default function OrdersView({
               <div class="sig-line"></div>
             </div>
             <div>
-              <div>واژووی کڕیار (مارکێت/کۆگا)</div>
+              <div>واژووی مارکێت</div>
               <div class="sig-line"></div>
             </div>
           </div>
@@ -1481,7 +1498,7 @@ export default function OrdersView({
       <html dir="rtl">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی داواکاری #${invoiceId}</title>
+          <title></title>
           <style>
             body { font-family: system-ui, sans-serif; direction: rtl; text-align: right; padding: 16px; color: #1e293b; }
             .brand-header {
@@ -1590,7 +1607,7 @@ export default function OrdersView({
               <div class="sig-line"></div>
             </div>
             <div>
-              <div>واژووی کڕیار (مارکێت/کۆگا)</div>
+              <div>واژووی مارکێت</div>
               <div class="sig-line"></div>
             </div>
           </div>
@@ -1609,10 +1626,14 @@ export default function OrdersView({
   const allActivities = useMemo<ActivityItem[]>(() => {
     const list: ActivityItem[] = [];
     const activeRep = repName?.trim();
+    const isStaff = role === 'sales_rep' || role === 'cashvan';
 
     // 1. Orders
     orders.forEach(o => {
-      if (role === 'sales_rep' && activeRep && o.repName !== activeRep) return;
+      if (isStaff && activeRep) {
+        const match = o.repName?.trim().toLowerCase() === activeRep.toLowerCase();
+        if (!match) return;
+      }
       list.push({
         id: o.id,
         type: 'order',
@@ -1629,7 +1650,10 @@ export default function OrdersView({
 
     // 2. Cashvan Sales
     cashvanSales.forEach(s => {
-      if (role === 'sales_rep' && activeRep && s.cashvanName !== activeRep) return;
+      if (isStaff && activeRep) {
+        const match = s.cashvanName?.trim().toLowerCase() === activeRep.toLowerCase();
+        if (!match) return;
+      }
       list.push({
         id: s.id,
         type: 'cashvan_sale',
@@ -1648,8 +1672,10 @@ export default function OrdersView({
     transactions.forEach(t => {
       const isPaid = t.type === 'paid_debt' || t.type === 'market_paid_debt';
       if (!isPaid) return;
-      if (role === 'sales_rep' && activeRep) {
-        const matchesRep = t.collectorName === activeRep || t.repName === activeRep || (t.description && t.description.includes(activeRep));
+      if (isStaff && activeRep) {
+        const cName = (t.collectorName || t.repName || t.cashvanName || '').trim().toLowerCase();
+        const aRep = activeRep.toLowerCase();
+        const matchesRep = cName === aRep || (t.description && t.description.toLowerCase().includes(aRep));
         if (!matchesRep) return;
       }
       list.push({
@@ -1776,22 +1802,31 @@ export default function OrdersView({
           {/* 1. Pre-Order (تەڵەبیە) */}
           <div
             onClick={() => handleSelectMarketForOrder(market)}
-            className="p-3.5 bg-white hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-500 rounded-2xl cursor-pointer transition-all duration-150 shadow-2xs hover:shadow-xs group flex items-center gap-3"
+            className={`p-3.5 rounded-2xl transition-all duration-150 shadow-2xs flex items-center gap-3 relative overflow-hidden ${
+              !isRepAllowed
+                ? 'bg-slate-50/90 border border-dashed border-red-200 opacity-65 cursor-not-allowed'
+                : 'bg-white hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-500 cursor-pointer hover:shadow-xs group'
+            }`}
           >
-            <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl group-hover:scale-105 transition shrink-0">
-              <ShoppingCart size={20} />
+            <div className={`p-2.5 rounded-xl transition shrink-0 ${
+              !isRepAllowed ? 'bg-slate-200 text-slate-500' : 'bg-indigo-100 text-indigo-700 group-hover:scale-105'
+            }`}>
+              {!isRepAllowed ? <Lock size={20} className="text-red-500" /> : <ShoppingCart size={20} />}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
-                <h3 className="text-xs sm:text-sm font-bold text-slate-800 group-hover:text-indigo-700">
+                <h3 className={`text-xs sm:text-sm font-bold ${!isRepAllowed ? 'text-slate-500' : 'text-slate-800 group-hover:text-indigo-700'}`}>
                   ١. تەڵەبیە
                 </h3>
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-indigo-100 text-indigo-700">
-                  داواکاری نوێ
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                  !isRepAllowed ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-indigo-100 text-indigo-700'
+                }`}>
+                  {!isRepAllowed && <Lock size={10} />}
+                  <span>{!isRepAllowed ? 'قوفڵکراوە' : 'داواکاری نوێ'}</span>
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                تۆمارکردنی داواکاری کاڵاکانی کۆگا بە نرخ و داشکاندن
+                {!isRepAllowed ? 'هەژمارەکەت تەنها وەک کاشڤانە و ئەم بەشە قوفڵە' : 'تۆمارکردنی داواکاری کاڵاکانی کۆگا بە نرخ و داشکاندن'}
               </p>
             </div>
           </div>
@@ -1799,22 +1834,31 @@ export default function OrdersView({
           {/* 2. Direct Cashvan Sale */}
           <div
             onClick={() => handleSelectMarketForCashvan(market)}
-            className="p-3.5 bg-white hover:bg-amber-50/50 border border-slate-200 hover:border-amber-500 rounded-2xl cursor-pointer transition-all duration-150 shadow-2xs hover:shadow-xs group flex items-center gap-3"
+            className={`p-3.5 rounded-2xl transition-all duration-150 shadow-2xs flex items-center gap-3 relative overflow-hidden ${
+              !isCashvanAllowed
+                ? 'bg-slate-50/90 border border-dashed border-red-200 opacity-65 cursor-not-allowed'
+                : 'bg-white hover:bg-amber-50/50 border border-slate-200 hover:border-amber-500 cursor-pointer hover:shadow-xs group'
+            }`}
           >
-            <div className="p-2.5 bg-amber-100 text-amber-800 rounded-xl group-hover:scale-105 transition shrink-0">
-              <Truck size={20} />
+            <div className={`p-2.5 rounded-xl transition shrink-0 ${
+              !isCashvanAllowed ? 'bg-slate-200 text-slate-500' : 'bg-amber-100 text-amber-800 group-hover:scale-105'
+            }`}>
+              {!isCashvanAllowed ? <Lock size={20} className="text-red-500" /> : <Truck size={20} />}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
-                <h3 className="text-xs sm:text-sm font-bold text-slate-800 group-hover:text-amber-800">
+                <h3 className={`text-xs sm:text-sm font-bold ${!isCashvanAllowed ? 'text-slate-500' : 'text-slate-800 group-hover:text-amber-800'}`}>
                   ٢. کاشڤان
                 </h3>
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800">
-                  فرۆشتن لە ڤان
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                  !isCashvanAllowed ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {!isCashvanAllowed && <Lock size={10} />}
+                  <span>{!isCashvanAllowed ? 'قوفڵکراوە' : 'فرۆشتن لە ڤان'}</span>
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                فرۆشتنی دەستبەجێ لە کاڵاکانی ڤان و چاپکردنی وەسڵ
+                {!isCashvanAllowed ? 'هەژمارەکەت تەنها وەک مەندووبە و ئەم بەشە قوفڵە' : 'فرۆشتنی دەستبەجێ لە کاڵاکانی ڤان و چاپکردنی وەسڵ'}
               </p>
             </div>
           </div>
@@ -1895,6 +1939,29 @@ export default function OrdersView({
 
   // Render Dedicated Page: Rep Order (تەڵەبییە) Page with INLINE + / - Steppers on Warehouse Items
   if (currentView === 'order_form') {
+    if (!isRepAllowed) {
+      return (
+        <div className="max-w-md mx-auto my-12 p-8 bg-white rounded-3xl border-2 border-red-200 shadow-sm text-center space-y-4" dir="rtl">
+          <div className="w-14 h-14 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+            <Lock size={28} />
+          </div>
+          <h2 className="text-lg font-black text-slate-900">بەشی تەڵەبیە قوفڵکراوە</h2>
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+            هەژماری تۆ تەنها وەک <strong className="text-amber-700">کاشڤان</strong> دیاریکراوە. بەشی تەڵەبیەی مەندووب لەلایەن بەڕێوەبەرەوە بۆ ئەم هەژمارە قوفڵکراوە.
+          </p>
+          <div className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200 text-right">
+            💡 گەر دەتەوێت وەک مەندووبیش کار بکەیت، پێویستە لە بەڕێوەبەرایەتی هەژمارەکەت بکرێتە <strong>«مەندووب و کاشڤان»</strong>.
+          </div>
+          <button
+            type="button"
+            onClick={() => setCurrentView('main')}
+            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition shadow-xs"
+          >
+            گەڕانەوە بۆ پەڕەی سەرەکی
+          </button>
+        </div>
+      );
+    }
     const totalAmount = orderSelectedItems.reduce((acc, curr) => {
       const price = calcPrice(curr.item, curr.unit, orderMarketName);
       return acc + (price * (curr.quantity || 0));
@@ -2296,6 +2363,29 @@ export default function OrdersView({
 
   // Render Dedicated Page: Cashvan Direct Sale (کاشڤان ڕاستەوخۆ) Page with INLINE + / - Steppers on Van Inventory
   if (currentView === 'cashvan_form') {
+    if (!isCashvanAllowed) {
+      return (
+        <div className="max-w-md mx-auto my-12 p-8 bg-white rounded-3xl border-2 border-red-200 shadow-sm text-center space-y-4" dir="rtl">
+          <div className="w-14 h-14 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+            <Lock size={28} />
+          </div>
+          <h2 className="text-lg font-black text-slate-900">بەشی فرۆشتنی کاشڤان قوفڵکراوە</h2>
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+            هەژماری تۆ تەنها وەک <strong className="text-indigo-700">مەندووب</strong> دیاریکراوە. بەشی فرۆشتنی کاشڤان لەلایەن بەڕێوەبەرەوە بۆ ئەم هەژمارە قوفڵکراوە.
+          </p>
+          <div className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200 text-right">
+            💡 گەر دەتەوێت وەک کاشڤانیش کار بکەیت، پێویستە لە بەڕێوەبەرایەتی هەژمارەکەت بکرێتە <strong>«مەندووب و کاشڤان»</strong>.
+          </div>
+          <button
+            type="button"
+            onClick={() => setCurrentView('main')}
+            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition shadow-xs"
+          >
+            گەڕانەوە بۆ پەڕەی سەرەکی
+          </button>
+        </div>
+      );
+    }
     const totalAmount = vanCart.reduce((acc, curr) => acc + ((curr.cartQty || 0) * (curr.finalPrice || 0)), 0);
     const totalRegularCount = vanCart.reduce((acc, curr) => acc + (curr.cartQty || 0), 0);
     const totalGiftCount = vanCart.reduce((acc, curr) => acc + (curr.giftQty || 0), 0);
@@ -2697,6 +2787,8 @@ export default function OrdersView({
             onSelectForDebtPay={handleSelectMarketForDebtPay}
             onOpenMarketActions={handleOpenMarketActions}
             marketDebtMap={marketDebtMap}
+            isRepAllowed={isRepAllowed}
+            isCashvanAllowed={isCashvanAllowed}
           />
         </>
       )}
