@@ -110,7 +110,7 @@ export default function RepsView() {
             existing.accessCode = c.accessCode || c.password;
             existing.password = c.password || c.accessCode;
           }
-          if (isDel && (existing as any).isDeleted) {
+          if (isDel || (existing as any).isDeleted) {
             existing.status = 'deleted';
             (existing as any).isDeleted = true;
           } else if (c.status === 'disabled' && existing.status !== 'deleted') {
@@ -482,39 +482,39 @@ export default function RepsView() {
 
   const confirmDelete = async () => {
     if (!deletingItem) return;
+    const personName = (deletingItem.name || '').trim();
     try {
-      const now = Date.now();
-      // 1. Soft delete in reps collection
-      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', deletingItem.name)));
+      // 1. Delete from reps collection by ID and matching name
+      if (deletingItem.id) {
+        try { await deleteDoc(doc(db, 'reps', deletingItem.id)); } catch (e) {}
+      }
+      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
       for (const d of repSnap.docs) {
-        await setDoc(doc(db, 'reps', d.id), {
-          isDeleted: true,
-          status: 'deleted',
-          deletedAt: now,
-          forceReauth: true
-        }, { merge: true });
+        await deleteDoc(doc(db, 'reps', d.id));
       }
 
-      // 2. Disable user access in users
-      await setDoc(doc(db, 'users', deletingItem.id), {
-        status: 'banned',
-        isDeleted: true,
-        deletedAt: now,
-        forceReauth: true
-      }, { merge: true });
-
-      // 3. Soft delete in cashvans
-      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', deletingItem.name)));
+      // 2. Delete from cashvans collection by ID and matching name
+      if (deletingItem.id) {
+        try { await deleteDoc(doc(db, 'cashvans', deletingItem.id)); } catch (e) {}
+      }
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
       for (const d of cvSnap.docs) {
-        await setDoc(doc(db, 'cashvans', d.id), {
-          isDeleted: true,
-          status: 'deleted',
-          deletedAt: now,
-          forceReauth: true
-        }, { merge: true });
+        await deleteDoc(doc(db, 'cashvans', d.id));
       }
 
-      showToast(`هەژماری (${deletingItem.name}) سڕدرایەوە و دەستڕاگەیشتنی داخرا. حیسابات و مامەڵەکانی بەتەواوی پارێزراون.`);
+      // 3. Delete from users collection (authentication/login)
+      if (deletingItem.id) {
+        try { await deleteDoc(doc(db, 'users', deletingItem.id)); } catch (e) {}
+      }
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
+      for (const d of usersSnap.docs) {
+        await deleteDoc(doc(db, 'users', d.id));
+      }
+
+      // Update state locally immediately
+      setReps(prev => prev.filter(r => (r.name || '').trim().toLowerCase() !== personName.toLowerCase() && r.id !== deletingItem.id));
+
+      showToast(`هەژماری (${personName}) بەسەرکەوتوویی لە لیستی مەندووب و کاشڤان سڕدرایەوە. تەواوی حساباتەکانی لە دەفتەر حساب پارێزراون.`);
       setDeletingItem(null);
     } catch (error) {
       console.error(error);

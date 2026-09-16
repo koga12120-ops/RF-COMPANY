@@ -309,10 +309,10 @@ export default function AdminCashvanView() {
           existing.password = c.password || c.accessCode;
         }
         if (c.vehicleNumber) existing.vehicleNumber = c.vehicleNumber;
-        if (isDel && existing.status !== 'active') {
-          existing.status = 'deleted';
+        if (isDel || existing.isDeleted || (existing as any).status === 'deleted') {
+          existing.status = 'deleted' as any;
           existing.isDeleted = true;
-        } else if (c.status === 'disabled' && existing.status !== 'deleted') {
+        } else if (c.status === 'disabled' && (existing as any).status !== 'deleted') {
           existing.status = 'disabled';
         }
       } else {
@@ -331,38 +331,8 @@ export default function AdminCashvanView() {
       }
     });
 
-    // 3. Fallback: also include names that appeared in historical orders or sales
-    orders.forEach(o => {
-      const name = (o.repName || '').trim();
-      if (name && !map.has(name.toLowerCase())) {
-        map.set(name.toLowerCase(), {
-          id: `order_${name}`,
-          name,
-          username: name,
-          phone: '',
-          accessCode: '',
-          vehicleNumber: '',
-          status: 'active'
-        });
-      }
-    });
-    sales.forEach(s => {
-      const name = (s.cashvanName || '').trim();
-      if (name && !map.has(name.toLowerCase())) {
-        map.set(name.toLowerCase(), {
-          id: `sale_${name}`,
-          name,
-          username: name,
-          phone: '',
-          accessCode: '',
-          vehicleNumber: '',
-          status: 'active'
-        });
-      }
-    });
-
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [reps, cashvans, orders, sales]);
+  }, [reps, cashvans]);
 
   // User stats for Mandoob (from orders)
   const repUsersSummary = useMemo(() => {
@@ -1038,42 +1008,38 @@ export default function AdminCashvanView() {
     if (!deletingCVItem) return;
     const personName = deletingCVItem.name.trim();
     try {
-      const now = Date.now();
-      // 1. Soft delete in cashvans - preserve accounting & transaction integrity
+      // 1. Delete from cashvans collection
+      if (deletingCVItem.id) {
+        try { await deleteDoc(doc(db, 'cashvans', deletingCVItem.id)); } catch (e) {}
+      }
+      if (deletingCVItem.cvId && deletingCVItem.cvId !== deletingCVItem.id) {
+        try { await deleteDoc(doc(db, 'cashvans', deletingCVItem.cvId)); } catch (e) {}
+      }
       const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
       for (const d of cvSnap.docs) {
-        await setDoc(doc(db, 'cashvans', d.id), {
-          isDeleted: true,
-          status: 'deleted',
-          deletedAt: now,
-          forceReauth: true
-        }, { merge: true });
+        await deleteDoc(doc(db, 'cashvans', d.id));
       }
 
-      // 2. Soft delete in reps
+      // 2. Delete from reps collection
+      if (deletingCVItem.id) {
+        try { await deleteDoc(doc(db, 'reps', deletingCVItem.id)); } catch (e) {}
+      }
       const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
       for (const d of repSnap.docs) {
-        await setDoc(doc(db, 'reps', d.id), {
-          isDeleted: true,
-          status: 'deleted',
-          deletedAt: now,
-          forceReauth: true
-        }, { merge: true });
+        await deleteDoc(doc(db, 'reps', d.id));
       }
 
-      // 3. Disable user login in users collection
+      // 3. Delete from users collection
+      if (deletingCVItem.id) {
+        try { await deleteDoc(doc(db, 'users', deletingCVItem.id)); } catch (e) {}
+      }
       const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
       for (const d of usersSnap.docs) {
-        await setDoc(doc(db, 'users', d.id), {
-          status: 'banned',
-          isDeleted: true,
-          deletedAt: now,
-          forceReauth: true
-        }, { merge: true });
+        await deleteDoc(doc(db, 'users', d.id));
       }
 
       setDeletingCVItem(null);
-      alert(`هەژماری (${personName}) سڕدرایەوە و دەستڕاگەیشتنی داخرا.\nتەواوی حیسابات، وەسڵەکان و مامەڵەکانی بە تەواوی پارێزراون و لە دەفتەری حیساباتدا دەمێننەوە.`);
+      alert(`هەژماری (${personName}) بەسەرکەوتوویی لە لیستی مەندووب و کاشڤان سڕدرایەوە.\nتەواوی حیسابات، وەسڵەکان و مامەڵەکانی لە دەفتەری حیساباتدا بە پارێزراوی ماونەتەوە.`);
     } catch (e) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا لە سڕینەوە');

@@ -254,7 +254,9 @@ export default function LedgerView() {
         type: isExp ? 'خەرجی' : (t.type === 'company_paid_debt' ? 'پاردانەوەی کۆمپانیا' : (t.type === 'company_cash' || t.type === 'company_debt' ? 'وەرگرتنی کاڵا' : (t.type === 'income' ? 'داهاتی دەستی' : 'پاردانەوە/قەرز'))),
         entityType: isExp ? 'expense' : (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'company' : 'market'),
         entityName: isExp ? (t.description || t.category || 'خەرجی') : (t.relatedEntityId || t.description),
-        personName: isExp ? (t.receivedBy || 'بەڕێوەبەر') : (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'کۆمپانیا' : 'بەڕێوەبەر'),
+        personName: isExp 
+          ? (t.receivedBy || 'بەڕێوەبەر') 
+          : (t.cashvanName || (t as any).repName || (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'کۆمپانیا' : 'بەڕێوەبەر')),
         amount: t.amount,
         date: t.date,
         invoiceNumber: t.invoiceNo ? `#${t.invoiceNo}` : (isExp ? `EXP-${t.id.slice(-4).toUpperCase()}` : ((['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'COMP-' : 'TRN-') + t.id.slice(-4).toUpperCase())),
@@ -326,8 +328,12 @@ export default function LedgerView() {
     const repsSet = new Set<string>();
     fOrders.forEach(o => { if (o.repName) repsSet.add(o.repName.trim()); });
     fCashvan.forEach(c => { if (c.cashvanName) repsSet.add(c.cashvanName.trim()); });
+    fTrans.forEach(t => { 
+      if (t.cashvanName) repsSet.add(t.cashvanName.trim());
+      if ((t as any).repName) repsSet.add((t as any).repName.trim());
+    });
     return Array.from(repsSet).filter(Boolean).sort();
-  }, [fOrders, fCashvan]);
+  }, [fOrders, fCashvan, fTrans]);
 
   // Get unique entities for the name dropdown
   const uniqueEntities = useMemo(() => {

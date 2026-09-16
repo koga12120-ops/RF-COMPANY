@@ -205,6 +205,7 @@ export async function syncAllRepsAndCashvans() {
 
     // 1. If in reps but not in cashvans, create in cashvans (if both or not restricted to rep)
     for (const [key, rep] of repsMap.entries()) {
+      if (rep.isDeleted || rep.status === 'deleted') continue;
       if (rep.userType === 'rep') continue;
       if (!cashvansMap.has(key)) {
         try {
@@ -230,6 +231,7 @@ export async function syncAllRepsAndCashvans() {
 
     // 2. If in cashvans but not in reps, create in reps (if both or not restricted to cashvan)
     for (const [key, cv] of cashvansMap.entries()) {
+      if (cv.isDeleted || cv.status === 'deleted') continue;
       if (cv.userType === 'cashvan') continue;
       if (!repsMap.has(key)) {
         try {

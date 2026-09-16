@@ -619,10 +619,39 @@ export default function OrdersView({
           totalAmount,
           totalProfit,
           items: orderItems,
-          status: 'pending',
+          status: 'completed',
           paymentStatus: orderPaymentType,
           timestamp: Date.now()
         });
+
+        // Sync corresponding transaction in accounts
+        const existingOrder = orders.find(o => o.id === editingOrderId);
+        const invKey = existingOrder?.invoiceId || existingOrder?.invoiceNo || editingOrderId;
+        const qT = query(collection(db, 'transactions'), where('invoiceNo', '==', invKey));
+        const snapT = await getDocs(qT);
+        if (!snapT.empty) {
+          await updateDoc(doc(db, 'transactions', snapT.docs[0].id), {
+            type: orderPaymentType === 'cash' ? 'cash' : 'debt',
+            amount: totalAmount,
+            description: orderPaymentType === 'cash' 
+              ? `نەقدی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})` 
+              : `قەرزی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})`,
+            relatedEntityId: orderMarketName.trim(),
+            repName: repName.trim()
+          });
+        } else {
+          await addDoc(collection(db, 'transactions'), {
+            type: orderPaymentType === 'cash' ? 'cash' : 'debt',
+            invoiceNo: invKey,
+            amount: totalAmount,
+            date: Date.now(),
+            description: orderPaymentType === 'cash' 
+              ? `نەقدی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})` 
+              : `قەرزی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})`,
+            relatedEntityId: orderMarketName.trim(),
+            repName: repName.trim()
+          });
+        }
         setEditingOrderId(null);
       } else {
         const nextInvoiceNo = await getNextInvoiceNumber();
@@ -635,11 +664,36 @@ export default function OrdersView({
           totalAmount,
           totalProfit,
           items: orderItems,
-          status: 'pending' as const,
+          status: 'completed' as const,
           paymentStatus: orderPaymentType,
           timestamp: Date.now()
         };
         const orderRef = await addDoc(collection(db, 'orders'), newOrderData);
+
+        // Auto-post to accounts (transactions collection) immediately based on Cash or Debt
+        await addDoc(collection(db, 'transactions'), {
+          type: orderPaymentType === 'cash' ? 'cash' : 'debt',
+          invoiceNo: nextInvoiceNo,
+          amount: totalAmount,
+          date: Date.now(),
+          description: orderPaymentType === 'cash' 
+            ? `نەقدی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})` 
+            : `قەرزی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})`,
+          relatedEntityId: orderMarketName.trim(),
+          repName: repName.trim(),
+          orderId: orderRef.id
+        });
+
+        // Update Rep's totalSales and totalProfit directly
+        const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', repName.trim())));
+        if (!repSnap.empty) {
+          const rDoc = repSnap.docs[0];
+          await updateDoc(doc(db, 'reps', rDoc.id), {
+            totalSales: (rDoc.data().totalSales || 0) + totalAmount,
+            totalProfit: (rDoc.data().totalProfit || 0) + totalProfit
+          });
+        }
+
         printOrderReceipt({ ...newOrderData, id: orderRef.id }, nextInvoiceNo);
       }
       
@@ -649,7 +703,7 @@ export default function OrdersView({
       setOrderLocation('');
       setOrderSelectedItems([]);
       setIsOrderGiftMode(false);
-      alert('داواکارییەکە بە سەرکەوتوویی نێردرا بۆ کۆگا');
+      alert('داواکارییەکە بە سەرکەوتوویی تۆمارکرا و خۆکارانە چووە ناو حیساباتەکان (' + (orderPaymentType === 'cash' ? 'نەقد' : 'قەرز') + ')');
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە ناردنی داواکاری');
@@ -845,8 +899,24 @@ export default function OrdersView({
       };
 
       await updateDoc(doc(db, 'orders', editingOrder.id), payload);
+
+      // Keep transaction in sync with edited order
+      const invKey = editingOrder.invoiceId || editingOrder.invoiceNo || editingOrder.id;
+      const qT = query(collection(db, 'transactions'), where('invoiceNo', '==', invKey));
+      const snapT = await getDocs(qT);
+      if (!snapT.empty) {
+        await updateDoc(doc(db, 'transactions', snapT.docs[0].id), {
+          type: editOrderPaymentType === 'cash' ? 'cash' : 'debt',
+          amount: totalAmount,
+          description: editOrderPaymentType === 'cash' 
+            ? `نەقدی داواکاری مەندووب (${editingOrder.repName}) بۆ (${editingOrder.marketName})` 
+            : `قەرزی داواکاری مەندووب (${editingOrder.repName}) بۆ (${editingOrder.marketName})`,
+          relatedEntityId: editingOrder.marketName
+        });
+      }
+
       setEditingOrder(null);
-      alert('دەستکاریکردنی تەڵەبیە بە سەرکەوتوویی پاشەکەوت کرا');
+      alert('دەستکاریکردنی تەڵەبیە بە سەرکەوتوویی پاشەکەوت کرا و حیساباتی نوێکرایەوە');
     } catch (err) {
       console.error(err);
       alert('هەڵەیەک ڕوویدا لە پاشەکەوتکردنی دەستکارییەکان');
@@ -1102,7 +1172,7 @@ export default function OrdersView({
         totalAmount,
         totalProfit,
         date: Date.now(),
-        status: 'pending_accounting',
+        status: 'accounted',
         paymentType: vanPaymentType
       };
 
@@ -1122,16 +1192,30 @@ export default function OrdersView({
         }
       }
 
-      // Add transaction for debt or cash if needed
+      // Add transaction for debt or cash directly to accounts
       await addDoc(collection(db, 'transactions'), {
         type: vanPaymentType === 'cash' ? 'cash' : 'debt',
         invoiceNo: nextInvoiceNo,
         amount: totalAmount,
         date: Date.now(),
-        description: vanPaymentType === 'cash' ? `فرۆشتنی نەقدی کاشڤان بۆ ${vanMarketName}` : `فرۆشتنی قەرزی کاشڤان بۆ ${vanMarketName}`,
+        description: vanPaymentType === 'cash' 
+          ? `فرۆشتنی نەقدی کاشڤان (${repName || 'کاشڤان'}) بۆ (${vanMarketName})` 
+          : `فرۆشتنی قەرزی کاشڤان (${repName || 'کاشڤان'}) بۆ (${vanMarketName})`,
         relatedEntityId: vanMarketName,
-        cashvanName: repName || 'کاشڤان'
+        cashvanName: repName || 'کاشڤان',
+        marketName: vanMarketName,
+        saleId: docRef.id
       });
+
+      // Update cashvan sales stats directly
+      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', (repName || 'کاشڤان').trim())));
+      if (!cvSnap.empty) {
+        const cvDoc = cvSnap.docs[0];
+        await updateDoc(doc(db, 'cashvans', cvDoc.id), {
+          totalSales: (cvDoc.data().totalSales || 0) + totalAmount,
+          totalProfit: (cvDoc.data().totalProfit || 0) + totalProfit
+        });
+      }
 
       setVanCart([]);
       setIsVanGiftMode(false);
