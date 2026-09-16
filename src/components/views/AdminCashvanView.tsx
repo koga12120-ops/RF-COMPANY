@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   collection, 
   query, 
@@ -111,8 +111,8 @@ export default function AdminCashvanView() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedRepFilter, setSelectedRepFilter] = useState('all');
   const [selectedCashvanFilter, setSelectedCashvanFilter] = useState('all');
-  const [repStatusFilter, setRepStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
-  const [cashvanStatusFilter, setCashvanStatusFilter] = useState<'all' | 'pending_accounting' | 'accounted'>('all');
+  const [repStatusFilter, setRepStatusFilter] = useState<'all' | 'cash' | 'debt' | 'pending' | 'completed'>('all');
+  const [cashvanStatusFilter, setCashvanStatusFilter] = useState<'all' | 'cash' | 'debt' | 'pending_accounting' | 'accounted'>('all');
 
   // Quick Time Filters for Rep & Cashvan tabs
   const [repTimeFilter, setRepTimeFilter] = useState<'all' | 'today' | 'this_week' | 'this_month'>('all');
@@ -258,6 +258,79 @@ export default function AdminCashvanView() {
       unsubCV();
     };
   }, []);
+
+  // Automatically ensure all orders and cashvan sales go directly to the accounts collection (بەشی حسابات)
+  const isSyncingAccountsRef = useRef(false);
+  useEffect(() => {
+    if (loading || isSyncingAccountsRef.current) return;
+    if (orders.length === 0 && sales.length === 0) return;
+
+    const syncToAccounts = async () => {
+      isSyncingAccountsRef.current = true;
+      try {
+        // 1. Sync any rep orders not yet in transactions
+        for (const order of orders) {
+          if (order.status === 'deleted') continue;
+          const invKey = order.invoiceId || (order as any).invoiceNo || order.id;
+          const exists = transactions.some(t => t.invoiceNo === invKey);
+          if (!exists) {
+            const pType = (order.paymentStatus === 'cash' || (order as any).paymentType === 'cash') ? 'cash' : 'debt';
+            await addDoc(collection(db, 'transactions'), {
+              type: pType,
+              invoiceNo: invKey,
+              amount: Number(order.totalAmount) || 0,
+              date: order.timestamp || Date.now(),
+              description: pType === 'cash'
+                ? `نەقدی داواکاری مەندووب (${order.repName || 'مەندووب'}) بۆ (${order.marketName || 'مارکێت'})`
+                : `قەرزی داواکاری مەندووب (${order.repName || 'مەندووب'}) بۆ (${order.marketName || 'مارکێت'})`,
+              relatedEntityId: order.marketName || 'مارکێت',
+              repName: order.repName,
+              orderId: order.id
+            });
+            if (order.status !== 'completed') {
+              await updateDoc(doc(db, 'orders', order.id), { status: 'completed', paymentStatus: pType });
+            }
+          } else if (order.status !== 'completed') {
+            await updateDoc(doc(db, 'orders', order.id), { status: 'completed' });
+          }
+        }
+
+        // 2. Sync any cashvan sales not yet in transactions
+        for (const sale of sales) {
+          if ((sale as any).status === 'deleted') continue;
+          const invKey = sale.invoiceNo || sale.id;
+          const exists = transactions.some(t => t.invoiceNo === invKey);
+          if (!exists) {
+            const pType = sale.paymentType === 'cash' ? 'cash' : 'debt';
+            await addDoc(collection(db, 'transactions'), {
+              type: pType,
+              invoiceNo: invKey,
+              amount: Number(sale.totalAmount) || 0,
+              date: sale.date || Date.now(),
+              description: pType === 'cash'
+                ? `فرۆشتنی نەقدی کاشڤان (${sale.cashvanName || 'کاشڤان'}) بۆ (${sale.marketName || 'مارکێت'})`
+                : `فرۆشتنی قەرزی کاشڤان (${sale.cashvanName || 'کاشڤان'}) بۆ (${sale.marketName || 'مارکێت'})`,
+              relatedEntityId: sale.marketName || 'مارکێت',
+              cashvanName: sale.cashvanName,
+              marketName: sale.marketName,
+              saleId: sale.id
+            });
+            if (sale.status !== 'accounted') {
+              await updateDoc(doc(db, 'cashvan_sales', sale.id), { status: 'accounted' });
+            }
+          } else if (sale.status !== 'accounted') {
+            await updateDoc(doc(db, 'cashvan_sales', sale.id), { status: 'accounted' });
+          }
+        }
+      } catch (err) {
+        console.error('Auto-sync to accounts error:', err);
+      } finally {
+        isSyncingAccountsRef.current = false;
+      }
+    };
+
+    syncToAccounts();
+  }, [loading, orders, sales, transactions]);
 
   // Unified list of all registered users (since cashvan and sales rep are the same person/system)
   const unifiedUsers = useMemo(() => {
@@ -412,11 +485,13 @@ export default function AdminCashvanView() {
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
       const matchRep = selectedRepFilter === 'all' || order.repName === selectedRepFilter;
-      const matchStatus = repStatusFilter === 'all' 
-        ? true 
-        : repStatusFilter === 'pending' 
-          ? order.status !== 'completed' 
-          : order.status === 'completed';
+      const isCash = order.paymentStatus === 'cash' || (order as any).paymentType === 'cash';
+      let matchStatus = true;
+      if (repStatusFilter === 'cash') matchStatus = isCash;
+      else if (repStatusFilter === 'debt') matchStatus = !isCash;
+      else if (repStatusFilter === 'pending') matchStatus = order.status !== 'completed';
+      else if (repStatusFilter === 'completed') matchStatus = order.status === 'completed';
+      
       const matchSearch = (order.marketName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (order.repName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (order.invoiceId || '').includes(searchTerm) ||
@@ -446,11 +521,13 @@ export default function AdminCashvanView() {
     return sales.filter(sale => {
       if (sale.status === 'deleted') return false;
       const matchCV = selectedCashvanFilter === 'all' || sale.cashvanName === selectedCashvanFilter;
-      const matchStatus = cashvanStatusFilter === 'all' 
-        ? true 
-        : cashvanStatusFilter === 'pending_accounting' 
-          ? sale.status === 'pending_accounting' 
-          : sale.status === 'accounted';
+      const isCash = sale.paymentType === 'cash';
+      let matchStatus = true;
+      if (cashvanStatusFilter === 'cash') matchStatus = isCash;
+      else if (cashvanStatusFilter === 'debt') matchStatus = !isCash;
+      else if (cashvanStatusFilter === 'pending_accounting') matchStatus = sale.status === 'pending_accounting';
+      else if (cashvanStatusFilter === 'accounted') matchStatus = sale.status === 'accounted';
+
       const matchSearch = (sale.marketName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (sale.cashvanName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (sale.invoiceNo || '').includes(searchTerm) ||
@@ -495,6 +572,12 @@ export default function AdminCashvanView() {
   };
 
   // KPI Calculations
+  const repCashOrders = orders.filter(o => o.paymentStatus === 'cash' || (o as any).paymentType === 'cash');
+  const repCashTotal = repCashOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+  const repDebtOrders = orders.filter(o => o.paymentStatus !== 'cash' && (o as any).paymentType !== 'cash');
+  const repDebtTotal = repDebtOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+  const repGrandTotal = orders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+
   const repPendingOrders = orders.filter(o => o.status !== 'completed');
   const repPendingTotal = repPendingOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
   const repCompletedOrders = orders.filter(o => o.status === 'completed');
@@ -502,6 +585,12 @@ export default function AdminCashvanView() {
 
   const repTotalGifts = orders.reduce((sum, o) => sum + getGiftTotalCount(o.items), 0);
   const repPendingGifts = repPendingOrders.reduce((sum, o) => sum + getGiftTotalCount(o.items), 0);
+
+  const cvCashSales = sales.filter(s => s.status !== 'deleted' && s.paymentType === 'cash');
+  const cvCashTotal = cvCashSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+  const cvDebtSales = sales.filter(s => s.status !== 'deleted' && s.paymentType !== 'cash');
+  const cvDebtTotal = cvDebtSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+  const cvGrandTotal = sales.filter(s => s.status !== 'deleted').reduce((sum, s) => sum + (s.totalAmount || 0), 0);
 
   const cvPendingSales = sales.filter(s => s.status === 'pending_accounting');
   const cvPendingTotal = cvPendingSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
@@ -1006,43 +1095,52 @@ export default function AdminCashvanView() {
 
   const confirmDeleteCashvan = async () => {
     if (!deletingCVItem) return;
-    const personName = deletingCVItem.name.trim();
+    const rawName = (deletingCVItem.name || '').trim();
+    const normalizedName = rawName.toLowerCase();
+    const targetId = deletingCVItem.id;
+    const targetCvId = deletingCVItem.cvId;
+    const targetRepId = deletingCVItem.repId;
+    const targetUid = deletingCVItem.uid;
+
     try {
-      // 1. Delete from cashvans collection
-      if (deletingCVItem.id) {
-        try { await deleteDoc(doc(db, 'cashvans', deletingCVItem.id)); } catch (e) {}
-      }
-      if (deletingCVItem.cvId && deletingCVItem.cvId !== deletingCVItem.id) {
-        try { await deleteDoc(doc(db, 'cashvans', deletingCVItem.cvId)); } catch (e) {}
-      }
-      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
+      // 1. Delete from cashvans collection (all matching IDs or case-insensitive name)
+      const cvSnap = await getDocs(collection(db, 'cashvans'));
       for (const d of cvSnap.docs) {
-        await deleteDoc(doc(db, 'cashvans', d.id));
+        const dName = (d.data().name || '').trim().toLowerCase();
+        if (d.id === targetId || d.id === targetCvId || (normalizedName && dName === normalizedName)) {
+          try { await deleteDoc(doc(db, 'cashvans', d.id)); } catch (e) {}
+        }
       }
 
-      // 2. Delete from reps collection
-      if (deletingCVItem.id) {
-        try { await deleteDoc(doc(db, 'reps', deletingCVItem.id)); } catch (e) {}
-      }
-      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
+      // 2. Delete from reps collection (all matching IDs or case-insensitive name)
+      const repSnap = await getDocs(collection(db, 'reps'));
       for (const d of repSnap.docs) {
-        await deleteDoc(doc(db, 'reps', d.id));
+        const dName = (d.data().name || '').trim().toLowerCase();
+        if (d.id === targetId || d.id === targetRepId || (normalizedName && dName === normalizedName)) {
+          try { await deleteDoc(doc(db, 'reps', d.id)); } catch (e) {}
+        }
       }
 
-      // 3. Delete from users collection
-      if (deletingCVItem.id) {
-        try { await deleteDoc(doc(db, 'users', deletingCVItem.id)); } catch (e) {}
-      }
-      const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
+      // 3. Delete from users collection (authentication/login)
+      const usersSnap = await getDocs(collection(db, 'users'));
       for (const d of usersSnap.docs) {
-        await deleteDoc(doc(db, 'users', d.id));
+        const dData = d.data();
+        const dName = (dData.name || '').trim().toLowerCase();
+        const dUser = (dData.username || '').trim().toLowerCase();
+        if (d.id === targetId || d.id === targetUid || (normalizedName && (dName === normalizedName || dUser === normalizedName))) {
+          try { await deleteDoc(doc(db, 'users', d.id)); } catch (e) {}
+        }
       }
+
+      // 4. Update local state immediately so it disappears from the list
+      setReps(prev => prev.filter(r => (r.name || '').trim().toLowerCase() !== normalizedName && r.id !== targetId));
+      setCashvans(prev => prev.filter(c => (c.name || '').trim().toLowerCase() !== normalizedName && c.id !== targetId));
 
       setDeletingCVItem(null);
-      alert(`هەژماری (${personName}) بەسەرکەوتوویی لە لیستی مەندووب و کاشڤان سڕدرایەوە.\nتەواوی حیسابات، وەسڵەکان و مامەڵەکانی لە دەفتەری حیساباتدا بە پارێزراوی ماونەتەوە.`);
+      alert(`هەژماری (${rawName}) بەسەرکەوتوویی لە لیستی مەندووب و کاشڤان سڕدرایەوە.\nتەواوی حیسابات، وەسڵەکان و قەرزەکانی لە دەفتەری حیساباتدا بە پارێزراوی ماونەتەوە.`);
     } catch (e) {
-      console.error(e);
-      alert('هەڵەیەک ڕوویدا لە سڕینەوە');
+      console.error('Error deleting rep/cashvan:', e);
+      alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە');
     }
   };
 
@@ -2406,36 +2504,39 @@ export default function AdminCashvanView() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
-                <div className="text-xs text-slate-500 font-bold">کۆی ئۆردەرەکانی مەندووب</div>
-                <div className="text-2xl font-black text-slate-900 font-mono mt-1">{orders.length}</div>
+                <div className="text-xs text-slate-500 font-bold">کۆی فرۆشی مەندووب (لە حیسابات)</div>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1" dir="ltr">
+                  {repGrandTotal.toLocaleString()} د.ع
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">({orders.length} داواکاری فرۆشراو)</div>
               </div>
               <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
                 <ShoppingCart size={24} />
               </div>
             </div>
 
-            <div className="bg-amber-50/70 p-5 rounded-2xl border border-amber-200 shadow-sm flex items-center justify-between">
+            <div className="bg-emerald-50/70 p-5 rounded-2xl border border-emerald-200 shadow-sm flex items-center justify-between">
               <div>
-                <div className="text-xs text-amber-800 font-bold">چاوەڕێی تەسفییە و حیسابات</div>
-                <div className="text-2xl font-black text-amber-700 font-mono mt-1" dir="ltr">
-                  {repPendingTotal.toLocaleString()} د.ع
+                <div className="text-xs text-emerald-800 font-bold">فرۆشی نەقد لە حیسابات</div>
+                <div className="text-2xl font-black text-emerald-700 font-mono mt-1" dir="ltr">
+                  {repCashTotal.toLocaleString()} د.ع
                 </div>
-                <div className="text-[11px] text-amber-600 mt-0.5">({repPendingOrders.length} ئۆردەری تەسفییەنەکراو)</div>
+                <div className="text-[11px] text-emerald-600 mt-0.5">({repCashOrders.length} وەسڵی نەقد)</div>
               </div>
-              <div className="p-3 bg-amber-100 text-amber-700 rounded-xl">
-                <History size={24} />
+              <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
+                <DollarSign size={24} />
               </div>
             </div>
 
-            <div className="bg-emerald-50/70 p-5 rounded-2xl border border-emerald-200 shadow-sm flex items-center justify-between">
+            <div className="bg-blue-50/70 p-5 rounded-2xl border border-blue-200 shadow-sm flex items-center justify-between">
               <div>
-                <div className="text-xs text-emerald-800 font-bold">تەسفییەکراو (چووەتە حیسابات)</div>
-                <div className="text-2xl font-black text-emerald-700 font-mono mt-1" dir="ltr">
-                  {repCompletedTotal.toLocaleString()} د.ع
+                <div className="text-xs text-blue-800 font-bold">فرۆشی قەرز لە حیسابات</div>
+                <div className="text-2xl font-black text-blue-700 font-mono mt-1" dir="ltr">
+                  {repDebtTotal.toLocaleString()} د.ع
                 </div>
-                <div className="text-[11px] text-emerald-600 mt-0.5">({repCompletedOrders.length} ئۆردەری تەسفییەکراو)</div>
+                <div className="text-[11px] text-blue-600 mt-0.5">({repDebtOrders.length} وەسڵی قەرز)</div>
               </div>
-              <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
+              <div className="p-3 bg-blue-100 text-blue-700 rounded-xl">
                 <CheckCircle2 size={24} />
               </div>
             </div>
@@ -2446,7 +2547,7 @@ export default function AdminCashvanView() {
                 <div className="text-2xl font-black text-yellow-800 font-mono mt-1">
                   {repTotalGifts} <span className="text-sm font-bold">دانە</span>
                 </div>
-                <div className="text-[11px] text-yellow-700 mt-0.5">({repPendingGifts} دانە چاوەڕێی تەسفییە)</div>
+                <div className="text-[11px] text-yellow-700 mt-0.5">تۆمارکراوە لە حیسابات</div>
               </div>
               <div className="p-3 bg-yellow-200 text-yellow-800 rounded-xl">
                 <Gift size={24} />
@@ -2463,7 +2564,7 @@ export default function AdminCashvanView() {
                   <span>بەکارهێنەرانی سیستەم وەک مەندووب ({unifiedUsers.length} بەکارهێنەر)</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  هەموو بەکارهێنەرێک کە تۆمار کراوە لەم لیستەیە. کلیک لەسەر هەر کەسێک بکە بۆ فلتەرکردنی ئۆردەرەکانی.
+                  سەرجەم ئۆردەر و فرۆشەکانی مەندووب ڕاستەوخۆ دەچنە بەشی حیسابات و لە دەفتەری حیسابات و نەقد/قەرز تۆمار دەکرێن.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -2510,13 +2611,33 @@ export default function AdminCashvanView() {
                           <div className="text-[11px] text-slate-500 font-mono" dir="ltr">{u.phone || u.username || 'بێ ژمارە'}</div>
                         </div>
                       </div>
-                      {u.status === 'deleted' ? (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">سڕاوەتەوە (حسابات پارێزراوە)</span>
-                      ) : u.status === 'disabled' ? (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
-                      ) : isSelected ? (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-600 text-white">دیاریکراو</span>
-                      ) : null}
+                      <div className="flex items-center gap-1.5">
+                        {u.status === 'deleted' ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">سڕاوەتەوە (حسابات پارێزراوە)</span>
+                        ) : u.status === 'disabled' ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
+                        ) : isSelected ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-600 text-white">دیاریکراو</span>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeletingCVItem({
+                              id: u.id,
+                              repId: u.repId,
+                              cvId: u.cvId,
+                              name: u.name,
+                              phone: u.phone,
+                              accessCode: u.accessCode
+                            });
+                          }}
+                          className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                          title="سڕینەوەی ئەم مەندووبە"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200/80 space-y-1.5 text-xs">
@@ -2528,16 +2649,11 @@ export default function AdminCashvanView() {
                         <span className="text-slate-500">کارتۆن و ئۆردەر:</span>
                         <span className="font-bold text-slate-700 font-mono">{u.cartons} کارتۆن ({u.ordersCount} ئۆردەر)</span>
                       </div>
-                      {u.pendingCount > 0 && (
-                        <div className="flex items-center justify-between text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
-                          <span>چاوەڕێی تەسفییە:</span>
-                          <span className="font-bold font-mono" dir="ltr">{(u.pendingAmount || 0).toLocaleString()} د.ع ({u.pendingCount})</span>
-                        </div>
-                      )}
                     </div>
 
-                    <div className="text-center text-[11px] font-bold text-indigo-600">
-                      {isSelected ? '✓ هەڵبژێردراوە (کلیک بکە بۆ لابردن)' : 'کلیک بکە بۆ فلتەرکردن'}
+                    <div className="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200/70">
+                      <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                      <span>ڕاستەوخۆ لە حیسابات تۆمارکراوە</span>
                     </div>
                   </div>
                 );
@@ -2574,23 +2690,23 @@ export default function AdminCashvanView() {
                       repStatusFilter === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    هەموو ({orders.length})
+                    هەموو فرۆشەکان ({orders.length})
                   </button>
                   <button
-                    onClick={() => setRepStatusFilter('pending')}
+                    onClick={() => setRepStatusFilter('cash')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                      repStatusFilter === 'pending' ? 'bg-white text-amber-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      repStatusFilter === 'cash' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    چاوەڕێی تەسفییە ({repPendingOrders.length})
+                    نەقد لە حیسابات ({repCashOrders.length})
                   </button>
                   <button
-                    onClick={() => setRepStatusFilter('completed')}
+                    onClick={() => setRepStatusFilter('debt')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                      repStatusFilter === 'completed' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      repStatusFilter === 'debt' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    تەسفییەکراو ({repCompletedOrders.length})
+                    قەرز لە حیسابات ({repDebtOrders.length})
                   </button>
                 </div>
 
@@ -2706,17 +2822,10 @@ export default function AdminCashvanView() {
                           )}
                         </td>
                         <td className="p-4">
-                          {isCompleted ? (
-                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
-                              <CheckCircle2 size={13} />
-                              تەسفییەکراوە ({order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'})
-                            </span>
-                          ) : (
-                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 flex items-center gap-1 w-fit">
-                              <History size={13} />
-                              چاوەڕێی تەسفییەیە
-                            </span>
-                          )}
+                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
+                            <CheckCircle2 size={13} />
+                            تۆمارکراوە لە حیسابات ({order.paymentStatus === 'cash' || (order as any).paymentType === 'cash' ? 'نەقد' : 'قەرز'})
+                          </span>
                         </td>
                         <td className="p-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
@@ -2731,7 +2840,7 @@ export default function AdminCashvanView() {
                               </button>
                             ) : (
                               <span className="text-xs text-emerald-600 font-bold px-2 py-1 bg-emerald-50 rounded-lg">
-                                تەواوکراوە
+                                تۆمارکراوە لە حیسابات
                               </span>
                             )}
 
@@ -2790,36 +2899,39 @@ export default function AdminCashvanView() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
               <div>
-                <div className="text-xs text-slate-500 font-bold">کۆی فرۆشتنەکانی کاشڤان</div>
-                <div className="text-2xl font-black text-slate-900 font-mono mt-1">{sales.length}</div>
+                <div className="text-xs text-slate-500 font-bold">کۆی فرۆشی کاشڤان (لە حیسابات)</div>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1" dir="ltr">
+                  {cvGrandTotal.toLocaleString()} د.ع
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">({sales.length} وەسڵی فرۆشتن)</div>
               </div>
               <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
                 <Truck size={24} />
               </div>
             </div>
 
-            <div className="bg-amber-50/70 p-5 rounded-2xl border border-amber-200 shadow-sm flex items-center justify-between">
+            <div className="bg-emerald-50/70 p-5 rounded-2xl border border-emerald-200 shadow-sm flex items-center justify-between">
               <div>
-                <div className="text-xs text-amber-800 font-bold">چاوەڕێی حیسابات</div>
-                <div className="text-2xl font-black text-amber-700 font-mono mt-1" dir="ltr">
-                  {cvPendingTotal.toLocaleString()} د.ع
+                <div className="text-xs text-emerald-800 font-bold">فرۆشی نەقد لە حیسابات</div>
+                <div className="text-2xl font-black text-emerald-700 font-mono mt-1" dir="ltr">
+                  {cvCashTotal.toLocaleString()} د.ع
                 </div>
-                <div className="text-[11px] text-amber-600 mt-0.5">({cvPendingSales.length} فرۆشتنی چاوەڕوانکراو)</div>
+                <div className="text-[11px] text-emerald-600 mt-0.5">({cvCashSales.length} وەسڵی نەقد)</div>
               </div>
-              <div className="p-3 bg-amber-100 text-amber-700 rounded-xl">
-                <History size={24} />
+              <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
+                <DollarSign size={24} />
               </div>
             </div>
 
-            <div className="bg-emerald-50/70 p-5 rounded-2xl border border-emerald-200 shadow-sm flex items-center justify-between">
+            <div className="bg-blue-50/70 p-5 rounded-2xl border border-blue-200 shadow-sm flex items-center justify-between">
               <div>
-                <div className="text-xs text-emerald-800 font-bold">چووەتە حیسابات (تەسفییەکراو)</div>
-                <div className="text-2xl font-black text-emerald-700 font-mono mt-1" dir="ltr">
-                  {cvAccountedTotal.toLocaleString()} د.ع
+                <div className="text-xs text-blue-800 font-bold">فرۆشی قەرز لە حیسابات</div>
+                <div className="text-2xl font-black text-blue-700 font-mono mt-1" dir="ltr">
+                  {cvDebtTotal.toLocaleString()} د.ع
                 </div>
-                <div className="text-[11px] text-emerald-600 mt-0.5">({cvAccountedSales.length} فرۆشتنی حیسابکراو)</div>
+                <div className="text-[11px] text-blue-600 mt-0.5">({cvDebtSales.length} وەسڵی قەرز)</div>
               </div>
-              <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl">
+              <div className="p-3 bg-blue-100 text-blue-700 rounded-xl">
                 <CheckCircle2 size={24} />
               </div>
             </div>
@@ -2830,7 +2942,7 @@ export default function AdminCashvanView() {
                 <div className="text-2xl font-black text-yellow-800 font-mono mt-1">
                   {cvTotalGifts} <span className="text-sm font-bold">دانە</span>
                 </div>
-                <div className="text-[11px] text-yellow-700 mt-0.5">({cvPendingGifts} دانە چاوەڕێی حیسابات)</div>
+                <div className="text-[11px] text-yellow-700 mt-0.5">تۆمارکراوە لە حیسابات</div>
               </div>
               <div className="p-3 bg-yellow-200 text-yellow-800 rounded-xl">
                 <Gift size={24} />
@@ -2847,7 +2959,7 @@ export default function AdminCashvanView() {
                   <span>بەکارهێنەرانی سیستەم وەک کاشڤان ({unifiedUsers.length} بەکارهێنەر)</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  هەمان ئەو بەکارهێنەرانەی تۆمارکراون لەگەڵ فرۆشەکانیان وەک کاشڤان. کلیک لەسەر هەر کەسێک بکە بۆ فلتەرکردنی وەسڵەکانی.
+                  سەرجەم فرۆشەکانی کاشڤان ڕاستەوخۆ دەچنە بەشی حیسابات و لە دەفتەری حیسابات و نەقد/قەرز تۆمار دەکرێن.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -2894,13 +3006,33 @@ export default function AdminCashvanView() {
                           <div className="text-[11px] text-slate-500 font-mono" dir="ltr">{u.phone || u.username || 'بێ ژمارە'}</div>
                         </div>
                       </div>
-                      {u.status === 'deleted' ? (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">سڕاوەتەوە (حسابات پارێزراوە)</span>
-                      ) : u.status === 'disabled' ? (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
-                      ) : isSelected ? (
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">دیاریکراو</span>
-                      ) : null}
+                      <div className="flex items-center gap-1.5">
+                        {u.status === 'deleted' ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">سڕاوەتەوە (حسابات پارێزراوە)</span>
+                        ) : u.status === 'disabled' ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">ڕاگیراوە</span>
+                        ) : isSelected ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">دیاریکراو</span>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeletingCVItem({
+                              id: u.id,
+                              repId: u.repId,
+                              cvId: u.cvId,
+                              name: u.name,
+                              phone: u.phone,
+                              accessCode: u.accessCode
+                            });
+                          }}
+                          className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                          title="سڕینەوەی ئەم کاشڤانە"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200/80 space-y-1.5 text-xs">
@@ -2912,16 +3044,11 @@ export default function AdminCashvanView() {
                         <span className="text-slate-500">کارتۆن و وەسڵ:</span>
                         <span className="font-bold text-slate-700 font-mono">{u.cartons} کارتۆن ({u.salesCount} وەسڵ)</span>
                       </div>
-                      {u.pendingCount > 0 && (
-                        <div className="flex items-center justify-between text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
-                          <span>چاوەڕێی حیسابات:</span>
-                          <span className="font-bold font-mono" dir="ltr">{(u.pendingAmount || 0).toLocaleString()} د.ع ({u.pendingCount})</span>
-                        </div>
-                      )}
                     </div>
 
-                    <div className="text-center text-[11px] font-bold text-blue-600">
-                      {isSelected ? '✓ هەڵبژێردراوە (کلیک بکە بۆ لابردن)' : 'کلیک بکە بۆ فلتەرکردن'}
+                    <div className="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200/70">
+                      <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                      <span>ڕاستەوخۆ لە حیسابات تۆمارکراوە</span>
                     </div>
                   </div>
                 );
@@ -2958,23 +3085,23 @@ export default function AdminCashvanView() {
                       cashvanStatusFilter === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    هەموو ({sales.length})
+                    هەموو فرۆشەکان ({sales.length})
                   </button>
                   <button
-                    onClick={() => setCashvanStatusFilter('pending_accounting')}
+                    onClick={() => setCashvanStatusFilter('cash')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                      cashvanStatusFilter === 'pending_accounting' ? 'bg-white text-amber-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      cashvanStatusFilter === 'cash' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    چاوەڕێی حیسابات ({cvPendingSales.length})
+                    نەقد لە حیسابات ({cvCashSales.length})
                   </button>
                   <button
-                    onClick={() => setCashvanStatusFilter('accounted')}
+                    onClick={() => setCashvanStatusFilter('debt')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                      cashvanStatusFilter === 'accounted' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      cashvanStatusFilter === 'debt' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    چووەتە حیسابات ({cvAccountedSales.length})
+                    قەرز لە حیسابات ({cvDebtSales.length})
                   </button>
                 </div>
 
@@ -3090,17 +3217,10 @@ export default function AdminCashvanView() {
                           )}
                         </td>
                         <td className="p-4">
-                          {isAccounted ? (
-                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
-                              <CheckCircle2 size={13} />
-                              چووەتە حیسابات ({sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'})
-                            </span>
-                          ) : (
-                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 flex items-center gap-1 w-fit">
-                              <History size={13} />
-                              چاوەڕێی حیسابات
-                            </span>
-                          )}
+                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
+                            <CheckCircle2 size={13} />
+                            تۆمارکراوە لە حیسابات ({sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'})
+                          </span>
                         </td>
                         <td className="p-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
@@ -3115,7 +3235,7 @@ export default function AdminCashvanView() {
                               </button>
                             ) : (
                               <span className="text-xs text-emerald-600 font-bold px-2 py-1 bg-emerald-50 rounded-lg">
-                                حیسابکراوە
+                                تۆمارکراوە لە حیسابات
                               </span>
                             )}
 

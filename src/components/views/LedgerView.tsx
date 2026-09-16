@@ -54,7 +54,7 @@ export default function LedgerView() {
   const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
   const [expenseSuccessMsg, setExpenseSuccessMsg] = useState('');
 
-  const [dealFilterType, setDealFilterType] = useState<'all' | 'company' | 'market' | 'warehouse' | 'expense'>('all');
+  const [dealFilterType, setDealFilterType] = useState<'all' | 'cash' | 'debt' | 'company' | 'market' | 'warehouse' | 'expense'>('all');
   const [dealFilterName, setDealFilterName] = useState('all');
   const [dealFilterRep, setDealFilterRep] = useState('all');
 
@@ -245,37 +245,26 @@ export default function LedgerView() {
 
   const deals = useMemo(() => {
     let list: any[] = [];
-    fTrans.forEach(t => {
-      const isExp = t.type === 'expense';
-      list.push({
-        id: t.id,
-        sourceCollection: 'transactions',
-        rawItem: t,
-        type: isExp ? 'خەرجی' : (t.type === 'company_paid_debt' ? 'پاردانەوەی کۆمپانیا' : (t.type === 'company_cash' || t.type === 'company_debt' ? 'وەرگرتنی کاڵا' : (t.type === 'income' ? 'داهاتی دەستی' : 'پاردانەوە/قەرز'))),
-        entityType: isExp ? 'expense' : (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'company' : 'market'),
-        entityName: isExp ? (t.description || t.category || 'خەرجی') : (t.relatedEntityId || t.description),
-        personName: isExp 
-          ? (t.receivedBy || 'بەڕێوەبەر') 
-          : (t.cashvanName || (t as any).repName || (['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'کۆمپانیا' : 'بەڕێوەبەر')),
-        amount: t.amount,
-        date: t.date,
-        invoiceNumber: t.invoiceNo ? `#${t.invoiceNo}` : (isExp ? `EXP-${t.id.slice(-4).toUpperCase()}` : ((['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type) ? 'COMP-' : 'TRN-') + t.id.slice(-4).toUpperCase())),
-        invoiceNo: t.invoiceNo,
-        isDeleted: false,
-        deletedBy: ''
-      });
-    });
+    const seenInvoices = new Set<string>();
+
+    // 1. Orders (Rep sales)
     fOrders.forEach(o => {
       const inv = o.invoiceId || o.invoiceNo;
+      const invKey = inv ? String(inv).trim() : null;
+      if (invKey) seenInvoices.add(invKey);
+
+      const isDebt = o.paymentMethod === 'debt';
       list.push({
         id: o.id,
         sourceCollection: 'orders',
         rawItem: o,
-        type: 'فرۆشتنی مەندووب',
+        type: isDebt ? 'قەرز' : 'نەقد',
+        dealCategory: isDebt ? 'debt' : 'cash',
+        channel: 'مەندووب',
         entityType: 'market',
-        entityName: o.marketName,
-        personName: o.repName,
-        amount: o.totalAmount,
+        entityName: o.marketName || 'مارکێت',
+        personName: o.repName || 'مەندووب',
+        amount: o.totalAmount || 0,
         date: o.timestamp,
         invoiceNumber: inv ? `#${inv}` : ('ORD-' + o.id.slice(-4).toUpperCase()),
         invoiceNo: inv,
@@ -283,17 +272,26 @@ export default function LedgerView() {
         deletedBy: o.deletedBy || ''
       });
     });
+
+    // 2. Cashvan Sales
     fCashvan.forEach(c => {
       const inv = c.invoiceNo || c.invoiceId;
+      const invKey = inv ? String(inv).trim() : null;
+      if (invKey && seenInvoices.has(invKey)) return;
+      if (invKey) seenInvoices.add(invKey);
+
+      const isDebt = c.paymentMethod === 'debt';
       list.push({
         id: c.id,
         sourceCollection: 'cashvan_sales',
         rawItem: c,
-        type: 'فرۆشتنی کاشڤان',
+        type: isDebt ? 'قەرز' : 'نەقد',
+        dealCategory: isDebt ? 'debt' : 'cash',
+        channel: 'کاشڤان',
         entityType: 'market',
-        entityName: c.marketName,
-        personName: c.cashvanName,
-        amount: c.totalAmount,
+        entityName: c.marketName || 'مارکێت',
+        personName: c.cashvanName || 'کاشڤان',
+        amount: c.totalAmount || 0,
         date: c.date || c.timestamp,
         invoiceNumber: inv ? `#${inv}` : ('CASH-' + c.id.slice(-4).toUpperCase()),
         invoiceNo: inv,
@@ -301,13 +299,71 @@ export default function LedgerView() {
         deletedBy: c.deletedBy || ''
       });
     });
+
+    // 3. Transactions (Standalone transactions, expenses, company transactions)
+    fTrans.forEach(t => {
+      const inv = t.invoiceNo;
+      const invKey = inv ? String(inv).trim() : null;
+      if (invKey && seenInvoices.has(invKey)) {
+        return; // Skip duplicate transaction for an already processed invoice
+      }
+      if (invKey) seenInvoices.add(invKey);
+
+      const isExp = t.type === 'expense';
+      const isCompany = ['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type);
+      const isDebt = t.type === 'debt' || t.type === 'market_debt';
+
+      let displayType = 'نەقد';
+      let dealCategory = 'cash';
+      if (isExp) {
+        displayType = 'خەرجی';
+        dealCategory = 'expense';
+      } else if (isCompany) {
+        if (t.type === 'company_paid_debt') displayType = 'دانەوەی کۆمپانیا';
+        else if (t.type === 'company_debt') displayType = 'قەرزی کۆمپانیا';
+        else displayType = 'نەقدی کۆمپانیا';
+        dealCategory = 'company';
+      } else if (isDebt) {
+        displayType = 'قەرز';
+        dealCategory = 'debt';
+      } else {
+        displayType = 'نەقد';
+        dealCategory = 'cash';
+      }
+
+      list.push({
+        id: t.id,
+        sourceCollection: 'transactions',
+        rawItem: t,
+        type: displayType,
+        dealCategory: dealCategory,
+        channel: t.cashvanName ? 'کاشڤان' : ((t as any).repName ? 'مەندووب' : 'سەرەکی'),
+        entityType: isExp ? 'expense' : (isCompany ? 'company' : 'market'),
+        entityName: isExp ? (t.description || t.category || 'خەرجی') : (t.relatedEntityId || t.description || 'مارکێت'),
+        personName: isExp 
+          ? (t.receivedBy || 'بەڕێوەبەر') 
+          : (t.cashvanName || (t as any).repName || (isCompany ? 'کۆمپانیا' : 'بەڕێوەبەر')),
+        amount: t.amount || 0,
+        date: t.date,
+        invoiceNumber: t.invoiceNo ? `#${t.invoiceNo}` : (isExp ? `EXP-${t.id.slice(-4).toUpperCase()}` : ((isCompany ? 'COMP-' : 'TRN-') + t.id.slice(-4).toUpperCase())),
+        invoiceNo: t.invoiceNo,
+        isDeleted: false,
+        deletedBy: ''
+      });
+    });
     
     // Filtering
     if (dealFilterType !== 'all') {
-      if (dealFilterType === 'expense') {
-        list = list.filter(d => d.entityType === 'expense' || d.type === 'خەرجی');
-      } else {
-        list = list.filter(d => d.entityType === dealFilterType || d.type.includes(dealFilterType === 'company' ? 'کۆمپانیا' : ''));
+      if (dealFilterType === 'cash') {
+        list = list.filter(d => d.dealCategory === 'cash' || d.type === 'نەقد');
+      } else if (dealFilterType === 'debt') {
+        list = list.filter(d => d.dealCategory === 'debt' || d.type === 'قەرز');
+      } else if (dealFilterType === 'expense') {
+        list = list.filter(d => d.entityType === 'expense' || d.dealCategory === 'expense');
+      } else if (dealFilterType === 'company') {
+        list = list.filter(d => d.entityType === 'company' || d.dealCategory === 'company');
+      } else if (dealFilterType === 'market') {
+        list = list.filter(d => d.entityType === 'market');
       }
     }
     
@@ -845,9 +901,11 @@ export default function LedgerView() {
                 }}
               >
                 <option value="all">هەموو جۆرەکان</option>
+                <option value="cash">نەقد</option>
+                <option value="debt">قەرز</option>
+                <option value="expense">خەرجییەکان</option>
                 <option value="company">کۆمپانیاکان</option>
                 <option value="market">مارکێت/کۆگا</option>
-                <option value="expense">خەرجییەکان</option>
               </select>
               <select
                 className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
@@ -884,14 +942,19 @@ export default function LedgerView() {
                         <td className="px-4 py-4">
                           <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                             d.isDeleted ? 'bg-red-100 text-red-700' :
-                            d.type.includes('خەرجی') ? 'bg-rose-100 text-rose-800 border border-rose-200' :
-                            d.type.includes('مەندووب') ? 'bg-indigo-100 text-indigo-700' :
-                            d.type.includes('کاشڤان') ? 'bg-sky-100 text-sky-700' :
+                            d.type === 'خەرجی' ? 'bg-rose-100 text-rose-800 border border-rose-200' :
+                            d.type === 'نەقد' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                            d.type === 'قەرز' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
                             d.type.includes('کۆمپانیا') ? 'bg-amber-100 text-amber-700' :
                             'bg-slate-100 text-slate-700'
                           }`}>
                             {d.isDeleted ? 'سڕاوەتەوە' : d.type}
                           </span>
+                          {d.channel && (
+                            <span className="text-[10px] text-slate-400 font-normal mr-1.5">
+                              ({d.channel})
+                            </span>
+                          )}
                           {d.isDeleted && <div className="text-[10px] text-red-500 mt-1">لە لایەن: {d.deletedBy}</div>}
                         </td>
                         <td className={`px-4 py-4 font-mono text-xs ${d.isDeleted ? 'text-slate-400 line-through' : 'text-slate-500'}`}>{d.invoiceNumber}</td>

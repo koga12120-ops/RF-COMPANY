@@ -99,13 +99,14 @@ export function generateStatementHtml(entityName: string, transactions: Transact
   const individualRows: GroupedStatementRow[] = [];
 
   sorted.forEach((t) => {
-    let typeLabel = '';
+    let typeLabel = 'نەقد';
     if (t.type.includes('debt') && !t.type.includes('paid')) {
       typeLabel = 'قەرز';
       totalDebt += t.amount || 0;
     } else if (t.type.includes('paid')) {
-      typeLabel = 'واسڵکراو';
+      typeLabel = 'نەقد';
       totalPaid += t.amount || 0;
+      totalCash += t.amount || 0;
     } else {
       typeLabel = 'نەقد';
       totalCash += t.amount || 0;
@@ -114,18 +115,21 @@ export function generateStatementHtml(entityName: string, transactions: Transact
     const cleanInvoice = t.invoiceNo?.trim();
 
     if (cleanInvoice) {
-      const invKey = `${t.type}_${cleanInvoice}`;
+      const invKey = cleanInvoice;
       if (groupedMap.has(invKey)) {
         const existing = groupedMap.get(invKey)!;
         existing.amount += t.amount || 0;
         if (t.date > existing.date) existing.date = t.date;
+        if (t.type.includes('debt') && !t.type.includes('paid')) {
+          existing.typeLabel = 'قەرز';
+        }
       } else {
         groupedMap.set(invKey, {
           date: t.date,
           invoiceNo: cleanInvoice,
           type: t.type,
           typeLabel,
-          notes: t.type.includes('paid') ? 'واسڵکردنی قەرز' : undefined,
+          notes: undefined,
           amount: t.amount || 0,
         });
       }
@@ -135,7 +139,7 @@ export function generateStatementHtml(entityName: string, transactions: Transact
         invoiceNo: undefined,
         type: t.type,
         typeLabel,
-        notes: t.description || (t.type.includes('paid') ? 'واسڵکراو' : '-'),
+        notes: t.description || (t.type.includes('debt') ? 'قەرز' : 'نەقد'),
         amount: t.amount || 0,
       });
     }

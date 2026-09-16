@@ -482,39 +482,45 @@ export default function RepsView() {
 
   const confirmDelete = async () => {
     if (!deletingItem) return;
-    const personName = (deletingItem.name || '').trim();
+    const rawName = (deletingItem.name || '').trim();
+    const normalizedName = rawName.toLowerCase();
+    const targetId = deletingItem.id;
+    const targetUid = deletingItem.uid;
+
     try {
-      // 1. Delete from reps collection by ID and matching name
-      if (deletingItem.id) {
-        try { await deleteDoc(doc(db, 'reps', deletingItem.id)); } catch (e) {}
-      }
-      const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', personName)));
-      for (const d of repSnap.docs) {
-        await deleteDoc(doc(db, 'reps', d.id));
+      // 1. Delete from reps collection (all matching IDs or case-insensitive name)
+      const repsSnap = await getDocs(collection(db, 'reps'));
+      for (const d of repsSnap.docs) {
+        const dName = (d.data().name || '').trim().toLowerCase();
+        if (d.id === targetId || (normalizedName && dName === normalizedName)) {
+          try { await deleteDoc(doc(db, 'reps', d.id)); } catch (e) {}
+        }
       }
 
-      // 2. Delete from cashvans collection by ID and matching name
-      if (deletingItem.id) {
-        try { await deleteDoc(doc(db, 'cashvans', deletingItem.id)); } catch (e) {}
-      }
-      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', personName)));
+      // 2. Delete from cashvans collection (all matching IDs or case-insensitive name)
+      const cvSnap = await getDocs(collection(db, 'cashvans'));
       for (const d of cvSnap.docs) {
-        await deleteDoc(doc(db, 'cashvans', d.id));
+        const dName = (d.data().name || '').trim().toLowerCase();
+        if (d.id === targetId || (normalizedName && dName === normalizedName)) {
+          try { await deleteDoc(doc(db, 'cashvans', d.id)); } catch (e) {}
+        }
       }
 
       // 3. Delete from users collection (authentication/login)
-      if (deletingItem.id) {
-        try { await deleteDoc(doc(db, 'users', deletingItem.id)); } catch (e) {}
-      }
-      const usersSnap = await getDocs(query(collection(db, 'users'), where('name', '==', personName)));
+      const usersSnap = await getDocs(collection(db, 'users'));
       for (const d of usersSnap.docs) {
-        await deleteDoc(doc(db, 'users', d.id));
+        const dData = d.data();
+        const dName = (dData.name || '').trim().toLowerCase();
+        const dUser = (dData.username || '').trim().toLowerCase();
+        if (d.id === targetId || d.id === targetUid || (normalizedName && (dName === normalizedName || dUser === normalizedName))) {
+          try { await deleteDoc(doc(db, 'users', d.id)); } catch (e) {}
+        }
       }
 
-      // Update state locally immediately
-      setReps(prev => prev.filter(r => (r.name || '').trim().toLowerCase() !== personName.toLowerCase() && r.id !== deletingItem.id));
+      // Update state locally immediately so it disappears from the list
+      setReps(prev => prev.filter(r => (r.name || '').trim().toLowerCase() !== normalizedName && r.id !== targetId));
 
-      showToast(`هەژماری (${personName}) بەسەرکەوتوویی لە لیستی مەندووب و کاشڤان سڕدرایەوە. تەواوی حساباتەکانی لە دەفتەر حساب پارێزراون.`);
+      showToast(`هەژماری (${rawName}) بەسەرکەوتوویی لە لیستی مەندووب و کاشڤان سڕدرایەوە. تەواوی حساباتەکانی لە دەفتەر حساب پارێزراون.`);
       setDeletingItem(null);
     } catch (error) {
       console.error(error);
