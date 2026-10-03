@@ -447,187 +447,318 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
 
   const salesRowsHtml = data.sales.map((s, idx) => `
     <tr>
-      <td style="text-align:center;font-weight:bold;color:#64748b;">${idx + 1}</td>
-      <td style="font-weight:bold;color:#0f172a;">${s.marketName}</td>
-      <td dir="ltr" style="text-align:center;font-family:monospace;font-size:13px;color:#4338ca;">${s.invoiceNo ? `#${s.invoiceNo}` : '-'}</td>
-      <td style="text-align:center;">
-        <span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:bold;${s.paymentType.includes('نەقد') ? 'background:#dcfce7;color:#166534;' : 'background:#fef3c7;color:#92400e;'}">
-          ${s.paymentType}
+      <td style="text-align: center; color: #64748b; font-size: 10px;">${idx + 1}</td>
+      <td style="text-align: right; font-weight: bold;">
+        ${s.marketName}
+        ${s.invoiceNo ? `<div style="font-family: monospace; font-size: 10px; color: #4338ca;">#${s.invoiceNo}</div>` : ''}
+        ${s.itemsSummary ? `<div style="font-size: 9.5px; color: #64748b; font-weight: normal;">${s.itemsSummary}</div>` : ''}
+      </td>
+      <td style="text-align: center;">
+        <span style="display: inline-block; padding: 1px 4px; border-radius: 4px; font-size: 9.5px; font-weight: bold; ${s.paymentType.includes('نەقد') ? 'background: #dcfce7; color: #166534;' : 'background: #fef3c7; color: #92400e;'}">
+          ${s.paymentType.includes('نەقد') ? 'نەقد' : 'قەرز'}
         </span>
       </td>
-      <td dir="ltr" style="text-align:left;font-weight:bold;color:#0f172a;">${s.amount.toLocaleString()} د.ع</td>
+      <td dir="ltr" style="text-align: left; font-weight: bold;">${s.amount.toLocaleString()}</td>
     </tr>
-  `).join('') || '<tr><td colspan="5" style="text-align:center;padding:12px;color:#94a3b8;">هیچ فرۆشتنێک لەم بەروارەدا تۆمار نەکراوە</td></tr>';
+  `).join('') || '<tr><td colspan="4" style="text-align: center; padding: 8px; color: #94a3b8; font-size: 10.5px;">هیچ فرۆشتنێک تۆمار نەکراوە</td></tr>';
 
   const collectionRowsHtml = data.collections.map((c, idx) => `
     <tr>
-      <td style="text-align:center;font-weight:bold;color:#64748b;">${idx + 1}</td>
-      <td style="font-weight:bold;color:#0f172a;">${c.marketName}</td>
-      <td dir="ltr" style="text-align:center;font-family:monospace;font-size:13px;color:#059669;">${c.invoiceNo ? `#${c.invoiceNo}` : '-'}</td>
-      <td style="color:#64748b;font-size:13px;">${c.notes || 'وەرگرتنەوەی قەرز'}</td>
-      <td dir="ltr" style="text-align:left;font-weight:bold;color:#166534;">${c.amount.toLocaleString()} د.ع</td>
+      <td style="text-align: center; color: #64748b; font-size: 10px;">${idx + 1}</td>
+      <td style="text-align: right; font-weight: bold;">
+        ${c.marketName}
+        ${c.invoiceNo ? `<span style="font-family: monospace; font-size: 10px; color: #059669; margin-right: 4px;">#${c.invoiceNo}</span>` : ''}
+        ${c.notes ? `<div style="font-size: 9.5px; color: #64748b; font-weight: normal;">${c.notes}</div>` : ''}
+      </td>
+      <td dir="ltr" style="text-align: left; font-weight: bold; color: #166534;">${c.amount.toLocaleString()}</td>
     </tr>
-  `).join('') || '<tr><td colspan="5" style="text-align:center;padding:12px;color:#94a3b8;">هیچ قەرزێک لەم بەروارەدا وەرنەگیراوەتەوە</td></tr>';
+  `).join('') || '<tr><td colspan="3" style="text-align: center; padding: 8px; color: #94a3b8; font-size: 10.5px;">هیچ قەرزێک وەرنەگیراوەتەوە</td></tr>';
 
   const giftRowsHtml = (data.gifts && data.gifts.length > 0) ? data.gifts.map((g, idx) => `
     <tr style="background: #fefce8;">
-      <td style="text-align:center;font-weight:bold;color:#854d0e;">${idx + 1}</td>
-      <td style="font-weight:bold;color:#713f12;">🎁 ${g.name}</td>
-      <td style="text-align:center;font-weight:bold;color:#854d0e;">${g.quantity} ${g.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</td>
-      <td style="font-weight:medium;color:#334155;">${g.marketName}</td>
-      <td dir="ltr" style="text-align:center;font-family:monospace;font-size:13px;color:#a16207;">${g.invoiceNo ? `#${g.invoiceNo}` : '-'}</td>
+      <td style="text-align: center; font-weight: bold; color: #854d0e; font-size: 10px;">${idx + 1}</td>
+      <td style="font-weight: bold; color: #713f12;">
+        🎁 ${g.name}
+        <div style="font-size: 9.5px; color: #854d0e; font-weight: normal;">${g.marketName}</div>
+      </td>
+      <td style="text-align: center; font-weight: bold; color: #854d0e;">${g.quantity} ${g.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</td>
     </tr>
   `).join('') : '';
 
   return `
-    <html dir="rtl">
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ckb">
       <head>
-        <title></title>
         <meta charset="utf-8" />
+        <title>زانیاری فرۆشەکان - ${data.repName}</title>
         <style>
-          body { font-family: Tahoma, 'Segoe UI', Arial, sans-serif; padding: 24px; color: #1e293b; line-height: 1.5; background: #fff; }
-          .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #3b82f6; padding-bottom: 12px; }
-          .header h2 { margin: 0 0 4px 0; color: #1e3a8a; font-size: 24px; }
-          .header h3 { margin: 0; color: #2563eb; font-size: 17px; font-weight: bold; }
-          .header p { margin: 4px 0 0 0; font-size: 12px; color: #64748b; }
-          
-          .info-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; margin-bottom: 20px; }
-          .info-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
-          .info-row:last-child { margin-bottom: 0; }
-          .label { color: #64748b; font-weight: 500; }
-          .value { font-weight: bold; color: #0f172a; }
-
-          .section-title { font-size: 16px; font-weight: bold; color: #1e293b; margin: 18px 0 8px 0; display: flex; items-center; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
-          
-          table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-          th { background: #f1f5f9; padding: 8px 12px; text-align: right; border: 1px solid #cbd5e1; font-size: 13px; color: #334155; }
-          td { padding: 8px 12px; border: 1px solid #e2e8f0; font-size: 13px; }
-          
-          .summary-box { background: #f0fdf4; border: 2px solid #86efac; border-radius: 12px; padding: 16px; margin: 24px 0; }
-          .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-          .total-highlight { border-top: 2px dashed #4ade80; padding-top: 10px; margin-top: 10px; font-size: 18px; font-weight: bold; color: #166534; }
-          
-          .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 10px; }
-          .sig-block { text-align: center; }
-          .sig-line { margin-top: 35px; border-top: 1px dashed #64748b; width: 160px; }
-          
-          @media print {
-            body { padding: 10px; }
-            @page { margin: 15mm; }
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          @page { 
+            size: 80mm auto; 
+            margin: 0; 
+          }
+          @media print { 
+            html, body { 
+              width: 76mm !important; 
+              max-width: 76mm !important; 
+              margin: 0 auto !important; 
+              padding: 2mm 1mm !important; 
+            } 
+            .no-print { display: none !important; }
+          }
+          body { 
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            font-size: 11px; 
+            direction: rtl; 
+            text-align: right; 
+            padding: 6px 4px; 
+            color: #000; 
+            background: #fff; 
+            line-height: 1.35;
+            width: 76mm;
+            max-width: 76mm;
+            margin: 0 auto;
+          }
+          .thermal-box {
+            border: 1px dashed #000;
+            border-radius: 6px;
+            padding: 6px;
+          }
+          .invoice-badge-box {
+            text-align: center;
+            font-weight: 900;
+            font-size: 12px;
+            margin-bottom: 6px;
+            background: #0f172a;
+            color: #fff;
+            padding: 3px;
+            border-radius: 4px;
+          }
+          .info-grid {
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 6px;
+            font-size: 10.5px;
+            margin-bottom: 8px;
+          }
+          .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+          }
+          .info-row .label {
+            color: #475569;
+            font-weight: 600;
+          }
+          .info-row .val {
+            font-weight: 800;
+            color: #000;
+          }
+          .section-title {
+            font-size: 11px;
+            font-weight: 900;
+            color: #0f172a;
+            background: #f1f5f9;
+            border-right: 3px solid #3b82f6;
+            padding: 3px 6px;
+            margin: 8px 0 4px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-bottom: 6px; 
+            font-size: 10.5px; 
+          }
+          th { 
+            background: #f8fafc; 
+            color: #0f172a; 
+            padding: 4px 2px; 
+            border-top: 1px solid #000; 
+            border-bottom: 1px solid #000; 
+            font-weight: 800; 
+          }
+          td { 
+            padding: 4px 2px; 
+            border-bottom: 1px dashed #cbd5e1; 
+          }
+          .summary-box {
+            background: #f8fafc;
+            border: 1.5px solid #0f172a;
+            border-radius: 6px;
+            padding: 6px;
+            margin-top: 8px;
+            font-size: 11px;
+          }
+          .summary-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+          }
+          .summary-row.total-hand {
+            border-top: 1.5px dashed #0f172a;
+            margin-top: 4px;
+            padding-top: 4px;
+            font-size: 12.5px;
+            font-weight: 900;
+            color: #15803d;
+            background: #dcfce7;
+            padding: 4px;
+            border-radius: 4px;
+          }
+          .signatures {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 18px;
+            padding-top: 6px;
+            font-size: 10px;
+            text-align: center;
+          }
+          .sig-line {
+            margin-top: 20px;
+            border-top: 1px dashed #000;
+            width: 90px;
+          }
+          .footer-note {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 10px;
+            color: #475569;
           }
         </style>
       </head>
       <body>
-        ${renderReceiptHeaderHtml({
-          title: `وەسڵی ڕۆژانەی کار و حساباتی ${data.roleTitle}`,
-          repName: data.repName,
-          repPhone: data.repPhone,
-          date: Date.now()
-        })}
+        <div class="thermal-box">
+          ${renderReceiptHeaderHtml({
+            title: `زانیاری فرۆش و کار (${data.roleTitle})`,
+            repName: data.repName,
+            repPhone: data.repPhone,
+            date: data.date,
+            isThermal: true
+          })}
 
-        <div class="info-box">
-          <div class="info-row">
-            <span class="label">ناوی ${data.roleTitle}:</span>
-            <span class="value">${data.repName}</span>
+          <div class="invoice-badge-box">
+            زانیاری لەسەر فرۆشەکان و حسابات
           </div>
-          <div class="info-row">
-            <span class="label">بەرواری کار:</span>
-            <span class="value" dir="ltr">${format(data.date, 'yyyy-MM-dd')}</span>
-          </div>
-        </div>
 
-        <div class="section-title">
-          <span>📦 لیستی فرۆشتنەکانی ئەمڕۆ (${data.sales.length} وەسڵ)</span>
-          <span dir="ltr" style="font-size: 14px; color: #4338ca;">کۆی فرۆش: ${totalSalesAmount.toLocaleString()} د.ع</span>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 40px; text-align: center;">#</th>
-              <th>ناوی مارکێت / شوێن</th>
-              <th style="width: 130px; text-align: center;">ژمارەی وەسڵ</th>
-              <th style="width: 100px; text-align: center;">جۆری پارەدان</th>
-              <th style="width: 140px; text-align: left;">بڕی پارە</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${salesRowsHtml}
-          </tbody>
-        </table>
+          <div class="info-grid">
+            <div class="info-row">
+              <span class="label">ناوی ${data.roleTitle}:</span>
+              <span class="val">${data.repName}</span>
+            </div>
+            <div class="info-row">
+              <span class="label">بەرواری کار:</span>
+              <span class="val" dir="ltr">${format(data.date, 'yyyy/MM/dd')}</span>
+            </div>
+            <div class="info-row">
+              <span class="label">ژمارەی وەسڵەکان:</span>
+              <span class="val" dir="ltr">${data.sales.length} وەسڵ</span>
+            </div>
+          </div>
 
-        <div class="section-title">
-          <span>💰 لیستی قەرزە وەرگیراوەکان لە مارکێتەکان (${data.collections.length} پسوڵە)</span>
-          <span dir="ltr" style="font-size: 14px; color: #166534;">کۆی قەرزی وەرگیراو: ${totalCollectedDebt.toLocaleString()} د.ع</span>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 40px; text-align: center;">#</th>
-              <th>ناوی مارکێت / کڕیار</th>
-              <th style="width: 130px; text-align: center;">ژمارەی وەسڵ</th>
-              <th>تێبینی / وردەکاری</th>
-              <th style="width: 140px; text-align: left;">بڕی پارە</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${collectionRowsHtml}
-          </tbody>
-        </table>
+          <div class="section-title">
+            <span>📦 لیستی فرۆشتنەکان</span>
+            <span dir="ltr" style="font-family: monospace;">${totalSalesAmount.toLocaleString()} د.ع</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 18px; text-align: center;">#</th>
+                <th style="text-align: right;">مارکێت / وەسڵ</th>
+                <th style="width: 42px; text-align: center;">شێواز</th>
+                <th style="width: 65px; text-align: left;">بڕ (د.ع)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${salesRowsHtml}
+            </tbody>
+          </table>
 
-        ${(data.gifts && data.gifts.length > 0) ? `
-        <div class="section-title" style="color: #854d0e; border-bottom: 2px solid #fde047;">
-          <span>🎁 لیستی کاڵا و بڕی هەدیە دراوەکان (${totalGiftItemsCount} دانە)</span>
-          <span style="font-size: 13px; background: #fef08a; color: #713f12; padding: 2px 8px; border-radius: 6px; font-weight: bold;">تێچووی وەرگیراو: ٠ د.ع</span>
-        </div>
-        <table>
-          <thead>
-            <tr style="background: #fef9c3;">
-              <th style="width: 40px; text-align: center; color: #854d0e;">#</th>
-              <th style="text-align: right; color: #854d0e;">ناوی کاڵای هەدیە</th>
-              <th style="width: 120px; text-align: center; color: #854d0e;">بڕی هەدیە</th>
-              <th style="text-align: right; color: #854d0e;">ناوی مارکێت / شوێن</th>
-              <th style="width: 130px; text-align: center; color: #854d0e;">ژمارەی وەسڵ</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${giftRowsHtml}
-          </tbody>
-        </table>
-        ` : ''}
-
-        <div class="summary-box">
-          <div class="summary-row">
-            <span>کۆی فرۆشتنی نەقد:</span>
-            <span dir="ltr" style="font-weight: bold; color: #166534;">${totalCashSales.toLocaleString()} د.ع</span>
+          ${data.collections && data.collections.length > 0 ? `
+          <div class="section-title">
+            <span>💰 قەرزی وەرگیراو</span>
+            <span dir="ltr" style="font-family: monospace; color: #166534;">${totalCollectedDebt.toLocaleString()} د.ع</span>
           </div>
-          <div class="summary-row">
-            <span>کۆی فرۆشتنی بە قەرز:</span>
-            <span dir="ltr" style="font-weight: bold; color: #b45309;">${totalDebtSales.toLocaleString()} د.ع</span>
-          </div>
-          <div class="summary-row">
-            <span>کۆی قەرزی وەرگیراوە لە مارکێتەکان (کاش):</span>
-            <span dir="ltr" style="font-weight: bold; color: #166534;">${totalCollectedDebt.toLocaleString()} د.ع</span>
-          </div>
-          ${totalGiftItemsCount > 0 ? `
-          <div class="summary-row" style="background: #fef9c3; padding: 6px 10px; border-radius: 8px; border: 1px solid #fde047; margin: 8px 0;">
-            <span style="font-weight: bold; color: #854d0e;">🎁 کۆی گشتی بڕی هەدیەکان (بێ بەرامبەر):</span>
-            <span style="font-weight: bold; color: #854d0e;">${totalGiftItemsCount} دانە</span>
-          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 18px; text-align: center;">#</th>
+                <th style="text-align: right;">مارکێت / تێبینی</th>
+                <th style="width: 65px; text-align: left;">بڕ (د.ع)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${collectionRowsHtml}
+            </tbody>
+          </table>
           ` : ''}
-          <div class="summary-row total-highlight">
-            <span>کۆی گشتی پارەی نەقد بۆ ڕادەستکردن بە بەڕێوەبەر:</span>
-            <span dir="ltr">${totalCashInHand.toLocaleString()} د.ع</span>
-          </div>
-        </div>
 
-        <div class="signatures">
-          <div class="sig-block">
-            <div>واژووی ${data.roleTitle} (${data.repName})</div>
-            <div class="sig-line"></div>
+          ${data.gifts && data.gifts.length > 0 ? `
+          <div class="section-title" style="background: #fef9c3; border-right-color: #eab308;">
+            <span style="color: #854d0e;">🎁 کاڵای هەدیە (${totalGiftItemsCount})</span>
+            <span style="font-size: 10px; color: #854d0e;">٠ د.ع</span>
           </div>
-          <div class="sig-block">
-            <div>واژووی بەڕێوەبەر / وردبین</div>
-            <div class="sig-line"></div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 18px; text-align: center;">#</th>
+                <th style="text-align: right;">کاڵا / مارکێت</th>
+                <th style="width: 55px; text-align: center;">بڕ</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${giftRowsHtml}
+            </tbody>
+          </table>
+          ` : ''}
+
+          <div class="summary-box">
+            <div class="summary-row">
+              <span style="color: #475569;">فرۆشتنی نەقد:</span>
+              <strong dir="ltr" style="color: #166534;">${totalCashSales.toLocaleString()} د.ع</strong>
+            </div>
+            <div class="summary-row">
+              <span style="color: #475569;">فرۆشتنی بە قەرز:</span>
+              <strong dir="ltr" style="color: #b45309;">${totalDebtSales.toLocaleString()} د.ع</strong>
+            </div>
+            <div class="summary-row">
+              <span style="color: #475569;">کۆی گشتی فرۆش:</span>
+              <strong dir="ltr" style="color: #000;">${totalSalesAmount.toLocaleString()} د.ع</strong>
+            </div>
+            ${totalCollectedDebt > 0 ? `
+            <div class="summary-row">
+              <span style="color: #475569;">قەرزی وەرگیراو:</span>
+              <strong dir="ltr" style="color: #166534;">+${totalCollectedDebt.toLocaleString()} د.ع</strong>
+            </div>
+            ` : ''}
+            ${totalGiftItemsCount > 0 ? `
+            <div class="summary-row" style="color: #854d0e;">
+              <span>کۆی عەدەدی هەدیە:</span>
+              <strong>${totalGiftItemsCount} دانە</strong>
+            </div>
+            ` : ''}
+            <div class="summary-row total-hand">
+              <span>کۆی پارەی نەقد (دەست):</span>
+              <span dir="ltr">${totalCashInHand.toLocaleString()} د.ع</span>
+            </div>
+          </div>
+
+          <div class="signatures">
+            <div>
+              <div>واژووی ${data.roleTitle}</div>
+              <div class="sig-line"></div>
+            </div>
+            <div>
+              <div>واژووی بەڕێوەبەر</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+
+          <div class="footer-note">
+            کۆمپانیای RF بۆ بازرگانی گشتی
           </div>
         </div>
 
@@ -641,7 +772,7 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
 
 export function printDailyRepReceiptPopup(data: DailyRepActivityData) {
   const html = generateDailyRepReceiptHtml(data);
-  const win = window.open('', '_blank');
+  const win = window.open('', '_blank', 'width=420,height=750');
   if (win) {
     win.document.write(html);
     win.document.close();

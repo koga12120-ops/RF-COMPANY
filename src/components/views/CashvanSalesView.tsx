@@ -332,10 +332,10 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
       totalItemsCount += item.quantity || 0;
       return `
         <tr>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${item.quantity}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border-bottom: 1px dashed #cbd5e1; padding: 4px 1px; font-size: 10px; color: #64748b;">${idx + 1}</td>
+          <td style="text-align: right; border-bottom: 1px dashed #cbd5e1; padding: 4px 2px; font-weight: bold; font-size: 11px; word-break: break-word;">${item.name}</td>
+          <td style="text-align: center; border-bottom: 1px dashed #cbd5e1; padding: 4px 1px; font-weight: bold; font-size: 11px; white-space: nowrap;">${item.quantity}</td>
+          <td style="text-align: center; border-bottom: 1px dashed #cbd5e1; padding: 4px 1px; font-size: 10.5px; white-space: nowrap;">${unitLabel}</td>
         </tr>
       `;
     }).join('');
@@ -353,13 +353,24 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
               html, body {
                 width: 76mm !important;
                 max-width: 76mm !important;
+                min-width: 76mm !important;
                 margin: 0 auto !important;
-                padding: 2mm 1mm !important;
+                padding: 0 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+              .receipt-container {
+                width: 76mm !important;
+                max-width: 76mm !important;
+                min-width: 76mm !important;
+                margin: 0 auto !important;
+                padding: 1.5mm 1mm !important;
+                border: none !important;
               }
               .no-print { display: none !important; }
             }
             body {
-              font-family: system-ui, -apple-system, sans-serif;
+              font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
               font-size: 11.5px;
               color: #000;
               background: #fff;
@@ -370,11 +381,17 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
               margin: 0 auto;
               direction: rtl;
               text-align: right;
+              -webkit-font-smoothing: antialiased;
+            }
+            .receipt-container {
+              width: 76mm;
+              max-width: 76mm;
+              margin: 0 auto;
             }
             .thermal-box {
               border: 1px dashed #000;
               border-radius: 6px;
-              padding: 6px;
+              padding: 6px 5px;
             }
             .invoice-badge-box {
               text-align: center;
@@ -383,126 +400,129 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
               margin-bottom: 6px;
               background: #9f1239;
               color: #fff;
-              padding: 3px;
+              padding: 3px 6px;
               border-radius: 4px;
             }
             .meta-grid {
-              background: #f8fafc;
-              border: 1px solid #cbd5e1;
-              border-radius: 6px;
-              padding: 6px;
+              border-bottom: 1.5px dashed #000;
+              padding-bottom: 5px;
               font-size: 11px;
-              margin-bottom: 8px;
+              margin-bottom: 6px;
             }
             .meta-item {
               display: flex;
               justify-content: space-between;
-              padding: 2px 0;
+              padding: 1.5px 0;
             }
-            table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 11px; }
-            th { background-color: #f1f5f9; color: #0f172a; padding: 5px 3px; border-top: 1px solid #000; border-bottom: 1px solid #000; font-weight: 800; }
-            td { padding: 5px 3px; border-bottom: 1px dashed #cbd5e1; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; font-size: 11px; }
+            th { background-color: #f1f5f9; color: #0f172a; padding: 4px 2px; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000; font-weight: 900; font-size: 10.5px; }
+            td { padding: 4px 2px; border-bottom: 1px dashed #cbd5e1; font-size: 10.5px; }
             .summary-box {
-              padding: 6px 8px;
+              padding: 5px 6px;
               background: #fff1f2;
               border: 1.5px solid #e11d48;
-              border-radius: 6px;
+              border-radius: 4px;
               display: flex;
               justify-content: space-between;
               font-size: 12px;
               font-weight: bold;
-              margin-top: 8px;
+              margin-top: 6px;
             }
             .notes-box {
-              margin-top: 8px;
-              padding: 6px;
+              margin-top: 6px;
+              padding: 5px;
               background: #fffbeb;
               border: 1px solid #fde68a;
-              border-radius: 6px;
-              font-size: 10.5px;
+              border-radius: 4px;
+              font-size: 10px;
               color: #92400e;
             }
             .signatures {
               margin-top: 16px;
               display: flex;
               justify-content: space-between;
-              font-size: 10px;
+              font-size: 10.5px;
+              font-weight: bold;
               text-align: center;
             }
             .sig-line {
-              border-top: 1px dashed #000;
-              margin-top: 20px;
+              border-top: 1.5px dashed #000;
+              margin-top: 18px;
               padding-top: 4px;
               font-weight: bold;
               width: 85px;
             }
             .footer-note {
               text-align: center;
-              margin-top: 10px;
+              margin-top: 12px;
+              border-top: 1px dashed #cbd5e1;
+              padding-top: 5px;
               font-size: 10px;
               color: #475569;
             }
           </style>
         </head>
         <body>
-          <div class="thermal-box">
-            ${renderReceiptHeaderHtml({
-              title: 'وەسڵی گەڕاندنەوەی کاڵا بۆ کۆگا',
-              repName: ret.cashvanName,
-              repPhone: (getStoredSession() as any)?.phone || '',
-              invoiceNo: ret.returnNo || ('RET-' + ret.id.slice(-6)),
-              date: ret.date,
-              isThermal: true
-            })}
+          <div class="receipt-container">
+            <div class="thermal-box">
+              ${renderReceiptHeaderHtml({
+                title: 'وەسڵی گەڕاندنەوەی کاڵا بۆ کۆگا',
+                repName: ret.cashvanName,
+                repPhone: (getStoredSession() as any)?.phone || '',
+                invoiceNo: ret.returnNo || ('RET-' + ret.id.slice(-6)),
+                date: ret.date,
+                isThermal: true
+              })}
 
-            <div class="invoice-badge-box">
-              وەسڵی گەڕاندنەوە بۆ کۆگا
-            </div>
-
-            <div class="meta-grid">
-              <div class="meta-item"><span>کاشڤان:</span> <strong>${ret.cashvanName}</strong></div>
-              <div class="meta-item"><span>ژمارەی وەسڵ:</span> <strong dir="ltr">#${ret.returnNo || ('RET-' + ret.id.slice(-6))}</strong></div>
-              <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(ret.date, 'yyyy/MM/dd HH:mm')}</span></div>
-            </div>
-
-            <table>
-              <thead>
-                <tr>
-                  <th style="width: 25px; text-align: center;">#</th>
-                  <th style="text-align: right;">ناوی کاڵا</th>
-                  <th style="text-align: center; width: 65px;">بڕ</th>
-                  <th style="text-align: center; width: 55px;">یەکە</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${itemsHtml}
-              </tbody>
-            </table>
-
-            <div class="summary-box">
-              <span>کۆی گشتی بڕی گەڕاوە:</span>
-              <span dir="ltr" style="color: #be123c;">${totalItemsCount}</span>
-            </div>
-
-            ${ret.notes ? `
-              <div class="notes-box">
-                <strong>تێبینی:</strong> ${ret.notes}
+              <div class="invoice-badge-box">
+                وەسڵی گەڕاندنەوە بۆ کۆگا
               </div>
-            ` : ''}
 
-            <div class="signatures">
-              <div>
-                <div>واژووی کاشڤان</div>
-                <div class="sig-line"></div>
+              <div class="meta-grid">
+                <div class="meta-item"><span>کاشڤان:</span> <strong>${ret.cashvanName}</strong></div>
+                <div class="meta-item"><span>ژمارەی وەسڵ:</span> <strong dir="ltr">#${ret.returnNo || ('RET-' + ret.id.slice(-6))}</strong></div>
+                <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(ret.date, 'yyyy/MM/dd HH:mm')}</span></div>
               </div>
-              <div>
-                <div>واژووی کۆگادار</div>
-                <div class="sig-line"></div>
-              </div>
-            </div>
 
-            <div class="footer-note">
-              کۆمپانیای RF بۆ بازرگانی گشتی
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 8%; text-align: center;">#</th>
+                    <th style="width: 52%; text-align: right;">ناوی کاڵا</th>
+                    <th style="width: 20%; text-align: center;">بڕ</th>
+                    <th style="width: 20%; text-align: center;">یەکە</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${itemsHtml}
+                </tbody>
+              </table>
+
+              <div class="summary-box">
+                <span>کۆی گشتی بڕی گەڕاوە:</span>
+                <span dir="ltr" style="color: #be123c;">${totalItemsCount}</span>
+              </div>
+
+              ${ret.notes ? `
+                <div class="notes-box">
+                  <strong>تێبینی:</strong> ${ret.notes}
+                </div>
+              ` : ''}
+
+              <div class="signatures">
+                <div>
+                  <div>واژووی کاشڤان</div>
+                  <div class="sig-line"></div>
+                </div>
+                <div>
+                  <div>واژووی کۆگادار</div>
+                  <div class="sig-line"></div>
+                </div>
+              </div>
+
+              <div class="footer-note">
+                کۆمپانیای RF بۆ بازرگانی گشتی
+              </div>
             </div>
           </div>
 
@@ -515,7 +535,7 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
       </html>
     `;
 
-    const win = window.open('', '_blank');
+    const win = window.open('', '_blank', 'width=420,height=750');
     if (win) {
       win.document.write(html);
       win.document.close();
