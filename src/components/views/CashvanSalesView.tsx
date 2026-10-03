@@ -345,78 +345,164 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title></title>
+          <title>پسوڵەی گەڕاندنەوە #${ret.returnNo || ret.id.slice(-6)}</title>
           <style>
-            @page { size: A4; margin: 15mm; }
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
-            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; font-size: 24px; color: #0f172a; }
-            .header h2 { margin: 5px 0; font-size: 18px; color: #be123c; }
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #fff1f2; padding: 12px; border-radius: 8px; border: 1px solid #fecdd3; }
-            .meta-item { display: flex; justify-content: space-between; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 8px; text-align: right; }
-            th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
-            .summary-box { padding: 14px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; display: flex; justify-content: space-between; font-size: 15px; font-weight: bold; margin-bottom: 15px; }
-            .notes-box { margin-top: 15px; padding: 12px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; font-size: 13px; color: #92400e; }
-            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; }
-            .sig-line { border-top: 1px dashed #94a3b8; margin-top: 40px; padding-top: 8px; font-weight: bold; }
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            @page { size: 80mm auto; margin: 0; }
             @media print {
-              body { padding: 0; }
-              .no-print { display: none; }
+              html, body {
+                width: 76mm !important;
+                max-width: 76mm !important;
+                margin: 0 auto !important;
+                padding: 2mm 1mm !important;
+              }
+              .no-print { display: none !important; }
+            }
+            body {
+              font-family: system-ui, -apple-system, sans-serif;
+              font-size: 11.5px;
+              color: #000;
+              background: #fff;
+              padding: 6px 4px;
+              line-height: 1.35;
+              width: 76mm;
+              max-width: 76mm;
+              margin: 0 auto;
+              direction: rtl;
+              text-align: right;
+            }
+            .thermal-box {
+              border: 1px dashed #000;
+              border-radius: 6px;
+              padding: 6px;
+            }
+            .invoice-badge-box {
+              text-align: center;
+              font-weight: 900;
+              font-size: 12px;
+              margin-bottom: 6px;
+              background: #9f1239;
+              color: #fff;
+              padding: 3px;
+              border-radius: 4px;
+            }
+            .meta-grid {
+              background: #f8fafc;
+              border: 1px solid #cbd5e1;
+              border-radius: 6px;
+              padding: 6px;
+              font-size: 11px;
+              margin-bottom: 8px;
+            }
+            .meta-item {
+              display: flex;
+              justify-content: space-between;
+              padding: 2px 0;
+            }
+            table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 11px; }
+            th { background-color: #f1f5f9; color: #0f172a; padding: 5px 3px; border-top: 1px solid #000; border-bottom: 1px solid #000; font-weight: 800; }
+            td { padding: 5px 3px; border-bottom: 1px dashed #cbd5e1; }
+            .summary-box {
+              padding: 6px 8px;
+              background: #fff1f2;
+              border: 1.5px solid #e11d48;
+              border-radius: 6px;
+              display: flex;
+              justify-content: space-between;
+              font-size: 12px;
+              font-weight: bold;
+              margin-top: 8px;
+            }
+            .notes-box {
+              margin-top: 8px;
+              padding: 6px;
+              background: #fffbeb;
+              border: 1px solid #fde68a;
+              border-radius: 6px;
+              font-size: 10.5px;
+              color: #92400e;
+            }
+            .signatures {
+              margin-top: 16px;
+              display: flex;
+              justify-content: space-between;
+              font-size: 10px;
+              text-align: center;
+            }
+            .sig-line {
+              border-top: 1px dashed #000;
+              margin-top: 20px;
+              padding-top: 4px;
+              font-weight: bold;
+              width: 85px;
+            }
+            .footer-note {
+              text-align: center;
+              margin-top: 10px;
+              font-size: 10px;
+              color: #475569;
             }
           </style>
         </head>
         <body>
-          ${renderReceiptHeaderHtml({
-            title: 'وەسڵی گەڕاندنەوەی کاڵا لە کاشڤانەوە بۆ کۆگای سەرەکی',
-            subtitle: 'پسوڵەی ڕادەستکردنەوەی کاڵای ماوەی ناو ڤان بە هەمان شێوازی وەرگیراو',
-            repName: ret.cashvanName,
-            repPhone: (getStoredSession() as any)?.phone || '',
-            invoiceNo: ret.returnNo || ('RET-' + ret.id.slice(-6)),
-            date: ret.date
-          })}
+          <div class="thermal-box">
+            ${renderReceiptHeaderHtml({
+              title: 'وەسڵی گەڕاندنەوەی کاڵا بۆ کۆگا',
+              repName: ret.cashvanName,
+              repPhone: (getStoredSession() as any)?.phone || '',
+              invoiceNo: ret.returnNo || ('RET-' + ret.id.slice(-6)),
+              date: ret.date,
+              isThermal: true
+            })}
 
-          <div class="meta-grid">
-            <div class="meta-item"><span>کاشڤان / ڕادەستکار:</span> <strong>${ret.cashvanName}</strong></div>
-            <div class="meta-item"><span>ژمارەی پسوڵەی گەڕانەوە:</span> <strong dir="ltr">${ret.returnNo || ('RET-' + ret.id.slice(-6))}</strong></div>
-            <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(ret.date, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span>جۆری پسوڵە:</span> <strong style="color: #be123c;">گەڕاندنەوە بۆ کۆگا</strong></div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 40px; text-align: center;">#</th>
-                <th>ناوی کاڵای گەڕاوە</th>
-                <th style="text-align: center; width: 110px;">بڕی گەڕاوە</th>
-                <th style="text-align: center; width: 90px;">یەکە</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsHtml}
-            </tbody>
-          </table>
-
-          <div class="summary-box">
-            <span>کۆی گشتی بڕی کاڵا گەڕاوەکان:</span>
-            <span dir="ltr" style="color: #be123c;">${totalItemsCount} دانە</span>
-          </div>
-
-          ${ret.notes ? `
-            <div class="notes-box">
-              <strong>تێبینی گەڕاندنەوە:</strong> ${ret.notes}
+            <div class="invoice-badge-box">
+              وەسڵی گەڕاندنەوە بۆ کۆگا
             </div>
-          ` : ''}
 
-          <div class="signatures">
-            <div>
-              <div>واژۆی کاشڤان (ڕادەستکاری کاڵا)</div>
-              <div class="sig-line">${ret.cashvanName}</div>
+            <div class="meta-grid">
+              <div class="meta-item"><span>کاشڤان:</span> <strong>${ret.cashvanName}</strong></div>
+              <div class="meta-item"><span>ژمارەی وەسڵ:</span> <strong dir="ltr">#${ret.returnNo || ('RET-' + ret.id.slice(-6))}</strong></div>
+              <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(ret.date, 'yyyy/MM/dd HH:mm')}</span></div>
             </div>
-            <div>
-              <div>واژۆی بەرپرسی کۆگا (وەرگری کاڵا)</div>
-              <div class="sig-line">ناو و واژۆی کۆگادار</div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 25px; text-align: center;">#</th>
+                  <th style="text-align: right;">ناوی کاڵا</th>
+                  <th style="text-align: center; width: 65px;">بڕ</th>
+                  <th style="text-align: center; width: 55px;">یەکە</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsHtml}
+              </tbody>
+            </table>
+
+            <div class="summary-box">
+              <span>کۆی گشتی بڕی گەڕاوە:</span>
+              <span dir="ltr" style="color: #be123c;">${totalItemsCount}</span>
+            </div>
+
+            ${ret.notes ? `
+              <div class="notes-box">
+                <strong>تێبینی:</strong> ${ret.notes}
+              </div>
+            ` : ''}
+
+            <div class="signatures">
+              <div>
+                <div>واژووی کاشڤان</div>
+                <div class="sig-line"></div>
+              </div>
+              <div>
+                <div>واژووی کۆگادار</div>
+                <div class="sig-line"></div>
+              </div>
+            </div>
+
+            <div class="footer-note">
+              کۆمپانیای RF بۆ بازرگانی گشتی
             </div>
           </div>
 

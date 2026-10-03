@@ -145,6 +145,16 @@ export default function AdminCashvanView() {
   // Editing & Deleting
   const [editingSale, setEditingSale] = useState<CashvanSale | null>(null);
   const [editSaleAmount, setEditSaleAmount] = useState<string>('');
+  const [editSaleItems, setEditSaleItems] = useState<{
+    itemId: string;
+    name: string;
+    quantity: number;
+    unit?: 'carton' | 'packet';
+    price: number;
+    barcode?: string;
+    isGift?: boolean;
+  }[]>([]);
+  const [editSaleSearchTerm, setEditSaleSearchTerm] = useState('');
   const [deletingSale, setDeletingSale] = useState<CashvanSale | null>(null);
 
   const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
@@ -817,23 +827,151 @@ export default function AdminCashvanView() {
     }
   };
 
-  // --- Edit Cashvan Sale Amount ---
+  // --- Edit Cashvan Sale with Items ---
+  const handleOpenEditSale = (sale: CashvanSale) => {
+    setEditingSale(sale);
+    setEditSaleAmount((sale.totalAmount || 0).toString());
+    setEditSaleSearchTerm('');
+    setEditSaleItems((sale.items || []).map(it => ({
+      itemId: it.itemId || (it as any).id || '',
+      name: it.name || '',
+      quantity: it.quantity || 1,
+      unit: it.unit || 'carton',
+      price: it.price || 0,
+      barcode: it.barcode || '',
+      isGift: !!it.isGift
+    })));
+  };
+
+  const handleUpdateAdminEditSaleItemQty = (index: number, delta: number) => {
+    setEditSaleItems(prev => prev.map((item, idx) => {
+      if (idx !== index) return item;
+      const newQty = Math.max(0.5, (item.quantity || 0) + delta);
+      return { ...item, quantity: newQty };
+    }));
+  };
+
+  const handleUpdateAdminEditSaleItemDirectQty = (index: number, val: number) => {
+    const cleanQty = Math.max(0, val);
+    setEditSaleItems(prev => prev.map((item, idx) => {
+      if (idx !== index) return item;
+      return { ...item, quantity: cleanQty };
+    }));
+  };
+
+  const handleUpdateAdminEditSaleItemUnit = (index: number, newUnit: 'carton' | 'packet') => {
+    setEditSaleItems(prev => prev.map((item, idx) => {
+      if (idx !== index) return item;
+      const catItem = items.find(i => i.id === item.itemId || i.name === item.name);
+      let newPrice = item.price;
+      if (catItem) {
+        newPrice = newUnit === 'packet'
+          ? (catItem.packetSellingPrice || catItem.sellingPrice || item.price)
+          : (catItem.cartonSellingPrice || catItem.sellingPrice || item.price);
+      }
+      return { ...item, unit: newUnit, price: newPrice };
+    }));
+  };
+
+  const handleUpdateAdminEditSaleItemPrice = (index: number, newPrice: number) => {
+    setEditSaleItems(prev => prev.map((item, idx) => {
+      if (idx !== index) return item;
+      return { ...item, price: Math.max(0, newPrice) };
+    }));
+  };
+
+  const handleToggleAdminEditSaleItemGift = (index: number) => {
+    setEditSaleItems(prev => prev.map((item, idx) => {
+      if (idx !== index) return item;
+      return { ...item, isGift: !item.isGift };
+    }));
+  };
+
+  const handleRemoveAdminEditSaleItem = (index: number) => {
+    setEditSaleItems(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleAddAdminItemToEditSale = (prod: Item | any) => {
+    setEditSaleItems(prev => {
+      const pId = prod.id || prod.itemId;
+      const existingIdx = prev.findIndex(p => p.itemId === pId);
+      if (existingIdx >= 0) {
+        return prev.map((p, idx) => idx === existingIdx ? { ...p, quantity: (p.quantity || 0) + 1 } : p);
+      }
+      const unitPrice = prod.cartonSellingPrice || prod.sellingPrice || 0;
+      return [
+        ...prev,
+        {
+          itemId: pId,
+          name: prod.name,
+          quantity: 1,
+          unit: 'carton',
+          price: unitPrice,
+          barcode: prod.barcode || '',
+          isGift: false
+        }
+      ];
+    });
+  };
+
   const handleSaveEditSale = async () => {
     if (!editingSale) return;
-    const newAmt = parseFloat(editSaleAmount);
-    if (isNaN(newAmt) || newAmt <= 0) {
-      alert('تکایە بڕی پارەی دروست بنووسە');
-      return;
-    }
     setIsProcessing(true);
     try {
-      await updateDoc(doc(db, 'cashvan_sales', editingSale.id), {
-        totalAmount: newAmt
+      let finalAmount = 0;
+      let totalProfit = 0;
+
+      const sanitizedItems = editSaleItems.map(it => {
+        const itemObj = items.find(i => i.id === it.itemId || i.name === it.name);
+        const itemCost = it.unit === 'packet'
+          ? (itemObj?.packetCostPrice || itemObj?.costPrice || 0)
+          : (itemObj?.cartonCostPrice || itemObj?.costPrice || 0);
+
+        const lineTotal = it.isGift ? 0 : ((it.quantity || 0) * (it.price || 0));
+        const lineProfit = lineTotal - ((it.quantity || 0) * itemCost);
+
+        finalAmount += lineTotal;
+        totalProfit += lineProfit;
+
+        return {
+          itemId: it.itemId,
+          name: it.name,
+          quantity: it.quantity,
+          unit: it.unit || 'carton',
+          price: it.isGift ? 0 : it.price,
+          barcode: it.barcode || '',
+          isGift: !!it.isGift
+        };
       });
+
+      if (editSaleItems.length === 0) {
+        finalAmount = parseFloat(editSaleAmount) || 0;
+      }
+
+      await updateDoc(doc(db, 'cashvan_sales', editingSale.id), {
+        totalAmount: finalAmount,
+        totalProfit,
+        items: sanitizedItems,
+        lastEditedAt: Date.now(),
+        lastEditedBy: 'admin'
+      });
+
+      const inv = editingSale.invoiceNo || editingSale.invoiceId;
+      if (inv) {
+        const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', inv));
+        const snapTr = await getDocs(qTr);
+        for (const d of snapTr.docs) {
+          await updateDoc(doc(db, 'transactions', d.id), {
+            amount: finalAmount
+          });
+        }
+      }
+
       setEditingSale(null);
+      alert('گۆڕانکاری و کاڵاکانی فرۆشتنی کاشڤان پاشەکەوت کران');
     } catch (error) {
       console.error(error);
-      alert('هەڵەیەک ڕوویدا لە دەستکاریکردنی بڕی پارە');
+      alert('هەڵەیەک ڕوویدا لە دەستکاریکردنی فرۆشتن');
     } finally {
       setIsProcessing(false);
     }
@@ -1151,9 +1289,9 @@ export default function AdminCashvanView() {
     setTimeout(() => setCopiedCVId(null), 2000);
   };
 
-  // --- Print Rep Order Voucher ---
+  // --- Print Rep Order Voucher (80mm Thermal Printer) ---
   const printRepOrder = async (order: Order) => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = window.open('', '_blank', 'width=420,height=750');
     if (!printWindow) return;
     
     let oldDebt = 0;
@@ -1173,6 +1311,7 @@ export default function AdminCashvanView() {
           }
         }
       });
+      oldDebt = Math.max(0, oldDebt);
     } catch (e) {
       console.error('Error fetching old debt', e);
     }
@@ -1180,130 +1319,268 @@ export default function AdminCashvanView() {
     const marketObj = markets.find(m => m.name === order.marketName);
     const marketPhone = marketObj?.phone || '-';
     const invoiceNum = order.invoiceId || order.invoiceNo || (order.id || '0').slice(-6);
+    const repPhone = reps.find(r => r.name === order.repName)?.phone || (order as any).repPhone || '-';
 
     const itemsHtml = (order.items || []).map((item, idx) => {
-      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const total = isGift ? 0 : (item.quantity * item.price);
+      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
+      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
+      const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr style="${isGift ? 'background-color: #fef9c3;' : ''}">
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; ${isGift ? 'color: #854d0e;' : ''}">
-            ${item.name} ${isGift ? '<span style="background: #fef08a; color: #713f12; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 4px;">🎁 دیاری / هەدیە</span>' : ''}
+        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
+          <td style="text-align: center; color: #64748b; font-size: 11px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: bold;">
+            ${cleanName}
+            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 10px; font-weight: 900; padding: 1px 4px; border-radius: 4px; margin-right: 4px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
           </td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">
-            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع (هەدیە)</span>' : `${(item.price || 0).toLocaleString()} د.ع`}
-          </td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">
-            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع</span>' : `${total.toLocaleString()} د.ع`}
-          </td>
+          <td style="text-align: center; font-weight: bold;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
 
     const newTotalDebt = oldDebt + order.totalAmount;
-    const repPhone = reps.find(r => r.name === order.repName)?.phone || (order as any).repPhone || '';
 
-    const printContent = `
-      <div dir="rtl" style="font-family: sans-serif; padding: 20px;">
-        ${renderReceiptHeaderHtml({
-          isSale: true,
-          repName: order.repName,
-          repPhone: repPhone,
-          invoiceNo: invoiceNum,
-          customerName: order.marketName,
-          date: order.timestamp
-        })}
-
-        <div style="display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; font-size: 12px;">
-          <div>
-            <span style="color: #64748b; font-weight: 600;">ژمارەی کڕیار:</span>
-            <strong dir="ltr" style="margin-right: 4px;">${marketPhone || '-'}</strong>
-            ${order.location ? `<span style="margin-right: 12px; color: #64748b;">ناونیشان: <strong>${order.location}</strong></span>` : ''}
-          </div>
-          <div>
-            <span style="color: #64748b; font-weight: 600;">بەروار و کات:</span>
-            <span dir="ltr" style="font-weight: 700; color: #0f172a; margin-right: 4px;">
-              ${format(order.timestamp, 'yyyy/MM/dd HH:mm')}
-            </span>
-          </div>
-        </div>
-        
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
-          <thead>
-            <tr style="background-color: #f1f5f9;">
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 40px;">#</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; text-align: right;">ناوی کاڵا</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">یەکە</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">بڕ</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 110px; text-align: left;">نرخ</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 130px; text-align: left;">کۆی گشتی</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${itemsHtml}
-          </tbody>
-        </table>
-        
-        <div style="display: flex; justify-content: flex-end; margin-bottom: 30px;">
-          <div style="width: 320px; font-size: 14px;">
-            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
-              <span>کۆی ئەم وەسڵە:</span>
-              <strong dir="ltr">${order.totalAmount.toLocaleString()} د.ع</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
-              <span>قەرزی پێشوو:</span>
-              <strong dir="ltr" style="color: #d97706;">${oldDebt.toLocaleString()} د.ع</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 16px; border-bottom: 2px solid #1e293b; background: #f8fafc;">
-              <span>کۆی گشتی ماوە:</span>
-              <strong dir="ltr" style="color: #dc2626;">${newTotalDebt.toLocaleString()} د.ع</strong>
-            </div>
-          </div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; margin-top: 50px; font-size: 14px; text-align: center;">
-          <div>
-            <p style="margin-bottom: 40px;">واژووی مەندووب</p>
-            <p>.......................................</p>
-          </div>
-          <div>
-            <p style="margin-bottom: 40px;">واژووی مارکێت</p>
-            <p>.......................................</p>
-          </div>
-        </div>
-      </div>
-    `;
-
-    printWindow.document.write(`
-      <html>
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl">
         <head>
-          <title></title>
+          <meta charset="utf-8">
+          <title>تەڵەبیەی مەندووب #${invoiceNum}</title>
           <style>
-            @media print {
-              body { margin: 0; padding: 0; }
-              @page { margin: 10mm; }
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            @page { 
+              size: 80mm auto; 
+              margin: 0; 
+            }
+            @media print { 
+              html, body { 
+                width: 76mm !important; 
+                max-width: 76mm !important; 
+                margin: 0 auto !important; 
+                padding: 2mm 1mm !important; 
+              } 
+              .no-print { display: none !important; }
+            }
+            body { 
+              font-family: system-ui, -apple-system, sans-serif; 
+              font-size: 11.5px; 
+              direction: rtl; 
+              text-align: right; 
+              padding: 6px 4px; 
+              color: #000; 
+              background: #fff;
+              line-height: 1.35;
+              width: 76mm;
+              max-width: 76mm;
+              margin: 0 auto;
+            }
+            .thermal-box {
+              border: 1px dashed #000;
+              border-radius: 6px;
+              padding: 6px;
+            }
+            .invoice-badge-box {
+              text-align: center;
+              font-weight: 900;
+              font-size: 12px;
+              margin-bottom: 6px;
+              background: #312e81;
+              color: #fff;
+              padding: 3px;
+              border-radius: 4px;
+            }
+            .info-grid {
+              background: #f8fafc;
+              border: 1px solid #cbd5e1;
+              border-radius: 6px;
+              padding: 6px;
+              font-size: 11px;
+              margin-bottom: 8px;
+            }
+            .info-row {
+              display: flex;
+              justify-content: space-between;
+              padding: 2px 0;
+            }
+            .info-row .label {
+              color: #475569;
+              font-weight: 600;
+            }
+            .info-row .val {
+              font-weight: 800;
+              color: #000;
+            }
+            table { 
+              width: 100%; 
+              border-collapse: collapse; 
+              margin-top: 6px; 
+              font-size: 11px; 
+            }
+            th { 
+              background: #f1f5f9; 
+              color: #0f172a; 
+              padding: 5px 3px; 
+              border-top: 1px solid #000; 
+              border-bottom: 1px solid #000; 
+              font-weight: 800; 
+            }
+            td { 
+              padding: 5px 3px; 
+              border-bottom: 1px dashed #cbd5e1; 
+            }
+            .summary { 
+              margin-top: 8px; 
+              border-top: 1.5px solid #000; 
+              padding-top: 6px; 
+            }
+            .summary-row {
+              display: flex;
+              justify-content: space-between;
+              font-size: 11.5px;
+              margin-bottom: 3px;
+            }
+            .summary-row.main {
+              font-size: 13.5px;
+              font-weight: 900;
+              color: #000;
+              background: #f1f5f9;
+              padding: 4px 6px;
+              border-radius: 4px;
+            }
+            .summary-row.total-debt {
+              font-size: 13px;
+              font-weight: 900;
+              color: #b91c1c;
+              border-top: 1px dashed #64748b;
+              padding-top: 4px;
+              margin-top: 4px;
+            }
+            .signatures {
+              display: flex;
+              justify-content: space-between;
+              margin-top: 18px;
+              padding-top: 6px;
+              font-size: 10px;
+              text-align: center;
+            }
+            .sig-line {
+              margin-top: 20px;
+              border-top: 1px dashed #000;
+              width: 90px;
+            }
+            .footer-note {
+              text-align: center;
+              margin-top: 12px;
+              font-size: 10px;
+              color: #475569;
             }
           </style>
         </head>
         <body>
-          ${printContent}
+          <div class="thermal-box">
+            ${renderReceiptHeaderHtml({
+              isSale: true,
+              repName: order.repName,
+              repPhone: repPhone,
+              invoiceNo: invoiceNum,
+              customerName: order.marketName,
+              date: order.timestamp,
+              isThermal: true
+            })}
+
+            <div class="invoice-badge-box">
+              تەڵەبیەی مەندووب
+            </div>
+
+            <div class="info-grid">
+              <div class="info-row">
+                <span class="label">ژمارەی تەڵەبیە:</span>
+                <span class="val" dir="ltr" style="font-family: monospace;">#${invoiceNum}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">ناوی کڕیار / مارکێت:</span>
+                <span class="val">${order.marketName}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">مەندووب:</span>
+                <span class="val">${order.repName} (${repPhone})</span>
+              </div>
+              <div class="info-row">
+                <span class="label">جۆری وەسڵ:</span>
+                <strong style="color: ${order.paymentType === 'cash' ? '#15803d' : '#b45309'};">
+                  ${order.paymentType === 'cash' ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
+                </strong>
+              </div>
+              <div class="info-row">
+                <span class="label">بەروار و کات:</span>
+                <span class="val" dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 20px; text-align: center;">#</th>
+                  <th style="text-align: right;">ناوی کاڵا</th>
+                  <th style="text-align: center; width: 45px;">بڕ</th>
+                  <th style="text-align: center; width: 65px;">نرخ</th>
+                  <th style="text-align: left; width: 70px;">کۆ</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsHtml}
+              </tbody>
+            </table>
+
+            <div class="summary">
+              <div class="summary-row main">
+                <span>کۆی ئەم وەسڵە:</span>
+                <span dir="ltr">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
+              </div>
+              ${order.paymentType === 'debt' ? `
+                <div class="summary-row" style="margin-top: 4px;">
+                  <span>قەرزی پێشووی مارکێت:</span>
+                  <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                </div>
+                <div class="summary-row total-debt">
+                  <span>کۆی گشتی ماوە (قەرز):</span>
+                  <span dir="ltr">${newTotalDebt.toLocaleString()} د.ع</span>
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="signatures">
+              <div>
+                <div>واژووی مەندووب</div>
+                <div class="sig-line"></div>
+              </div>
+              <div>
+                <div>واژووی مارکێت</div>
+                <div class="sig-line"></div>
+              </div>
+            </div>
+
+            <div class="footer-note">
+              سوپاس بۆ مامەڵەکردنتان لەگەڵ کۆمپانیای RF
+            </div>
+          </div>
+
           <script>
-            window.onload = () => {
-              window.print();
-            }
+            window.onload = function() { window.print(); };
           </script>
         </body>
       </html>
-    `);
+    `;
+
+    printWindow.document.write(html);
     printWindow.document.close();
   };
 
-  // --- Print Cashvan Sale Voucher ---
+  // --- Print Cashvan Sale Voucher (80mm Thermal Printer) ---
   const printCashvanSale = async (sale: CashvanSale) => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = window.open('', '_blank', 'width=420,height=750');
     if (!printWindow) return;
     
     let oldDebt = 0;
@@ -1323,6 +1600,7 @@ export default function AdminCashvanView() {
           }
         }
       });
+      oldDebt = Math.max(0, oldDebt);
     } catch (e) {
       console.error('Error fetching old debt', e);
     }
@@ -1330,129 +1608,262 @@ export default function AdminCashvanView() {
     const marketObj = markets.find(m => m.name === sale.marketName);
     const marketPhone = marketObj?.phone || '-';
     const invoiceNum = sale.invoiceNo || sale.invoiceId || (sale.id || '0').slice(-6);
+    const cashvanPhone = cashvans.find(c => c.name === sale.cashvanName)?.phone || reps.find(r => r.name === sale.cashvanName)?.phone || '-';
 
     const itemsHtml = (sale.items || []).map((item, idx) => {
-      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const total = isGift ? 0 : (item.quantity * item.price);
+      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
+      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
+      const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr style="${isGift ? 'background-color: #fef9c3;' : ''}">
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; ${isGift ? 'color: #854d0e;' : ''}">
-            ${item.name} ${isGift ? '<span style="background: #fef08a; color: #713f12; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 4px;">🎁 دیاری / هەدیە</span>' : ''}
+        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
+          <td style="text-align: center; color: #64748b; font-size: 11px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: bold;">
+            ${cleanName}
+            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 10px; font-weight: 900; padding: 1px 4px; border-radius: 4px; margin-right: 4px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
           </td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.quantity}</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px;" dir="ltr">
-            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع (هەدیە)</span>' : `${(item.price || 0).toLocaleString()} د.ع`}
-          </td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;" dir="ltr">
-            ${isGift ? '<span style="color: #854d0e; font-weight: bold;">٠ د.ع</span>' : `${total.toLocaleString()} د.ع`}
-          </td>
+          <td style="text-align: center; font-weight: bold;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
 
     const newTotalDebt = oldDebt + sale.totalAmount;
-    const cashvanPhone = cashvans.find(c => c.name === sale.cashvanName)?.phone || reps.find(r => r.name === sale.cashvanName)?.phone || '';
 
-    const printContent = `
-      <div dir="rtl" style="font-family: sans-serif; padding: 20px;">
-        ${renderReceiptHeaderHtml({
-          isSale: true,
-          repName: sale.cashvanName,
-          repPhone: cashvanPhone,
-          invoiceNo: invoiceNum,
-          customerName: sale.marketName,
-          date: sale.date
-        })}
-
-        <div style="display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; font-size: 12px;">
-          <div>
-            <span style="color: #64748b; font-weight: 600;">ژمارەی کڕیار:</span>
-            <strong dir="ltr" style="margin-right: 4px;">${marketPhone || '-'}</strong>
-            <span style="margin-right: 12px; color: #64748b;">شێوازی پارەدان:</span>
-            <strong style="color: ${sale.paymentType === 'cash' ? '#166534' : '#b45309'}; margin-right: 4px;">
-              ${sale.paymentType === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}
-            </strong>
-          </div>
-          <div>
-            <span style="color: #64748b; font-weight: 600;">بەروار و کات:</span>
-            <span dir="ltr" style="font-weight: 700; color: #0f172a; margin-right: 4px;">
-              ${format(sale.date, 'yyyy/MM/dd HH:mm')}
-            </span>
-          </div>
-        </div>
-        
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
-          <thead>
-            <tr style="background-color: #f1f5f9;">
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 40px;">#</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; text-align: right;">ناوی کاڵا</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">یەکە</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 80px;">بڕ</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 110px; text-align: left;">نرخ</th>
-              <th style="border: 1px solid #cbd5e1; padding: 8px; width: 130px; text-align: left;">کۆی گشتی</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${itemsHtml}
-          </tbody>
-        </table>
-        
-        <div style="display: flex; justify-content: flex-end; margin-bottom: 30px;">
-          <div style="width: 320px; font-size: 14px;">
-            <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
-              <span>کۆی ئەم وەسڵە:</span>
-              <strong dir="ltr">${sale.totalAmount.toLocaleString()} د.ع</strong>
-            </div>
-            ${sale.paymentType === 'debt' ? `
-              <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #cbd5e1;">
-                <span>قەرزی پێشوو:</span>
-                <strong dir="ltr" style="color: #d97706;">${oldDebt.toLocaleString()} د.ع</strong>
-              </div>
-              <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 16px; border-bottom: 2px solid #1e293b; background: #f8fafc;">
-                <span>کۆی گشتی ماوە:</span>
-                <strong dir="ltr" style="color: #dc2626;">${newTotalDebt.toLocaleString()} د.ع</strong>
-              </div>
-            ` : ''}
-          </div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; margin-top: 50px; font-size: 14px; text-align: center;">
-          <div>
-            <p style="margin-bottom: 40px;">واژووی کاشڤان</p>
-            <p>.......................................</p>
-          </div>
-          <div>
-            <p style="margin-bottom: 40px;">واژووی مارکێت</p>
-            <p>.......................................</p>
-          </div>
-        </div>
-      </div>
-    `;
-
-    printWindow.document.write(`
-      <html>
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl">
         <head>
-          <title></title>
+          <meta charset="utf-8">
+          <title>فاتورەی فرۆشتن #${invoiceNum}</title>
           <style>
-            @media print {
-              body { margin: 0; padding: 0; }
-              @page { margin: 10mm; }
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            @page { 
+              size: 80mm auto; 
+              margin: 0; 
+            }
+            @media print { 
+              html, body { 
+                width: 76mm !important; 
+                max-width: 76mm !important; 
+                margin: 0 auto !important; 
+                padding: 2mm 1mm !important; 
+              } 
+              .no-print { display: none !important; }
+            }
+            body { 
+              font-family: system-ui, -apple-system, sans-serif; 
+              font-size: 11.5px; 
+              direction: rtl; 
+              text-align: right; 
+              padding: 6px 4px; 
+              color: #000; 
+              background: #fff;
+              line-height: 1.35;
+              width: 76mm;
+              max-width: 76mm;
+              margin: 0 auto;
+            }
+            .thermal-box {
+              border: 1px dashed #000;
+              border-radius: 6px;
+              padding: 6px;
+            }
+            .invoice-badge-box {
+              text-align: center;
+              font-weight: 900;
+              font-size: 12px;
+              margin-bottom: 6px;
+              background: #0f172a;
+              color: #fff;
+              padding: 3px;
+              border-radius: 4px;
+            }
+            .info-grid {
+              background: #f8fafc;
+              border: 1px solid #cbd5e1;
+              border-radius: 6px;
+              padding: 6px;
+              font-size: 11px;
+              margin-bottom: 8px;
+            }
+            .info-row {
+              display: flex;
+              justify-content: space-between;
+              padding: 2px 0;
+            }
+            .info-row .label {
+              color: #475569;
+              font-weight: 600;
+            }
+            .info-row .val {
+              font-weight: 800;
+              color: #000;
+            }
+            table { 
+              width: 100%; 
+              border-collapse: collapse; 
+              margin-top: 6px; 
+              font-size: 11px; 
+            }
+            th { 
+              background: #f1f5f9; 
+              color: #0f172a; 
+              padding: 5px 3px; 
+              border-top: 1px solid #000; 
+              border-bottom: 1px solid #000; 
+              font-weight: 800; 
+            }
+            td { 
+              padding: 5px 3px; 
+              border-bottom: 1px dashed #cbd5e1; 
+            }
+            .summary { 
+              margin-top: 8px; 
+              border-top: 1.5px solid #000; 
+              padding-top: 6px; 
+            }
+            .summary-row {
+              display: flex;
+              justify-content: space-between;
+              font-size: 11.5px;
+              margin-bottom: 3px;
+            }
+            .summary-row.main {
+              font-size: 13.5px;
+              font-weight: 900;
+              color: #000;
+              background: #f1f5f9;
+              padding: 4px 6px;
+              border-radius: 4px;
+            }
+            .summary-row.total-debt {
+              font-size: 13px;
+              font-weight: 900;
+              color: #b91c1c;
+              border-top: 1px dashed #64748b;
+              padding-top: 4px;
+              margin-top: 4px;
+            }
+            .signatures {
+              display: flex;
+              justify-content: space-between;
+              margin-top: 18px;
+              padding-top: 6px;
+              font-size: 10px;
+              text-align: center;
+            }
+            .sig-line {
+              margin-top: 20px;
+              border-top: 1px dashed #000;
+              width: 90px;
+            }
+            .footer-note {
+              text-align: center;
+              margin-top: 12px;
+              font-size: 10px;
+              color: #475569;
             }
           </style>
         </head>
         <body>
-          ${printContent}
+          <div class="thermal-box">
+            ${renderReceiptHeaderHtml({
+              isSale: true,
+              repName: sale.cashvanName,
+              repPhone: cashvanPhone,
+              invoiceNo: invoiceNum,
+              customerName: sale.marketName,
+              date: sale.date,
+              isThermal: true
+            })}
+
+            <div class="invoice-badge-box">
+              پسوڵەی فرۆشتن (کاشڤان)
+            </div>
+
+            <div class="info-grid">
+              <div class="info-row">
+                <span class="label">ژمارەی وەسڵ:</span>
+                <span class="val" dir="ltr" style="font-family: monospace;">#${invoiceNum}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">ناوی کڕیار / مارکێت:</span>
+                <span class="val">${sale.marketName}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">کاشڤان:</span>
+                <span class="val">${sale.cashvanName} (${cashvanPhone})</span>
+              </div>
+              <div class="info-row">
+                <span class="label">شێوازی پارەدان:</span>
+                <strong style="color: ${sale.paymentType === 'cash' ? '#15803d' : '#b45309'};">
+                  ${sale.paymentType === 'cash' ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
+                </strong>
+              </div>
+              <div class="info-row">
+                <span class="label">بەروار و کات:</span>
+                <span class="val" dir="ltr">${format(sale.date, 'yyyy/MM/dd HH:mm')}</span>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 20px; text-align: center;">#</th>
+                  <th style="text-align: right;">ناوی کاڵا</th>
+                  <th style="text-align: center; width: 45px;">بڕ</th>
+                  <th style="text-align: center; width: 65px;">نرخ</th>
+                  <th style="text-align: left; width: 70px;">کۆ</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsHtml}
+              </tbody>
+            </table>
+
+            <div class="summary">
+              <div class="summary-row main">
+                <span>کۆی ئەم وەسڵە:</span>
+                <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
+              </div>
+              ${sale.paymentType === 'debt' ? `
+                <div class="summary-row" style="margin-top: 4px;">
+                  <span>قەرزی پێشووی مارکێت:</span>
+                  <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                </div>
+                <div class="summary-row total-debt">
+                  <span>کۆی گشتی ماوە (قەرز):</span>
+                  <span dir="ltr">${newTotalDebt.toLocaleString()} د.ع</span>
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="signatures">
+              <div>
+                <div>واژووی کاشڤان</div>
+                <div class="sig-line"></div>
+              </div>
+              <div>
+                <div>واژووی مارکێت</div>
+                <div class="sig-line"></div>
+              </div>
+            </div>
+
+            <div class="footer-note">
+              سوپاس بۆ مامەڵەکردنتان لەگەڵ کۆمپانیای RF
+            </div>
+          </div>
+
           <script>
-            window.onload = () => {
-              window.print();
-            }
+            window.onload = function() { window.print(); };
           </script>
         </body>
       </html>
-    `);
+    `;
+
+    printWindow.document.write(html);
     printWindow.document.close();
   };
 
@@ -3256,12 +3667,9 @@ export default function AdminCashvanView() {
                             </button>
 
                             <button
-                              onClick={() => {
-                                setEditingSale(sale);
-                                setEditSaleAmount(sale.totalAmount.toString());
-                              }}
+                              onClick={() => handleOpenEditSale(sale)}
                               className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition"
-                              title="دەستکاری بڕی پارە"
+                              title="دەستکاری وەسڵ و کاڵاکانی فرۆشتن"
                             >
                               <Edit2 size={16} />
                             </button>
@@ -4645,55 +5053,254 @@ export default function AdminCashvanView() {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: EDIT CASHVAN SALE AMOUNT                                           */}
+      {/* MODAL: EDIT CASHVAN SALE & ITEMS                                          */}
       {/* ========================================================================= */}
       {editingSale && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200" dir="rtl">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-blue-50">
-              <h3 className="font-bold text-blue-900 text-base flex items-center gap-2">
-                <Edit2 className="text-blue-600" size={18} />
-                دەستکاری بڕی پارەی فرۆشتنی کاشڤان
-              </h3>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl overflow-hidden border border-slate-200 max-h-[92vh] flex flex-col" dir="rtl">
+            <div className="p-5 border-b border-blue-100 flex justify-between items-center bg-gradient-to-r from-blue-700 to-indigo-800 text-white">
+              <div>
+                <h3 className="font-bold text-base flex items-center gap-2">
+                  <Edit2 className="text-blue-300" size={18} />
+                  دەستکاریکردنی وەسڵ و کاڵاکانی فرۆشتنی کاشڤان
+                </h3>
+                <p className="text-xs text-blue-200 mt-1">
+                  کاشڤان: <strong>{editingSale.cashvanName}</strong> | مارکێت: <strong>{editingSale.marketName}</strong>
+                  {editingSale.invoiceNo && <span className="font-mono bg-white/10 px-2 py-0.5 rounded mr-2">#{editingSale.invoiceNo}</span>}
+                </p>
+              </div>
               <button 
                 onClick={() => setEditingSale(null)} 
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
+                className="text-blue-200 hover:text-white p-1 rounded-xl bg-white/10 transition"
                 disabled={isProcessing}
               >
                 <X size={20} />
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">بڕی نوێی پارە (د.ع) *</label>
-                <input
-                  type="number"
-                  value={editSaleAmount}
-                  onChange={(e) => setEditSaleAmount(e.target.value)}
-                  dir="ltr"
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-mono font-bold"
-                  autoFocus
-                />
+            <div className="p-5 overflow-y-auto space-y-4 flex-1 text-xs">
+              {/* Items Table */}
+              <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white">
+                <div className="p-3 bg-slate-100 border-b border-slate-200 flex justify-between items-center font-bold text-slate-700">
+                  <span>کاڵاکانی ناو وەسڵی فرۆشتن ({editSaleItems.length})</span>
+                  <span>کۆی عەدەد: {editSaleItems.reduce((s, i) => s + (i.quantity || 0), 0)}</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-bold">
+                      <tr>
+                        <th className="p-2.5">#</th>
+                        <th className="p-2.5 min-w-[140px]">ناوی کاڵا</th>
+                        <th className="p-2.5 text-center">یەکە</th>
+                        <th className="p-2.5 text-center min-w-[120px]">عەدەد / بڕ</th>
+                        <th className="p-2.5 text-center min-w-[80px]">هەدیە 🎁</th>
+                        <th className="p-2.5 text-center min-w-[110px]">نرخی تاک</th>
+                        <th className="p-2.5 text-left min-w-[100px]">کۆی نرخ</th>
+                        <th className="p-2.5 text-center">سڕینەوە</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {editSaleItems.map((item, idx) => (
+                        <tr key={`${item.itemId}-${idx}`} className="hover:bg-slate-50/80">
+                          <td className="p-2.5 text-slate-400 font-mono">{idx + 1}</td>
+                          <td className="p-2.5 font-bold text-slate-800">{item.name}</td>
+                          <td className="p-2.5 text-center">
+                            <select
+                              value={item.unit || 'carton'}
+                              onChange={(e) => handleUpdateAdminEditSaleItemUnit(idx, e.target.value as any)}
+                              className="px-2 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none"
+                            >
+                              <option value="carton">کارتۆن</option>
+                              <option value="packet">پاکەت</option>
+                            </select>
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateAdminEditSaleItemQty(idx, -1)}
+                                className="w-6 h-6 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-bold text-[11px] flex items-center justify-center"
+                                title="-1"
+                              >
+                                -1
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateAdminEditSaleItemQty(idx, -0.5)}
+                                className="px-1 h-6 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-bold text-[10px] flex items-center justify-center"
+                                title="-0.5"
+                              >
+                                -½
+                              </button>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                value={item.quantity}
+                                onChange={(e) => handleUpdateAdminEditSaleItemDirectQty(idx, parseFloat(e.target.value) || 0)}
+                                className="w-12 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateAdminEditSaleItemQty(idx, 0.5)}
+                                className="px-1 h-6 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md font-bold text-[10px] flex items-center justify-center"
+                                title="+0.5"
+                              >
+                                +½
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateAdminEditSaleItemQty(idx, 1)}
+                                className="w-6 h-6 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md font-bold text-[11px] flex items-center justify-center"
+                                title="+1"
+                              >
+                                +1
+                              </button>
+                            </div>
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleAdminEditSaleItemGift(idx)}
+                              className={`px-2 py-1 rounded-md text-[11px] font-bold border transition ${
+                                item.isGift
+                                  ? 'bg-yellow-400 text-yellow-950 border-yellow-500 shadow-2xs'
+                                  : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              {item.isGift ? '🎁 هەدیە' : 'ئاسایی'}
+                            </button>
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <input
+                              type="number"
+                              min="0"
+                              disabled={item.isGift}
+                              value={item.isGift ? 0 : (item.price || 0)}
+                              onChange={(e) => handleUpdateAdminEditSaleItemPrice(idx, parseFloat(e.target.value) || 0)}
+                              className="w-24 text-center font-bold font-mono py-1 border border-slate-200 rounded-lg text-xs disabled:opacity-50"
+                              dir="ltr"
+                            />
+                          </td>
+                          <td className="p-2.5 text-left font-mono font-bold text-blue-700" dir="ltr">
+                            {(item.isGift ? 0 : ((item.quantity || 0) * (item.price || 0))).toLocaleString()} IQD
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveAdminEditSaleItem(idx)}
+                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                              title="سڕینەوەی کاڵا لە وەسڵ"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {editSaleItems.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="p-8 text-center text-slate-400 font-bold">
+                            هیچ کاڵایەک لەم وەسڵەدا نەماوە. تکایە لە خوارەوە کاڵا زیاد بکە.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
-              <div className="pt-2 flex gap-2">
-                <button
-                  onClick={handleSaveEditSale}
-                  disabled={isProcessing}
-                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition text-sm flex items-center justify-center gap-2 shadow-sm"
-                >
-                  <Check size={18} />
-                  <span>پاشەکەوتکردن</span>
-                </button>
-                <button
-                  onClick={() => setEditingSale(null)}
-                  disabled={isProcessing}
-                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-sm"
-                >
-                  پاشگەزبوونەوە
-                </button>
+              {/* Add Item From Catalog */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                  <Plus size={16} className="text-blue-600" />
+                  زیادکردنی کاڵای نوێ بۆ ئەم وەسڵە
+                </h4>
+
+                <div className="relative">
+                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                  <input
+                    type="text"
+                    placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
+                    className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl bg-white outline-none text-xs"
+                    value={editSaleSearchTerm}
+                    onChange={(e) => setEditSaleSearchTerm(e.target.value)}
+                  />
+                </div>
+
+                <div className="max-h-40 overflow-y-auto divide-y divide-slate-200 border border-slate-200 rounded-xl bg-white">
+                  {items
+                    .filter((item) => {
+                      if (!editSaleSearchTerm.trim()) return true;
+                      const term = editSaleSearchTerm.toLowerCase();
+                      return (
+                        (item.name || '').toLowerCase().includes(term) ||
+                        (item.barcode || '').toLowerCase().includes(term)
+                      );
+                    })
+                    .slice(0, 25)
+                    .map((catItem) => {
+                      const cPrice = catItem.cartonSellingPrice || catItem.sellingPrice || 0;
+                      const pPrice = catItem.packetSellingPrice || catItem.sellingPrice || 0;
+                      return (
+                        <div
+                          key={catItem.id}
+                          className="p-2.5 flex items-center justify-between hover:bg-blue-50/50 transition gap-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-slate-800 truncate">{catItem.name}</div>
+                            <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                              <span>کارتۆن: <strong className="font-mono text-emerald-700">{cPrice.toLocaleString()} IQD</strong></span>
+                              <span>•</span>
+                              <span>پاکەت: <strong className="font-mono text-emerald-700">{pPrice.toLocaleString()} IQD</strong></span>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleAddAdminItemToEditSale(catItem)}
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 transition shrink-0 active:scale-95 shadow-2xs"
+                          >
+                            <Plus size={14} />
+                            <span>زیادکردن</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                </div>
               </div>
+
+              {/* Total Calculation summary */}
+              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-200 flex justify-between items-center text-sm font-bold">
+                <span className="text-blue-900">کۆی گشتی نوێکراوەی وەسڵ:</span>
+                <span className="text-blue-800 font-mono text-lg font-black" dir="ltr">
+                  {(editSaleItems.length > 0 
+                    ? editSaleItems.reduce((sum, it) => sum + (it.isGift ? 0 : ((it.quantity || 0) * (it.price || 0))), 0)
+                    : (parseFloat(editSaleAmount) || 0)
+                  ).toLocaleString()}{' '}
+                  IQD
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingSale(null)}
+                disabled={isProcessing}
+                className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-bold transition"
+              >
+                پاشگەزبوونەوە
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEditSale}
+                disabled={isProcessing}
+                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95"
+              >
+                <Check size={16} />
+                <span>{isProcessing ? 'خەریکی پاشەکەوتکردنە...' : 'پاشەکەوتکردنی دەستکارییەکان'}</span>
+              </button>
             </div>
           </div>
         </div>
