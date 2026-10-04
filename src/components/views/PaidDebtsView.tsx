@@ -6,7 +6,7 @@ import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Trash2, Printer, FileText, Calendar, Search, CheckCircle2, Clock, X, TrendingUp } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup, printPaymentReceiptPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { printStatementPopup, printPaymentReceiptPopup, printMarketDebtReceiptPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_debt' | 'company_paid_debt' }) {
   const [paidDebts, setPaidDebts] = useState<Transaction[]>([]);
@@ -118,27 +118,49 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
         const allTrans: Transaction[] = [];
         snap.forEach(d => allTrans.push({ id: d.id, ...d.data() } as Transaction));
 
-        let origDebt = 0;
-        let totalPaidForTarget = 0;
+        let origDebt = (transaction as any).previousDebt;
+        let remainingDebt = (transaction as any).remainingDebt;
 
-        if (transaction.invoiceNo) {
-          const cleanInv = transaction.invoiceNo.trim();
-          const invDebts = allTrans.filter(t => t.type.includes('debt') && !t.type.includes('paid') && t.invoiceNo?.trim() === cleanInv);
-          const invPaids = allTrans.filter(t => t.type.includes('paid') && t.invoiceNo?.trim() === cleanInv);
-
-          origDebt = invDebts.reduce((sum, t) => sum + (t.amount || 0), 0);
-          totalPaidForTarget = invPaids.reduce((sum, t) => sum + (t.amount || 0), 0);
-        } else {
-          const entityDebts = allTrans.filter(t => t.type.includes('debt') && !t.type.includes('paid'));
-          const entityPaids = allTrans.filter(t => t.type.includes('paid'));
-          origDebt = entityDebts.reduce((sum, t) => sum + (t.amount || 0), 0);
-          totalPaidForTarget = entityPaids.reduce((sum, t) => sum + (t.amount || 0), 0);
+        if (origDebt === undefined || origDebt === null || origDebt === 0) {
+          let matchedByInv = false;
+          if (transaction.invoiceNo) {
+            const cleanInv = transaction.invoiceNo.trim();
+            const invDebts = allTrans.filter(t => t.type.includes('debt') && !t.type.includes('paid') && t.invoiceNo?.trim() === cleanInv);
+            if (invDebts.length > 0) {
+              matchedByInv = true;
+              const invPaids = allTrans.filter(t => t.type.includes('paid') && t.invoiceNo?.trim() === cleanInv);
+              origDebt = invDebts.reduce((sum, t) => sum + (t.amount || 0), 0);
+              const totalPaidForTarget = invPaids.reduce((sum, t) => sum + (t.amount || 0), 0);
+              remainingDebt = Math.max(0, origDebt - totalPaidForTarget);
+            }
+          }
+          if (!matchedByInv) {
+            const entityDebts = allTrans.filter(t => (t.type === 'debt' || t.type === 'market_debt' || t.type.includes('debt')) && !t.type.includes('paid'));
+            const entityPaids = allTrans.filter(t => t.type.includes('paid'));
+            const totalEntityDebt = entityDebts.reduce((sum, t) => sum + (t.amount || 0), 0);
+            const totalEntityPaid = entityPaids.reduce((sum, t) => sum + (t.amount || 0), 0);
+            const curDebt = Math.max(0, totalEntityDebt - totalEntityPaid);
+            origDebt = curDebt + (transaction.amount || 0);
+            remainingDebt = curDebt;
+          }
+        }
+        if (remainingDebt === undefined || remainingDebt === null) {
+          remainingDebt = Math.max(0, (origDebt || 0) - (transaction.amount || 0));
         }
 
-        if (origDebt === 0) {
-          origDebt = transaction.amount || 0;
+        if (!isCompany) {
+          printMarketDebtReceiptPopup({
+            marketName: entityName,
+            amount: transaction.amount || 0,
+            collectorName: (transaction as any).collectorName || (transaction as any).repName || 'مەندووب / کاشڤان',
+            date: transaction.date || Date.now(),
+            receiptNo: transaction.invoiceNo,
+            notes: transaction.description,
+            previousDebt: origDebt,
+            remainingDebt: remainingDebt
+          });
+          return;
         }
-        const remainingDebt = Math.max(0, origDebt - totalPaidForTarget);
 
         printPaymentReceiptPopup({
           entityName,

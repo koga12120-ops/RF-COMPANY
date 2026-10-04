@@ -49,13 +49,13 @@ export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string 
 
   if (isThermal) {
     return `
-      <div style="text-align: center; border-bottom: 2px dashed #000; padding-bottom: 8px; margin-bottom: 10px; direction: rtl; font-family: system-ui, -apple-system, sans-serif;">
+      <div style="text-align: center; border-bottom: 2px dashed #000; padding-bottom: 8px; margin-bottom: 8px; direction: rtl; font-family: system-ui, -apple-system, sans-serif; color: #000;">
         <div style="margin-bottom: 4px; display: flex; justify-content: center;">
           <img src="${logoSrc}" alt="Logo" style="height: 48px; max-width: 80px; object-fit: contain; display: block;" onerror="this.style.display='none'" />
         </div>
-        <div style="font-size: 22px; font-weight: 900; letter-spacing: 1px; color: #000; line-height: 1.2;">TAM TAM</div>
-        <div style="font-size: 14px; font-weight: 800; color: #111; margin-top: 2px;">${cName}</div>
-        <div style="font-size: 11px; font-weight: 700; color: #333; margin-top: 2px;">ژمارەی مۆبایل: <span dir="ltr">${cPhone}</span></div>
+        <div style="font-size: 20px; font-weight: 900; letter-spacing: 1px; color: #000; line-height: 1.2;">TAM TAM</div>
+        <div style="font-size: 13.5px; font-weight: 900; color: #000; margin-top: 2px;">${cName}</div>
+        <div style="font-size: 11px; font-weight: 800; color: #000; margin-top: 2px;">ژمارەی مۆبایل: <span dir="ltr">${cPhone}</span></div>
       </div>
     `;
   }
@@ -447,41 +447,41 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
 
   const salesRowsHtml = data.sales.map((s, idx) => `
     <tr>
-      <td style="text-align: center; color: #64748b; font-size: 10px;">${idx + 1}</td>
-      <td style="text-align: right; font-weight: bold;">
+      <td style="text-align: center; color: #000; font-size: 10px;">${idx + 1}</td>
+      <td style="text-align: right; font-weight: bold; color: #000;">
         ${s.marketName}
-        ${s.invoiceNo ? `<div style="font-family: monospace; font-size: 10px; color: #4338ca;">#${s.invoiceNo}</div>` : ''}
-        ${s.itemsSummary ? `<div style="font-size: 9.5px; color: #64748b; font-weight: normal;">${s.itemsSummary}</div>` : ''}
+        ${s.invoiceNo ? `<div style="font-family: monospace; font-size: 10px; color: #000;">#${s.invoiceNo}</div>` : ''}
+        ${s.itemsSummary ? `<div style="font-size: 9.5px; color: #000; font-weight: normal;">${s.itemsSummary}</div>` : ''}
       </td>
       <td style="text-align: center;">
-        <span style="display: inline-block; padding: 1px 4px; border-radius: 4px; font-size: 9.5px; font-weight: bold; ${s.paymentType.includes('نەقد') ? 'background: #dcfce7; color: #166534;' : 'background: #fef3c7; color: #92400e;'}">
+        <span style="display: inline-block; padding: 1px 4px; border: 1px solid #000; border-radius: 4px; font-size: 9.5px; font-weight: bold; color: #000;">
           ${s.paymentType.includes('نەقد') ? 'نەقد' : 'قەرز'}
         </span>
       </td>
-      <td dir="ltr" style="text-align: left; font-weight: bold;">${s.amount.toLocaleString()}</td>
+      <td dir="ltr" style="text-align: left; font-weight: bold; color: #000;">${s.amount.toLocaleString()}</td>
     </tr>
-  `).join('') || '<tr><td colspan="4" style="text-align: center; padding: 8px; color: #94a3b8; font-size: 10.5px;">هیچ فرۆشتنێک تۆمار نەکراوە</td></tr>';
+  `).join('') || '<tr><td colspan="4" style="text-align: center; padding: 8px; color: #000; font-size: 10.5px;">هیچ فرۆشتنێک تۆمار نەکراوە</td></tr>';
 
   const collectionRowsHtml = data.collections.map((c, idx) => `
     <tr>
-      <td style="text-align: center; color: #64748b; font-size: 10px;">${idx + 1}</td>
-      <td style="text-align: right; font-weight: bold;">
+      <td style="text-align: center; color: #000; font-size: 10px;">${idx + 1}</td>
+      <td style="text-align: right; font-weight: bold; color: #000;">
         ${c.marketName}
-        ${c.invoiceNo ? `<span style="font-family: monospace; font-size: 10px; color: #059669; margin-right: 4px;">#${c.invoiceNo}</span>` : ''}
-        ${c.notes ? `<div style="font-size: 9.5px; color: #64748b; font-weight: normal;">${c.notes}</div>` : ''}
+        ${c.invoiceNo ? `<span style="font-family: monospace; font-size: 10px; color: #000; margin-right: 4px;">#${c.invoiceNo}</span>` : ''}
+        ${c.notes ? `<div style="font-size: 9.5px; color: #000; font-weight: normal;">${c.notes}</div>` : ''}
       </td>
-      <td dir="ltr" style="text-align: left; font-weight: bold; color: #166534;">${c.amount.toLocaleString()}</td>
+      <td dir="ltr" style="text-align: left; font-weight: bold; color: #000;">${c.amount.toLocaleString()}</td>
     </tr>
-  `).join('') || '<tr><td colspan="3" style="text-align: center; padding: 8px; color: #94a3b8; font-size: 10.5px;">هیچ قەرزێک وەرنەگیراوەتەوە</td></tr>';
+  `).join('') || '<tr><td colspan="3" style="text-align: center; padding: 8px; color: #000; font-size: 10.5px;">هیچ قەرزێک وەرنەگیراوەتەوە</td></tr>';
 
   const giftRowsHtml = (data.gifts && data.gifts.length > 0) ? data.gifts.map((g, idx) => `
-    <tr style="background: #fefce8;">
-      <td style="text-align: center; font-weight: bold; color: #854d0e; font-size: 10px;">${idx + 1}</td>
-      <td style="font-weight: bold; color: #713f12;">
+    <tr>
+      <td style="text-align: center; font-weight: bold; color: #000; font-size: 10px;">${idx + 1}</td>
+      <td style="font-weight: bold; color: #000;">
         🎁 ${g.name}
-        <div style="font-size: 9.5px; color: #854d0e; font-weight: normal;">${g.marketName}</div>
+        <div style="font-size: 9.5px; color: #000; font-weight: normal;">${g.marketName}</div>
       </td>
-      <td style="text-align: center; font-weight: bold; color: #854d0e;">${g.quantity} ${g.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</td>
+      <td style="text-align: center; font-weight: bold; color: #000;">${g.quantity} ${g.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}</td>
     </tr>
   `).join('') : '';
 
@@ -492,18 +492,29 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
         <meta charset="utf-8" />
         <title>زانیاری فرۆشەکان - ${data.repName}</title>
         <style>
-          * { box-sizing: border-box; margin: 0; padding: 0; }
+          * { box-sizing: border-box; margin: 0; padding: 0; color: #000 !important; }
           @page { 
-            size: 80mm auto; 
+            size: auto; 
             margin: 0; 
           }
           @media print { 
             html, body { 
-              width: 76mm !important; 
-              max-width: 76mm !important; 
-              margin: 0 auto !important; 
-              padding: 2mm 1mm !important; 
+              width: 100% !important; 
+              max-width: 100% !important; 
+              min-width: 0 !important; 
+              margin: 0 !important; 
+              padding: 0 !important; 
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
             } 
+            .thermal-box {
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+              margin: 0 auto !important;
+              padding: 1mm 1.5mm !important;
+              border: none !important;
+            }
             .no-print { display: none !important; }
           }
           body { 
@@ -511,12 +522,12 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
             font-size: 11px; 
             direction: rtl; 
             text-align: right; 
-            padding: 6px 4px; 
+            padding: 4px; 
             color: #000; 
             background: #fff; 
             line-height: 1.35;
-            width: 76mm;
-            max-width: 76mm;
+            width: 100%;
+            max-width: 80mm;
             margin: 0 auto;
           }
           .thermal-box {
@@ -529,14 +540,14 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
             font-weight: 900;
             font-size: 12px;
             margin-bottom: 6px;
-            background: #0f172a;
-            color: #fff;
+            border: 1.5px solid #000;
+            background: #fff;
+            color: #000 !important;
             padding: 3px;
             border-radius: 4px;
           }
           .info-grid {
-            background: #f8fafc;
-            border: 1px solid #cbd5e1;
+            border: 1px solid #000;
             border-radius: 6px;
             padding: 6px;
             font-size: 10.5px;
@@ -548,8 +559,8 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
             padding: 2px 0;
           }
           .info-row .label {
-            color: #475569;
-            font-weight: 600;
+            color: #000;
+            font-weight: 700;
           }
           .info-row .val {
             font-weight: 800;
@@ -558,9 +569,9 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
           .section-title {
             font-size: 11px;
             font-weight: 900;
-            color: #0f172a;
-            background: #f1f5f9;
-            border-right: 3px solid #3b82f6;
+            color: #000;
+            border-bottom: 1.5px solid #000;
+            border-right: 3px solid #000;
             padding: 3px 6px;
             margin: 8px 0 4px 0;
             display: flex;
@@ -574,38 +585,41 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
             font-size: 10.5px; 
           }
           th { 
-            background: #f8fafc; 
-            color: #0f172a; 
+            background: #fff; 
+            color: #000; 
             padding: 4px 2px; 
-            border-top: 1px solid #000; 
-            border-bottom: 1px solid #000; 
-            font-weight: 800; 
+            border-top: 1.5px solid #000; 
+            border-bottom: 1.5px solid #000; 
+            font-weight: 900; 
           }
           td { 
             padding: 4px 2px; 
-            border-bottom: 1px dashed #cbd5e1; 
+            border-bottom: 1px dashed #000; 
+            color: #000;
           }
           .summary-box {
-            background: #f8fafc;
-            border: 1.5px solid #0f172a;
+            border: 1.5px solid #000;
             border-radius: 6px;
             padding: 6px;
             margin-top: 8px;
             font-size: 11px;
+            background: #fff;
+            color: #000;
           }
           .summary-row {
             display: flex;
             justify-content: space-between;
             padding: 2px 0;
+            color: #000;
           }
           .summary-row.total-hand {
-            border-top: 1.5px dashed #0f172a;
+            border-top: 1.5px dashed #000;
             margin-top: 4px;
             padding-top: 4px;
             font-size: 12.5px;
             font-weight: 900;
-            color: #15803d;
-            background: #dcfce7;
+            color: #000;
+            border: 1.5px solid #000;
             padding: 4px;
             border-radius: 4px;
           }
@@ -616,6 +630,7 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
             padding-top: 6px;
             font-size: 10px;
             text-align: center;
+            color: #000;
           }
           .sig-line {
             margin-top: 20px;
@@ -626,7 +641,7 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
             text-align: center;
             margin-top: 10px;
             font-size: 10px;
-            color: #475569;
+            color: #000;
           }
         </style>
       </head>
@@ -680,7 +695,7 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
           ${data.collections && data.collections.length > 0 ? `
           <div class="section-title">
             <span>💰 قەرزی وەرگیراو</span>
-            <span dir="ltr" style="font-family: monospace; color: #166534;">${totalCollectedDebt.toLocaleString()} د.ع</span>
+            <span dir="ltr" style="font-family: monospace; color: #000;">${totalCollectedDebt.toLocaleString()} د.ع</span>
           </div>
           <table>
             <thead>
@@ -697,9 +712,9 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
           ` : ''}
 
           ${data.gifts && data.gifts.length > 0 ? `
-          <div class="section-title" style="background: #fef9c3; border-right-color: #eab308;">
-            <span style="color: #854d0e;">🎁 کاڵای هەدیە (${totalGiftItemsCount})</span>
-            <span style="font-size: 10px; color: #854d0e;">٠ د.ع</span>
+          <div class="section-title" style="background: #fff; border: 1px solid #000;">
+            <span style="color: #000;">🎁 کاڵای هەدیە (${totalGiftItemsCount})</span>
+            <span style="font-size: 10px; color: #000;">٠ د.ع</span>
           </div>
           <table>
             <thead>
@@ -717,25 +732,25 @@ export function generateDailyRepReceiptHtml(data: DailyRepActivityData): string 
 
           <div class="summary-box">
             <div class="summary-row">
-              <span style="color: #475569;">فرۆشتنی نەقد:</span>
-              <strong dir="ltr" style="color: #166534;">${totalCashSales.toLocaleString()} د.ع</strong>
+              <span style="color: #000;">فرۆشتنی نەقد:</span>
+              <strong dir="ltr" style="color: #000;">${totalCashSales.toLocaleString()} د.ع</strong>
             </div>
             <div class="summary-row">
-              <span style="color: #475569;">فرۆشتنی بە قەرز:</span>
-              <strong dir="ltr" style="color: #b45309;">${totalDebtSales.toLocaleString()} د.ع</strong>
+              <span style="color: #000;">فرۆشتنی بە قەرز:</span>
+              <strong dir="ltr" style="color: #000;">${totalDebtSales.toLocaleString()} د.ع</strong>
             </div>
             <div class="summary-row">
-              <span style="color: #475569;">کۆی گشتی فرۆش:</span>
+              <span style="color: #000;">کۆی گشتی فرۆش:</span>
               <strong dir="ltr" style="color: #000;">${totalSalesAmount.toLocaleString()} د.ع</strong>
             </div>
             ${totalCollectedDebt > 0 ? `
             <div class="summary-row">
-              <span style="color: #475569;">قەرزی وەرگیراو:</span>
-              <strong dir="ltr" style="color: #166534;">+${totalCollectedDebt.toLocaleString()} د.ع</strong>
+              <span style="color: #000;">قەرزی وەرگیراو:</span>
+              <strong dir="ltr" style="color: #000;">+${totalCollectedDebt.toLocaleString()} د.ع</strong>
             </div>
             ` : ''}
             ${totalGiftItemsCount > 0 ? `
-            <div class="summary-row" style="color: #854d0e;">
+            <div class="summary-row" style="color: #000;">
               <span>کۆی عەدەدی هەدیە:</span>
               <strong>${totalGiftItemsCount} دانە</strong>
             </div>
@@ -801,27 +816,39 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
         <meta charset="utf-8" />
         <title>وەسڵی واسڵکردن - ${data.marketName}</title>
         <style>
-          * { box-sizing: border-box; margin: 0; padding: 0; }
+          * { box-sizing: border-box; margin: 0; padding: 0; color: #000 !important; }
           @page {
-            size: 80mm auto;
+            size: auto;
             margin: 0;
           }
           @media print {
             html, body {
-              width: 76mm !important;
-              max-width: 76mm !important;
-              margin: 0 auto !important;
-              padding: 2mm 1mm !important;
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
             }
+            .receipt-box {
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+              margin: 0 auto !important;
+              padding: 1mm 1.5mm !important;
+              border: none !important;
+            }
+            .no-print { display: none !important; }
           }
           body {
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            padding: 8px 4px;
+            padding: 4px;
             color: #000;
             background: #ffffff;
-            font-size: 11.5px;
-            width: 76mm;
-            max-width: 76mm;
+            font-size: 11px;
+            width: 100%;
+            max-width: 80mm;
             margin: 0 auto;
             line-height: 1.35;
           }
@@ -829,44 +856,50 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
             border: 1px dashed #000;
             border-radius: 8px;
             padding: 8px;
+            color: #000;
+            width: 100%;
+            max-width: 80mm;
+            margin: 0 auto;
           }
           
           .info-table { width: 100%; margin-bottom: 8px; border-collapse: collapse; font-size: 11px; }
-          .info-table td { padding: 4px 0; border-bottom: 1px dotted #ccc; }
-          .info-table .label { color: #333; font-weight: bold; width: 42%; }
+          .info-table td { padding: 4px 0; border-bottom: 1px dashed #000; color: #000; }
+          .info-table .label { color: #000; font-weight: bold; width: 42%; }
           .info-table .val { font-weight: 800; color: #000; text-align: left; }
           
           .amount-box {
-            background: #f1f5f9;
-            border: 1.5px solid #0f172a;
+            background: #fff;
+            border: 1.5px solid #000;
             border-radius: 6px;
             padding: 8px;
             text-align: center;
             margin: 8px 0;
+            color: #000;
           }
-          .amount-box .title { font-size: 11px; color: #0f172a; font-weight: bold; margin-bottom: 2px; }
+          .amount-box .title { font-size: 11px; color: #000; font-weight: bold; margin-bottom: 2px; }
           .amount-box .amount-val { font-size: 20px; font-weight: 900; color: #000; font-family: monospace; }
           
           .debt-breakdown {
-            background: #f8fafc;
-            border: 1px solid #cbd5e1;
+            background: #fff;
+            border: 1px solid #000;
             border-radius: 6px;
             padding: 6px 8px;
             margin-bottom: 10px;
             font-size: 11px;
+            color: #000;
           }
-          .debt-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
-          .debt-row:last-child { margin-bottom: 0; padding-top: 3px; border-top: 1px dashed #64748b; font-weight: bold; }
+          .debt-row { display: flex; justify-content: space-between; margin-bottom: 3px; color: #000; }
+          .debt-row:last-child { margin-bottom: 0; padding-top: 3px; border-top: 1px dashed #000; font-weight: bold; }
           
-          .signatures { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 6px; font-size: 10px; }
-          .sig-block { text-align: center; }
+          .signatures { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 6px; font-size: 10px; color: #000; }
+          .sig-block { text-align: center; color: #000; }
           .sig-line { margin-top: 20px; border-top: 1px dashed #000; width: 100px; }
           
           .footer-note {
             text-align: center;
             margin-top: 10px;
             font-size: 10px;
-            color: #475569;
+            color: #000;
           }
         </style>
       </head>
@@ -882,7 +915,7 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
             isThermal: true
           })}
 
-          <div style="text-align: center; font-weight: 900; font-size: 12px; margin-bottom: 6px; background: #0f172a; color: #fff; padding: 3px; border-radius: 4px;">
+          <div style="text-align: center; font-weight: 900; font-size: 12px; margin-bottom: 6px; border: 1.5px solid #000; background: #000; color: #fff; padding: 3px; border-radius: 4px;">
             پسوڵەی واسڵکردنی قەرز
           </div>
 
@@ -898,17 +931,17 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
             ${data.receiptNo ? `
             <tr>
               <td class="label">ژمارەی وەسڵ / دەفتەر:</td>
-              <td class="val" dir="ltr"><span style="font-family: monospace; font-size: 13px;">#${data.receiptNo}</span></td>
+              <td class="val" dir="ltr"><span style="font-family: monospace; font-size: 13px; font-weight: bold; color: #000;">#${data.receiptNo}</span></td>
             </tr>
             ` : ''}
             <tr>
               <td class="label">بەروار و کات:</td>
-              <td class="val" dir="ltr">${format(data.date, 'yyyy/MM/dd HH:mm')}</td>
+              <td class="val" dir="ltr" style="color: #000;">${format(data.date, 'yyyy/MM/dd HH:mm')}</td>
             </tr>
             ${data.notes ? `
             <tr>
               <td class="label">تێبینی:</td>
-              <td class="val">${data.notes}</td>
+              <td class="val" style="color: #000;">${data.notes}</td>
             </tr>
             ` : ''}
           </table>
@@ -921,16 +954,16 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
           ${data.previousDebt !== undefined ? `
           <div class="debt-breakdown">
             <div class="debt-row">
-              <span style="color:#475569;">قەرزی پێشوو:</span>
+              <span style="color:#000;">قەرزی پێشوو:</span>
               <span dir="ltr" style="font-family:monospace;font-weight:bold;color:#000;">${data.previousDebt.toLocaleString()} د.ع</span>
             </div>
             <div class="debt-row">
-              <span style="color:#475569;">بڕی واسڵکراو:</span>
-              <span dir="ltr" style="font-family:monospace;font-weight:bold;color:#15803d;">-${data.amount.toLocaleString()} د.ع</span>
+              <span style="color:#000;">بڕی واسڵکراو:</span>
+              <span dir="ltr" style="font-family:monospace;font-weight:bold;color:#000;">-${data.amount.toLocaleString()} د.ع</span>
             </div>
             <div class="debt-row">
-              <span>قەرزی ماوە پاش دانەوە:</span>
-              <span dir="ltr" style="font-family:monospace;color:${(data.remainingDebt ?? 0) > 0 ? '#b91c1c' : '#15803d'}; font-size: 12px;">
+              <span style="color:#000; font-weight: bold;">قەرزی ماوە پاش دانەوە:</span>
+              <span dir="ltr" style="font-family:monospace; font-weight: 900; color: #000; font-size: 12.5px;">
                 ${(data.remainingDebt ?? 0).toLocaleString()} د.ع
               </span>
             </div>

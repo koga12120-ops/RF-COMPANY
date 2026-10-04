@@ -1295,15 +1295,17 @@ export default function AdminCashvanView() {
     if (!printWindow) return;
     
     let oldDebt = 0;
+    const cleanMarket = (order.marketName || '').trim();
+    const invoiceNum = order.invoiceId || order.invoiceNo || (order.id || '0').slice(-6);
     try {
       const q = query(
         collection(db, 'transactions'), 
-        where('relatedEntityId', '==', order.marketName)
+        where('relatedEntityId', '==', cleanMarket)
       );
       const snapshot = await getDocs(q);
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
-        if (data.date && data.date < order.timestamp) {
+        if (data.invoiceNo !== invoiceNum) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
@@ -1318,7 +1320,6 @@ export default function AdminCashvanView() {
     
     const marketObj = markets.find(m => m.name === order.marketName);
     const marketPhone = marketObj?.phone || '-';
-    const invoiceNum = order.invoiceId || order.invoiceNo || (order.id || '0').slice(-6);
     const repPhone = reps.find(r => r.name === order.repName)?.phone || (order as any).repPhone || '-';
 
     const itemsHtml = (order.items || []).map((item, idx) => {
@@ -1327,15 +1328,15 @@ export default function AdminCashvanView() {
       const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
       const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
-          <td style="text-align: center; color: #475569; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word;">
+        <tr>
+          <td style="text-align: center; color: #000; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word; color: #000;">
             ${cleanName}
-            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
+            ${isGift ? '<span style="border: 1.5px solid #000; color: #000; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px;">(هەدیە 🎁)</span>' : ''}
           </td>
-          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}</td>
-          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}</td>
+          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : (item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : itemTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
@@ -1349,61 +1350,63 @@ export default function AdminCashvanView() {
           <meta charset="utf-8">
           <title>تەڵەبیەی مەندووب #${invoiceNum}</title>
           <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; }
+            * { box-sizing: border-box; margin: 0; padding: 0; color: #000 !important; }
             @page { 
-              size: 80mm auto; 
+              size: auto; 
               margin: 0; 
             }
             @media print { 
               html, body { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
-                margin: 0 auto !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
+                margin: 0 !important; 
                 padding: 0 !important; 
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
               } 
               .receipt-container { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
                 margin: 0 auto !important; 
-                padding: 1.5mm 1mm !important; 
+                padding: 1mm 1.5mm !important; 
                 border: none !important; 
               } 
               .no-print { display: none !important; }
             }
             body { 
               font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-              font-size: 11.5px; 
+              font-size: 11px; 
               direction: rtl; 
               text-align: right; 
-              padding: 6px 4px; 
+              padding: 4px; 
               color: #000; 
               background: #fff;
               line-height: 1.35;
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
               -webkit-font-smoothing: antialiased;
             }
             .receipt-container {
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
             }
             .thermal-box {
               border: 1px dashed #000;
               border-radius: 6px;
               padding: 6px 5px;
+              color: #000;
             }
             .invoice-badge-box {
               text-align: center;
               font-weight: 900;
               font-size: 12px;
               margin-bottom: 6px;
-              background: #312e81;
+              border: 1.5px solid #000;
+              background: #000;
               color: #fff;
               padding: 3px 6px;
               border-radius: 4px;
@@ -1413,15 +1416,17 @@ export default function AdminCashvanView() {
               padding-bottom: 5px;
               font-size: 11px;
               margin-bottom: 6px;
+              color: #000;
             }
             .info-row {
               display: flex;
               justify-content: space-between;
               padding: 1.5px 0;
+              color: #000;
             }
             .info-row .label {
-              color: #1e293b;
-              font-weight: 700;
+              color: #000;
+              font-weight: bold;
             }
             .info-row .val {
               font-weight: 800;
@@ -1433,9 +1438,10 @@ export default function AdminCashvanView() {
               table-layout: fixed;
               margin-top: 6px; 
               font-size: 11px; 
+              color: #000;
             }
             th { 
-              background: #f1f5f9; 
+              background: #fff; 
               color: #000; 
               padding: 4px 2px; 
               border-top: 1.5px solid #000; 
@@ -1445,25 +1451,29 @@ export default function AdminCashvanView() {
             }
             td { 
               padding: 4px 2px; 
-              border-bottom: 1px dashed #cbd5e1; 
+              border-bottom: 1px dashed #000; 
               font-size: 10.5px;
+              color: #000;
             }
             .summary { 
               margin-top: 6px; 
               border-top: 1.5px dashed #000; 
               padding-top: 5px; 
+              color: #000;
             }
             .summary-row {
               display: flex;
               justify-content: space-between;
               font-size: 11px;
               margin-bottom: 2.5px;
+              color: #000;
             }
             .summary-row.main {
-              font-size: 13.5px;
+              font-size: 13px;
               font-weight: 900;
               color: #000;
-              background: #f1f5f9;
+              background: #fff;
+              border: 1.5px solid #000;
               padding: 4px 6px;
               border-radius: 4px;
               margin-top: 4px;
@@ -1471,7 +1481,7 @@ export default function AdminCashvanView() {
             .summary-row.total-debt {
               font-size: 12.5px;
               font-weight: 900;
-              color: #b91c1c;
+              color: #000;
               border-top: 1px dashed #000;
               padding-top: 4px;
               margin-top: 4px;
@@ -1484,6 +1494,7 @@ export default function AdminCashvanView() {
               font-size: 10.5px;
               font-weight: bold;
               text-align: center;
+              color: #000;
             }
             .sig-line {
               margin-top: 18px;
@@ -1493,10 +1504,10 @@ export default function AdminCashvanView() {
             .footer-note {
               text-align: center;
               margin-top: 12px;
-              border-top: 1px dashed #cbd5e1;
+              border-top: 1px dashed #000;
               padding-top: 5px;
               font-size: 10px;
-              color: #475569;
+              color: #000;
             }
           </style>
         </head>
@@ -1520,25 +1531,25 @@ export default function AdminCashvanView() {
               <div class="info-grid">
                 <div class="info-row">
                   <span class="label">ژمارەی تەڵەبیە:</span>
-                  <span class="val" dir="ltr" style="font-family: monospace;">#${invoiceNum}</span>
+                  <span class="val" dir="ltr" style="font-family: monospace; color: #000;">#${invoiceNum}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">ناوی کڕیار / مارکێت:</span>
-                  <span class="val">${order.marketName}</span>
+                  <span class="val" style="color: #000;">${order.marketName}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">مەندووب:</span>
-                  <span class="val">${order.repName} (${repPhone})</span>
+                  <span class="val" style="color: #000;">${order.repName} (${repPhone})</span>
                 </div>
                 <div class="info-row">
                   <span class="label">جۆری وەسڵ:</span>
-                  <strong style="color: ${order.paymentType === 'cash' ? '#15803d' : '#b45309'};">
+                  <strong style="color: #000;">
                     ${order.paymentType === 'cash' ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
                   </strong>
                 </div>
                 <div class="info-row">
                   <span class="label">بەروار و کات:</span>
-                  <span class="val" dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span>
+                  <span class="val" dir="ltr" style="color: #000;">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span>
                 </div>
               </div>
 
@@ -1559,19 +1570,26 @@ export default function AdminCashvanView() {
 
               <div class="summary">
                 <div class="summary-row main">
-                  <span>کۆی ئەم وەسڵە:</span>
+                  <span>کۆی ئەم وەسڵە (${order.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
                 </div>
                 ${order.paymentType === 'debt' ? `
-                  <div class="summary-row" style="margin-top: 4px;">
-                    <span>قەرزی پێشووی مارکێت:</span>
-                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
-                  </div>
+                  ${oldDebt > 0 ? `
+                    <div class="summary-row" style="margin-top: 4px; font-weight: bold; color: #000;">
+                      <span>قەرزی پێشووی مارکێت:</span>
+                      <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                    </div>
+                  ` : ''}
                   <div class="summary-row total-debt">
                     <span>کۆی گشتی ماوە (قەرز):</span>
                     <span dir="ltr">${newTotalDebt.toLocaleString()} د.ع</span>
                   </div>
-                ` : ''}
+                ` : `
+                  <div class="summary-row total-debt" style="margin-top: 4px;">
+                    <span>قەرزی ماوەی مارکێت (کۆی قەرز):</span>
+                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                  </div>
+                `}
               </div>
 
               <div class="signatures">
@@ -1608,15 +1626,17 @@ export default function AdminCashvanView() {
     if (!printWindow) return;
     
     let oldDebt = 0;
+    const cleanMarket = (sale.marketName || '').trim();
+    const invoiceNum = sale.invoiceNo || sale.invoiceId || (sale.id || '0').slice(-6);
     try {
       const q = query(
         collection(db, 'transactions'), 
-        where('relatedEntityId', '==', sale.marketName)
+        where('relatedEntityId', '==', cleanMarket)
       );
       const snapshot = await getDocs(q);
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
-        if (data.date && data.date < sale.date) {
+        if (data.invoiceNo !== invoiceNum) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
@@ -1631,7 +1651,6 @@ export default function AdminCashvanView() {
     
     const marketObj = markets.find(m => m.name === sale.marketName);
     const marketPhone = marketObj?.phone || '-';
-    const invoiceNum = sale.invoiceNo || sale.invoiceId || (sale.id || '0').slice(-6);
     const cashvanPhone = cashvans.find(c => c.name === sale.cashvanName)?.phone || reps.find(r => r.name === sale.cashvanName)?.phone || '-';
 
     const itemsHtml = (sale.items || []).map((item, idx) => {
@@ -1640,15 +1659,15 @@ export default function AdminCashvanView() {
       const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
       const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
-          <td style="text-align: center; color: #475569; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word;">
+        <tr>
+          <td style="text-align: center; color: #000; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word; color: #000;">
             ${cleanName}
-            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
+            ${isGift ? '<span style="border: 1.5px solid #000; color: #000; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px;">(هەدیە 🎁)</span>' : ''}
           </td>
-          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}</td>
-          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}</td>
+          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : (item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : itemTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
@@ -1662,48 +1681,48 @@ export default function AdminCashvanView() {
           <meta charset="utf-8">
           <title>فاتورەی فرۆشتن #${invoiceNum}</title>
           <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; }
+            * { box-sizing: border-box; margin: 0; padding: 0; color: #000 !important; }
             @page { 
-              size: 80mm auto; 
+              size: auto; 
               margin: 0; 
             }
             @media print { 
               html, body { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
-                margin: 0 auto !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
+                margin: 0 !important; 
                 padding: 0 !important; 
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
               } 
               .receipt-container { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
                 margin: 0 auto !important; 
-                padding: 1.5mm 1mm !important; 
+                padding: 1mm 1.5mm !important; 
                 border: none !important; 
               } 
               .no-print { display: none !important; }
             }
             body { 
               font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-              font-size: 11.5px; 
+              font-size: 11px; 
               direction: rtl; 
               text-align: right; 
-              padding: 6px 4px; 
+              padding: 4px; 
               color: #000; 
               background: #fff; 
               line-height: 1.35;
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
               -webkit-font-smoothing: antialiased;
             }
             .receipt-container {
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
             }
             .thermal-box {
@@ -1716,7 +1735,8 @@ export default function AdminCashvanView() {
               font-weight: 900;
               font-size: 12px;
               margin-bottom: 6px;
-              background: #0f172a;
+              border: 1.5px solid #000;
+              background: #000;
               color: #fff;
               padding: 3px 6px;
               border-radius: 4px;
@@ -1872,19 +1892,26 @@ export default function AdminCashvanView() {
 
               <div class="summary">
                 <div class="summary-row main">
-                  <span>کۆی ئەم وەسڵە:</span>
+                  <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
                 </div>
                 ${sale.paymentType === 'debt' ? `
-                  <div class="summary-row" style="margin-top: 4px;">
-                    <span>قەرزی پێشووی مارکێت:</span>
-                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
-                  </div>
+                  ${oldDebt > 0 ? `
+                    <div class="summary-row" style="margin-top: 4px; font-weight: bold; color: #000;">
+                      <span>قەرزی پێشووی مارکێت:</span>
+                      <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                    </div>
+                  ` : ''}
                   <div class="summary-row total-debt">
                     <span>کۆی گشتی ماوە (قەرز):</span>
                     <span dir="ltr">${newTotalDebt.toLocaleString()} د.ع</span>
                   </div>
-                ` : ''}
+                ` : `
+                  <div class="summary-row total-debt" style="margin-top: 4px;">
+                    <span>قەرزی ماوەی مارکێت (کۆی قەرز):</span>
+                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                  </div>
+                `}
               </div>
 
               <div class="signatures">

@@ -347,45 +347,45 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
           <meta charset="utf-8">
           <title>پسوڵەی گەڕاندنەوە #${ret.returnNo || ret.id.slice(-6)}</title>
           <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; }
-            @page { size: 80mm auto; margin: 0; }
+            * { box-sizing: border-box; margin: 0; padding: 0; color: #000 !important; }
+            @page { size: auto; margin: 0; }
             @media print {
               html, body {
-                width: 76mm !important;
-                max-width: 76mm !important;
-                min-width: 76mm !important;
-                margin: 0 auto !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                margin: 0 !important;
                 padding: 0 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
               }
               .receipt-container {
-                width: 76mm !important;
-                max-width: 76mm !important;
-                min-width: 76mm !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
                 margin: 0 auto !important;
-                padding: 1.5mm 1mm !important;
+                padding: 1mm 1.5mm !important;
                 border: none !important;
               }
               .no-print { display: none !important; }
             }
             body {
               font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-              font-size: 11.5px;
+              font-size: 11px;
               color: #000;
               background: #fff;
-              padding: 6px 4px;
+              padding: 4px;
               line-height: 1.35;
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
               direction: rtl;
               text-align: right;
               -webkit-font-smoothing: antialiased;
             }
             .receipt-container {
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
             }
             .thermal-box {
@@ -398,7 +398,8 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
               font-weight: 900;
               font-size: 12px;
               margin-bottom: 6px;
-              background: #9f1239;
+              border: 1.5px solid #000;
+              background: #000;
               color: #fff;
               padding: 3px 6px;
               border-radius: 4px;
@@ -415,18 +416,19 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
               padding: 1.5px 0;
             }
             table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; font-size: 11px; }
-            th { background-color: #f1f5f9; color: #0f172a; padding: 4px 2px; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000; font-weight: 900; font-size: 10.5px; }
-            td { padding: 4px 2px; border-bottom: 1px dashed #cbd5e1; font-size: 10.5px; }
+            th { background-color: #fff; color: #000; padding: 4px 2px; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000; font-weight: 900; font-size: 10.5px; }
+            td { padding: 4px 2px; border-bottom: 1px dashed #000; font-size: 10.5px; color: #000; }
             .summary-box {
               padding: 5px 6px;
-              background: #fff1f2;
-              border: 1.5px solid #e11d48;
+              background: #fff;
+              border: 1.5px solid #000;
               border-radius: 4px;
               display: flex;
               justify-content: space-between;
               font-size: 12px;
               font-weight: bold;
               margin-top: 6px;
+              color: #000;
             }
             .notes-box {
               margin-top: 6px;

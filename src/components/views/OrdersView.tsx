@@ -8,7 +8,7 @@ import { format, startOfDay, endOfDay, subDays, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
 import MarketDailyScheduleCard from '../common/MarketDailyScheduleCard';
-import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPopup, printMarketDebtReceiptPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
 import { getStoredSession } from '../../lib/authService';
 import { getCompanySettings } from '../../lib/companySettings';
@@ -937,6 +937,51 @@ export default function OrdersView({
   };
 
   // --- CASHVAN SALE EDIT & DELETE HANDLERS ---
+  const adjustVanInventoryStock = async (vanName: string, itemId: string, itemName: string, unit: string = 'carton', delta: number) => {
+    try {
+      const cleanVan = vanName.trim();
+      const qV = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', cleanVan));
+      const snapV = await getDocs(qV);
+      const matched = snapV.docs.find(d => {
+        const data = d.data();
+        return data.itemId === itemId || d.id === `${cleanVan}_${itemId}` || data.name === itemName;
+      });
+
+      if (matched) {
+        const curQty = matched.data().quantity || 0;
+        const newQty = Math.max(0, Math.round((curQty + delta) * 1000) / 1000);
+        await updateDoc(doc(db, 'cashvan_inventory', matched.id), {
+          quantity: newQty,
+          lastUpdated: Date.now()
+        });
+      } else if (delta > 0) {
+        const newDocId = `${cleanVan}_${itemId || Date.now()}`;
+        await setDoc(doc(db, 'cashvan_inventory', newDocId), {
+          cashvanName: cleanVan,
+          itemId: itemId || '',
+          name: itemName,
+          unit: unit || 'carton',
+          quantity: Math.round(delta * 1000) / 1000,
+          lastUpdated: Date.now()
+        }, { merge: true });
+      }
+    } catch (err) {
+      console.error('Error adjusting van inventory stock:', err);
+    }
+  };
+
+  const getAvailableStockForEditSaleItem = (itemId: string, itemName: string) => {
+    const vItem = vanInventory.find(v => (v.itemId === itemId || v.id === itemId || v.name === itemName));
+    const curVanQty = vItem ? (vItem.quantity || 0) : 0;
+    const origItem = editingSale?.items?.find((it: any) => (it.itemId === itemId || it.name === itemName));
+    const origQty = origItem ? (origItem.quantity || 0) : 0;
+    return {
+      vanStock: curVanQty,
+      origQty: origQty,
+      maxAllowed: Math.round((curVanQty + origQty) * 100) / 100
+    };
+  };
+
   const handleConfirmDeleteSale = async () => {
     if (!deletingSale) return;
     try {
@@ -945,6 +990,18 @@ export default function OrdersView({
         deletedAt: Date.now(),
         deletedBy: repName || 'کاشڤان'
       });
+
+      // Return items back into van inventory
+      const targetVanName = (deletingSale.cashvanName || repName || '').trim();
+      if (targetVanName && deletingSale.items) {
+        for (const it of deletingSale.items) {
+          const qty = it.quantity || 0;
+          if (qty > 0) {
+            await adjustVanInventoryStock(targetVanName, it.itemId, it.name, it.unit, qty);
+          }
+        }
+      }
+
       const inv = deletingSale.invoiceNo || deletingSale.invoiceId;
       if (inv) {
         const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', inv));
@@ -954,7 +1011,7 @@ export default function OrdersView({
         }
       }
       setDeletingSale(null);
-      alert('فرۆشتنی کاشڤان بە سەرکەوتوویی سڕایەوە');
+      alert('فرۆشتنی کاشڤان سڕایەوە و کاڵاکان بە سەرکەوتوویی گەڕێنرانەوە بۆ ناو ڤان');
     } catch (e: any) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوە: ' + e.message);
@@ -980,27 +1037,45 @@ export default function OrdersView({
   };
 
   const handleUpdateEditSaleItemQty = (index: number, delta: number) => {
-    setEditSaleItems(prev => prev.map((item, idx) => {
-      if (idx !== index) return item;
-      const newQty = Math.max(0.5, (item.quantity || 0) + delta);
-      return {
-        ...item,
-        quantity: newQty,
-        totalPrice: item.isGift ? 0 : (newQty * (item.price || 0))
-      };
-    }));
+    setEditSaleItems(prev => {
+      const target = prev[index];
+      if (!target) return prev;
+      const { maxAllowed } = getAvailableStockForEditSaleItem(target.itemId, target.name);
+      const newQty = Math.max(0.5, Math.round(((target.quantity || 0) + delta) * 100) / 100);
+      if (delta > 0 && newQty > maxAllowed) {
+        alert(`بڕی زیاتر لەناو ڤاندا بەردەست نییە. مەوجودی ڤان تەنها ڕێگە دەدات تا ${maxAllowed} دابنێیت.`);
+        return prev;
+      }
+      return prev.map((item, idx) => {
+        if (idx !== index) return item;
+        return {
+          ...item,
+          quantity: newQty,
+          totalPrice: item.isGift ? 0 : (newQty * (item.price || 0))
+        };
+      });
+    });
   };
 
   const handleUpdateEditSaleItemDirectQty = (index: number, val: number) => {
-    const cleanQty = Math.max(0, val);
-    setEditSaleItems(prev => prev.map((item, idx) => {
-      if (idx !== index) return item;
-      return {
-        ...item,
-        quantity: cleanQty,
-        totalPrice: item.isGift ? 0 : (cleanQty * (item.price || 0))
-      };
-    }));
+    setEditSaleItems(prev => {
+      const target = prev[index];
+      if (!target) return prev;
+      const { maxAllowed } = getAvailableStockForEditSaleItem(target.itemId, target.name);
+      let cleanQty = Math.max(0, val);
+      if (cleanQty > maxAllowed) {
+        alert(`بڕی بەردەست لەناو ڤاندا بەش ناکات. تەنها ڕێگەپێدراوە تا ${maxAllowed} دابنێیت.`);
+        cleanQty = maxAllowed;
+      }
+      return prev.map((item, idx) => {
+        if (idx !== index) return item;
+        return {
+          ...item,
+          quantity: cleanQty,
+          totalPrice: item.isGift ? 0 : (cleanQty * (item.price || 0))
+        };
+      });
+    });
   };
 
   const handleUpdateEditSaleItemUnit = (index: number, newUnit: 'carton' | 'packet') => {
@@ -1050,9 +1125,19 @@ export default function OrdersView({
   };
 
   const handleAddItemToEditSale = (prod: Item | any) => {
+    const pId = prod.id || prod.itemId;
+    const { maxAllowed, vanStock } = getAvailableStockForEditSaleItem(pId, prod.name);
+    
+    // Check if user already has this item in editSaleItems
+    const existing = editSaleItems.find(p => p.itemId === pId || p.name === prod.name);
+    const curAdded = existing ? (existing.quantity || 0) : 0;
+    if (curAdded + 1 > maxAllowed) {
+      alert(`ناتوانیت ئەم کاڵایە زیاد بکەیت! مەوجودی بەردەست لەناو ڤان بەش ناکات (لەناو ڤان: ${vanStock}، ماوەی ڕێگەپێدراو: ${maxAllowed}).`);
+      return;
+    }
+
     setEditSaleItems(prev => {
-      const pId = prod.id || prod.itemId;
-      const existingIdx = prev.findIndex(p => p.itemId === pId);
+      const existingIdx = prev.findIndex(p => p.itemId === pId || p.name === prod.name);
       if (existingIdx >= 0) {
         return prev.map((p, idx) => {
           if (idx !== existingIdx) return p;
@@ -1116,6 +1201,44 @@ export default function OrdersView({
         };
       });
 
+      // Synchronize Van Inventory! (Return reduced quantities or deduct increased quantities)
+      const targetVanName = (editingSale.cashvanName || repName || '').trim();
+      if (targetVanName) {
+        const oldItemsMap = new Map<string, any>();
+        (editingSale.items || []).forEach((it: any) => {
+          const key = it.itemId || it.name;
+          oldItemsMap.set(key, it);
+        });
+
+        const newItemsMap = new Map<string, any>();
+        sanitizedItems.forEach((it: any) => {
+          const key = it.itemId || it.name;
+          newItemsMap.set(key, it);
+        });
+
+        // 1. Items in old sale: check if reduced, increased, or removed
+        for (const [key, oldIt] of oldItemsMap.entries()) {
+          const newIt = newItemsMap.get(key);
+          const oldQty = oldIt.quantity || 0;
+          const newQty = newIt ? (newIt.quantity || 0) : 0;
+          const delta = oldQty - newQty; // If delta > 0: returned to van; If delta < 0: deducted from van
+
+          if (delta !== 0) {
+            await adjustVanInventoryStock(targetVanName, oldIt.itemId, oldIt.name, oldIt.unit, delta);
+          }
+        }
+
+        // 2. Items added in new sale that were not in old sale
+        for (const [key, newIt] of newItemsMap.entries()) {
+          if (!oldItemsMap.has(key)) {
+            const deductQty = newIt.quantity || 0;
+            if (deductQty > 0) {
+              await adjustVanInventoryStock(targetVanName, newIt.itemId, newIt.name, newIt.unit, -deductQty);
+            }
+          }
+        }
+      }
+
       await updateDoc(doc(db, 'cashvan_sales', editingSale.id), {
         marketName: editSaleMarketName.trim(),
         totalAmount,
@@ -1146,7 +1269,7 @@ export default function OrdersView({
       }
 
       setEditingSale(null);
-      alert('گۆڕانکاری و کاڵاکانی فرۆشتنی کاشڤان بە سەرکەوتوویی پاشەکەوت کران و حیسابات نوێکرایەوە');
+      alert('گۆڕانکاری و کاڵاکانی فرۆشتنی کاشڤان بە سەرکەوتوویی پاشەکەوت کران و مەوجودی ناو ڤان ڕێکخرایەوە');
     } catch (e: any) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا لە دەستکاری: ' + e.message);
@@ -1166,13 +1289,42 @@ export default function OrdersView({
     e.preventDefault();
     if (!editingDebtColl) return;
     try {
+      const newAmount = Number(editDebtCollAmount) || 0;
+      const mName = (editingDebtColl.relatedEntityId || (editingDebtColl as any).marketName || '').trim();
+      
+      let pDebt = (editingDebtColl as any).previousDebt;
+      if (pDebt === undefined || pDebt === 0) {
+        const curMarketDebt = marketDebtMap.get(mName) || 0;
+        pDebt = curMarketDebt + (editingDebtColl.amount || 0);
+      }
+      const rDebt = Math.max(0, pDebt - newAmount);
+
       await updateDoc(doc(db, 'transactions', editingDebtColl.id), {
-        amount: Number(editDebtCollAmount) || 0,
+        amount: newAmount,
         description: editDebtCollNotes,
+        previousDebt: pDebt,
+        remainingDebt: rDebt,
         lastEditedAt: Date.now()
       });
+
+      // Also sync to paid_debts if matching invoiceNo
+      const inv = editingDebtColl.invoiceNo;
+      if (inv) {
+        const qP = query(collection(db, 'paid_debts'), where('invoiceNo', '==', inv));
+        const snapP = await getDocs(qP);
+        for (const d of snapP.docs) {
+          await updateDoc(doc(db, 'paid_debts', d.id), {
+            amount: newAmount,
+            notes: editDebtCollNotes,
+            previousDebt: pDebt,
+            remainingDebt: rDebt,
+            lastEditedAt: Date.now()
+          });
+        }
+      }
+
       setEditingDebtColl(null);
-      alert('گۆڕانکارییەکانی واسڵکردن بە سەرکەوتوویی پاشەکەوت کران');
+      alert('گۆڕانکارییەکانی واسڵکردن بە سەرکەوتوویی پاشەکەوت کران و قەرزی پێشوو و ماوە نوێکرانەوە');
     } catch (e: any) {
       console.error(e);
       alert('هەڵەیەک ڕوویدا: ' + e.message);
@@ -1454,15 +1606,16 @@ export default function OrdersView({
     const cashvanPhone = sale.cashvanPhone || repObj?.phone || (getStoredSession() as any)?.phone || '0750 000 0000';
 
     let oldDebt = 0;
+    const cleanMarket = (sale.marketName || '').trim();
     try {
       const q = query(
         collection(db, 'transactions'),
-        where('relatedEntityId', '==', sale.marketName)
+        where('relatedEntityId', '==', cleanMarket)
       );
       const snapshot = await getDocs(q);
       snapshot.forEach(doc => {
         const data = doc.data();
-        if (data.date && data.date < (sale.date || Date.now())) {
+        if (data.invoiceNo !== invoiceId) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
@@ -1475,21 +1628,36 @@ export default function OrdersView({
       console.error(e);
     }
 
+    if (oldDebt === 0) {
+      let liveDebt = marketDebtMap.get(cleanMarket) || 0;
+      if (liveDebt === 0) {
+        for (const [mKey, dVal] of marketDebtMap.entries()) {
+          if (mKey.trim().toLowerCase() === cleanMarket.toLowerCase()) {
+            liveDebt = dVal;
+            break;
+          }
+        }
+      }
+      if (liveDebt > 0) {
+        oldDebt = sale.paymentType === 'debt' ? Math.max(0, liveDebt - (sale.totalAmount || 0)) : liveDebt;
+      }
+    }
+
     const itemsHtml = (sale.items || []).map((item: any, idx: number) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
       const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
       const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
       const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
-          <td style="text-align: center; color: #475569; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word;">
+        <tr>
+          <td style="text-align: center; color: #000; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word; color: #000;">
             ${cleanName}
-            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
+            ${isGift ? '<span style="border: 1.5px solid #000; color: #000; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px;">(هەدیە 🎁)</span>' : ''}
           </td>
-          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}</td>
-          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}</td>
+          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : (item.price || 0).toLocaleString()}</td>
+          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : itemTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
@@ -1501,61 +1669,63 @@ export default function OrdersView({
           <meta charset="utf-8">
           <title>فاتورەی فرۆشتن #${invoiceId}</title>
           <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; }
+            * { box-sizing: border-box; margin: 0; padding: 0; color: #000 !important; }
             @page { 
-              size: 80mm auto; 
+              size: auto; 
               margin: 0; 
             }
             @media print { 
               html, body { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
-                margin: 0 auto !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
+                margin: 0 !important; 
                 padding: 0 !important; 
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
               } 
               .receipt-container { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
                 margin: 0 auto !important; 
-                padding: 1.5mm 1mm !important; 
+                padding: 1mm 1.5mm !important; 
                 border: none !important; 
               } 
               .no-print { display: none !important; }
             }
             body { 
               font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-              font-size: 11.5px; 
+              font-size: 11px; 
               direction: rtl; 
               text-align: right; 
-              padding: 6px 4px; 
+              padding: 4px; 
               color: #000; 
-              background: #fff;
+              background: #fff; 
               line-height: 1.35;
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
               -webkit-font-smoothing: antialiased;
             }
             .receipt-container {
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
             }
             .thermal-box {
               border: 1px dashed #000;
               border-radius: 6px;
               padding: 6px 5px;
+              color: #000;
             }
             .invoice-badge-box {
               text-align: center;
               font-weight: 900;
               font-size: 12px;
               margin-bottom: 6px;
-              background: #0f172a;
+              border: 1.5px solid #000;
+              background: #000;
               color: #fff;
               padding: 3px 6px;
               border-radius: 4px;
@@ -1565,15 +1735,17 @@ export default function OrdersView({
               padding-bottom: 5px;
               font-size: 11px;
               margin-bottom: 6px;
+              color: #000;
             }
             .info-row {
               display: flex;
               justify-content: space-between;
               padding: 1.5px 0;
+              color: #000;
             }
             .info-row .label {
-              color: #1e293b;
-              font-weight: 700;
+              color: #000;
+              font-weight: bold;
             }
             .info-row .val {
               font-weight: 800;
@@ -1585,9 +1757,10 @@ export default function OrdersView({
               table-layout: fixed;
               margin-top: 6px; 
               font-size: 11px; 
+              color: #000;
             }
             th { 
-              background: #f1f5f9; 
+              background: #fff; 
               color: #000; 
               padding: 4px 2px; 
               border-top: 1.5px solid #000; 
@@ -1597,25 +1770,29 @@ export default function OrdersView({
             }
             td { 
               padding: 4px 2px; 
-              border-bottom: 1px dashed #cbd5e1; 
+              border-bottom: 1px dashed #000; 
               font-size: 10.5px;
+              color: #000;
             }
             .summary { 
               margin-top: 6px; 
               border-top: 1.5px dashed #000; 
               padding-top: 5px; 
+              color: #000;
             }
             .summary-row {
               display: flex;
               justify-content: space-between;
               font-size: 11px;
               margin-bottom: 2.5px;
+              color: #000;
             }
             .summary-row.main {
-              font-size: 13.5px;
+              font-size: 13px;
               font-weight: 900;
               color: #000;
-              background: #f1f5f9;
+              background: #fff;
+              border: 1.5px solid #000;
               padding: 4px 6px;
               border-radius: 4px;
               margin-top: 4px;
@@ -1623,7 +1800,7 @@ export default function OrdersView({
             .summary-row.total-debt {
               font-size: 12.5px;
               font-weight: 900;
-              color: #b91c1c;
+              color: #000;
               border-top: 1px dashed #000;
               padding-top: 4px;
               margin-top: 4px;
@@ -1636,6 +1813,7 @@ export default function OrdersView({
               font-size: 10.5px;
               font-weight: bold;
               text-align: center;
+              color: #000;
             }
             .sig-line {
               margin-top: 18px;
@@ -1645,10 +1823,10 @@ export default function OrdersView({
             .footer-note {
               text-align: center;
               margin-top: 12px;
-              border-top: 1px dashed #cbd5e1;
+              border-top: 1px dashed #000;
               padding-top: 5px;
               font-size: 10px;
-              color: #475569;
+              color: #000;
             }
           </style>
         </head>
@@ -1672,25 +1850,25 @@ export default function OrdersView({
               <div class="info-grid">
                 <div class="info-row">
                   <span class="label">ژمارەی وەسڵ:</span>
-                  <span class="val" dir="ltr" style="font-family: monospace;">#${invoiceId}</span>
+                  <span class="val" dir="ltr" style="font-family: monospace; color: #000;">#${invoiceId}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">ناوی کڕیار / مارکێت:</span>
-                  <span class="val">${sale.marketName}</span>
+                  <span class="val" style="color: #000;">${sale.marketName}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">کاشڤان:</span>
-                  <span class="val">${sale.cashvanName}</span>
+                  <span class="val" style="color: #000;">${sale.cashvanName}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">شێوازی پارەدان:</span>
-                  <strong style="color: ${sale.paymentType === 'cash' ? '#15803d' : '#b45309'};">
+                  <strong style="color: #000;">
                     ${sale.paymentType === 'cash' ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
                   </strong>
                 </div>
                 <div class="info-row">
                   <span class="label">بەروار و کات:</span>
-                  <span class="val" dir="ltr">${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}</span>
+                  <span class="val" dir="ltr" style="color: #000;">${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}</span>
                 </div>
               </div>
 
@@ -1711,19 +1889,26 @@ export default function OrdersView({
 
               <div class="summary">
                 <div class="summary-row main">
-                  <span>کۆی ئەم وەسڵە:</span>
+                  <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
                 </div>
                 ${sale.paymentType === 'debt' ? `
-                  <div class="summary-row" style="margin-top: 4px;">
-                    <span>قەرزی پێشووی مارکێت:</span>
-                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
-                  </div>
+                  ${oldDebt > 0 ? `
+                    <div class="summary-row" style="margin-top: 4px; font-weight: bold; color: #000;">
+                      <span>قەرزی پێشووی مارکێت:</span>
+                      <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                    </div>
+                  ` : ''}
                   <div class="summary-row total-debt">
                     <span>کۆی گشتی ماوە (قەرز):</span>
                     <span dir="ltr">${(oldDebt + (sale.totalAmount || 0)).toLocaleString()} د.ع</span>
                   </div>
-                ` : ''}
+                ` : `
+                  <div class="summary-row total-debt" style="margin-top: 4px;">
+                    <span>قەرزی ماوەی مارکێت (کۆی قەرز):</span>
+                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                  </div>
+                `}
               </div>
 
               <div class="signatures">
@@ -1764,15 +1949,16 @@ export default function OrdersView({
     const repPhone = (order as any).repPhone || repObj?.phone || (getStoredSession() as any)?.phone || '-';
 
     let oldDebt = 0;
+    const cleanMarket = (order.marketName || '').trim();
     try {
       const q = query(
         collection(db, 'transactions'),
-        where('relatedEntityId', '==', order.marketName)
+        where('relatedEntityId', '==', cleanMarket)
       );
       const snapshot = await getDocs(q);
       snapshot.forEach(doc => {
         const data = doc.data();
-        if (data.date && data.date < order.timestamp) {
+        if (data.invoiceNo !== invoiceId) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
@@ -1785,24 +1971,39 @@ export default function OrdersView({
       console.error(e);
     }
 
+    if (oldDebt === 0) {
+      let liveDebt = marketDebtMap.get(cleanMarket) || 0;
+      if (liveDebt === 0) {
+        for (const [mKey, dVal] of marketDebtMap.entries()) {
+          if (mKey.trim().toLowerCase() === cleanMarket.toLowerCase()) {
+            liveDebt = dVal;
+            break;
+          }
+        }
+      }
+      if (liveDebt > 0) {
+        oldDebt = order.paymentStatus === 'debt' ? Math.max(0, liveDebt - (order.totalAmount || 0)) : liveDebt;
+      }
+    }
+
     const itemsHtml = (order.items || []).map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
       const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
       const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
       const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
-        <tr ${isGift ? 'style="background-color: #fefce8;"' : ''}>
-          <td style="text-align: center; color: #475569; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word;">
+        <tr>
+          <td style="text-align: center; color: #000; font-size: 10px; padding: 4px 1px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: bold; font-size: 11px; padding: 4px 2px; word-break: break-word; color: #000;">
             ${cleanName}
-            ${isGift ? '<span style="background: #fef08a; color: #854d0e; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px; border: 1px solid #facc15;">(هەدیە)</span>' : ''}
+            ${isGift ? '<span style="border: 1.5px solid #000; color: #000; font-size: 9px; font-weight: 900; padding: 1px 3px; border-radius: 3px; margin-right: 2px;">(هەدیە 🎁)</span>' : ''}
           </td>
-          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">
-            ${isGift ? '<strong style="color: #ca8a04;">0</strong>' : (item.price || 0).toLocaleString()}
+          <td style="text-align: center; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
+          <td style="text-align: center; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">
+            ${isGift ? '<strong style="color: #000;">0</strong>' : (item.price || 0).toLocaleString()}
           </td>
-          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap;" dir="ltr">
-            ${isGift ? '<strong style="color: #ca8a04;">0</strong>' : itemTotal.toLocaleString()}
+          <td style="text-align: left; font-weight: bold; font-size: 10.5px; padding: 4px 1px; white-space: nowrap; color: #000;" dir="ltr">
+            ${isGift ? '<strong style="color: #000;">0</strong>' : itemTotal.toLocaleString()}
           </td>
         </tr>
       `;
@@ -1815,61 +2016,63 @@ export default function OrdersView({
           <meta charset="utf-8">
           <title>تەڵەبیەی مەندووب #${invoiceId}</title>
           <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; }
+            * { box-sizing: border-box; margin: 0; padding: 0; color: #000 !important; }
             @page { 
-              size: 80mm auto; 
+              size: auto; 
               margin: 0; 
             }
             @media print { 
               html, body { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
-                margin: 0 auto !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
+                margin: 0 !important; 
                 padding: 0 !important; 
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
               } 
               .receipt-container { 
-                width: 76mm !important; 
-                max-width: 76mm !important; 
-                min-width: 76mm !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                min-width: 0 !important; 
                 margin: 0 auto !important; 
-                padding: 1.5mm 1mm !important; 
+                padding: 1mm 1.5mm !important; 
                 border: none !important; 
               } 
               .no-print { display: none !important; }
             }
             body { 
               font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-              font-size: 11.5px; 
+              font-size: 11px; 
               direction: rtl; 
               text-align: right; 
-              padding: 6px 4px; 
+              padding: 4px; 
               color: #000; 
-              background: #fff;
+              background: #fff; 
               line-height: 1.35;
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
               -webkit-font-smoothing: antialiased;
             }
             .receipt-container {
-              width: 76mm;
-              max-width: 76mm;
+              width: 100%;
+              max-width: 80mm;
               margin: 0 auto;
             }
             .thermal-box {
               border: 1px dashed #000;
               border-radius: 6px;
               padding: 6px 5px;
+              color: #000;
             }
             .invoice-badge-box {
               text-align: center;
               font-weight: 900;
               font-size: 12px;
               margin-bottom: 6px;
-              background: #312e81;
+              border: 1.5px solid #000;
+              background: #000;
               color: #fff;
               padding: 3px 6px;
               border-radius: 4px;
@@ -1879,15 +2082,17 @@ export default function OrdersView({
               padding-bottom: 5px;
               font-size: 11px;
               margin-bottom: 6px;
+              color: #000;
             }
             .info-row {
               display: flex;
               justify-content: space-between;
               padding: 1.5px 0;
+              color: #000;
             }
             .info-row .label {
-              color: #1e293b;
-              font-weight: 700;
+              color: #000;
+              font-weight: bold;
             }
             .info-row .val {
               font-weight: 800;
@@ -1899,10 +2104,11 @@ export default function OrdersView({
               table-layout: fixed;
               margin-top: 6px; 
               font-size: 11px; 
+              color: #000;
             }
             th { 
-              background: #f1f5f9; 
-              color: #0f172a; 
+              background: #fff; 
+              color: #000; 
               padding: 4px 2px; 
               border-top: 1.5px solid #000; 
               border-bottom: 1.5px solid #000; 
@@ -1911,25 +2117,29 @@ export default function OrdersView({
             }
             td { 
               padding: 4px 2px; 
-              border-bottom: 1px dashed #cbd5e1; 
+              border-bottom: 1px dashed #000; 
               font-size: 10.5px;
+              color: #000;
             }
             .summary { 
               margin-top: 6px; 
               border-top: 1.5px dashed #000; 
               padding-top: 5px; 
+              color: #000;
             }
             .summary-row {
               display: flex;
               justify-content: space-between;
               font-size: 11px;
               margin-bottom: 2.5px;
+              color: #000;
             }
             .summary-row.main {
-              font-size: 13.5px;
+              font-size: 13px;
               font-weight: 900;
               color: #000;
-              background: #f1f5f9;
+              background: #fff;
+              border: 1.5px solid #000;
               padding: 4px 6px;
               border-radius: 4px;
               margin-top: 4px;
@@ -1937,7 +2147,7 @@ export default function OrdersView({
             .summary-row.total-debt {
               font-size: 12.5px;
               font-weight: 900;
-              color: #b91c1c;
+              color: #000;
               border-top: 1px dashed #000;
               padding-top: 4px;
               margin-top: 4px;
@@ -1950,6 +2160,7 @@ export default function OrdersView({
               font-size: 10.5px;
               font-weight: bold;
               text-align: center;
+              color: #000;
             }
             .sig-line {
               margin-top: 18px;
@@ -1959,10 +2170,10 @@ export default function OrdersView({
             .footer-note {
               text-align: center;
               margin-top: 12px;
-              border-top: 1px dashed #cbd5e1;
+              border-top: 1px dashed #000;
               padding-top: 5px;
               font-size: 10px;
-              color: #475569;
+              color: #000;
             }
           </style>
         </head>
@@ -1986,25 +2197,25 @@ export default function OrdersView({
               <div class="info-grid">
                 <div class="info-row">
                   <span class="label">ژمارەی وەسڵ:</span>
-                  <span class="val" dir="ltr" style="font-family: monospace;">#${invoiceId}</span>
+                  <span class="val" dir="ltr" style="font-family: monospace; color: #000;">#${invoiceId}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">ناوی کڕیار / مارکێت:</span>
-                  <span class="val">${order.marketName}</span>
+                  <span class="val" style="color: #000;">${order.marketName}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">مەندووب:</span>
-                  <span class="val">${order.repName}</span>
+                  <span class="val" style="color: #000;">${order.repName}</span>
                 </div>
                 <div class="info-row">
                   <span class="label">شێوازی پارەدان:</span>
-                  <strong style="color: ${order.paymentStatus === 'cash' ? '#15803d' : '#b45309'};">
+                  <strong style="color: #000;">
                     ${order.paymentStatus === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}
                   </strong>
                 </div>
                 <div class="info-row">
                   <span class="label">بەروار و کات:</span>
-                  <span class="val" dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span>
+                  <span class="val" dir="ltr" style="color: #000;">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span>
                 </div>
               </div>
 
@@ -2025,19 +2236,26 @@ export default function OrdersView({
 
               <div class="summary">
                 <div class="summary-row main">
-                  <span>کۆی ئەم وەسڵە:</span>
+                  <span>کۆی ئەم وەسڵە (${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
                 </div>
                 ${order.paymentStatus === 'debt' ? `
-                  <div class="summary-row" style="margin-top: 4px;">
-                    <span>قەرزی پێشووی مارکێت:</span>
-                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
-                  </div>
+                  ${oldDebt > 0 ? `
+                    <div class="summary-row" style="margin-top: 4px; font-weight: bold; color: #000;">
+                      <span>قەرزی پێشووی مارکێت:</span>
+                      <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                    </div>
+                  ` : ''}
                   <div class="summary-row total-debt">
                     <span>کۆی گشتی ماوە (قەرز):</span>
                     <span dir="ltr">${(oldDebt + (order.totalAmount || 0)).toLocaleString()} د.ع</span>
                   </div>
-                ` : ''}
+                ` : `
+                  <div class="summary-row total-debt" style="margin-top: 4px;">
+                    <span>قەرزی ماوەی مارکێت (کۆی قەرز):</span>
+                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                  </div>
+                `}
               </div>
 
               <div class="signatures">
@@ -3559,15 +3777,28 @@ export default function OrdersView({
                           <button
                             type="button"
                             onClick={() => {
-                              printPaymentReceiptPopup({
-                                entityName: act.rawTransaction!.relatedEntityId || act.marketName,
-                                originalDebtAmount: act.amount || 0,
-                                paidAmount: act.amount || 0,
-                                remainingDebtAmount: 0,
-                                date: act.rawTransaction!.date || Date.now(),
-                                invoiceNo: act.rawTransaction!.invoiceNo,
-                                roleTitle: 'مارکێت',
-                                description: act.rawTransaction!.description
+                              const tr = act.rawTransaction!;
+                              const mName = (tr.relatedEntityId || (tr as any).marketName || act.marketName || '').trim();
+                              let pDebt = (tr as any).previousDebt;
+                              let rDebt = (tr as any).remainingDebt;
+
+                              if (pDebt === undefined || pDebt === 0) {
+                                const curMarketDebt = marketDebtMap.get(mName) || 0;
+                                pDebt = curMarketDebt + (tr.amount || 0);
+                                rDebt = curMarketDebt;
+                              } else if (rDebt === undefined) {
+                                rDebt = Math.max(0, pDebt - (tr.amount || 0));
+                              }
+
+                              printMarketDebtReceiptPopup({
+                                marketName: mName,
+                                amount: tr.amount || 0,
+                                collectorName: tr.collectorName || tr.repName || repName || 'مەندووب / کاشڤان',
+                                date: tr.date || Date.now(),
+                                receiptNo: tr.invoiceNo,
+                                notes: tr.description,
+                                previousDebt: pDebt,
+                                remainingDebt: rDebt
                               });
                             }}
                             className="p-1.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 rounded-lg transition"
@@ -4169,7 +4400,7 @@ export default function OrdersView({
                   />
                 </div>
 
-                <div className="max-h-44 overflow-y-auto divide-y divide-slate-200 border border-slate-200 rounded-xl bg-white">
+                <div className="max-h-48 overflow-y-auto divide-y divide-slate-200 border border-slate-200 rounded-xl bg-white">
                   {items
                     .filter((item) => {
                       if (!editSaleSearchTerm.trim()) return true;
@@ -4183,14 +4414,30 @@ export default function OrdersView({
                     .map((catItem) => {
                       const cPrice = catItem.cartonSellingPrice || catItem.sellingPrice || 0;
                       const pPrice = catItem.packetSellingPrice || catItem.sellingPrice || 0;
+                      const { vanStock, maxAllowed } = getAvailableStockForEditSaleItem(catItem.id, catItem.name);
+                      const existingInCart = editSaleItems.find(p => p.itemId === catItem.id || p.name === catItem.name);
+                      const curAdded = existingInCart ? (existingInCart.quantity || 0) : 0;
+                      const canAdd = maxAllowed > curAdded;
+
                       return (
                         <div
                           key={catItem.id}
                           className="p-2.5 flex items-center justify-between hover:bg-amber-50/50 transition gap-2"
                         >
                           <div className="min-w-0 flex-1">
-                            <div className="font-bold text-slate-800 truncate">{catItem.name}</div>
-                            <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                            <div className="font-bold text-slate-800 truncate flex items-center gap-2">
+                              <span>{catItem.name}</span>
+                              {vanStock > 0 ? (
+                                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                  مەوجودی ڤان: {vanStock}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
+                                  لەناو ڤان نییە (٠)
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
                               <span>کارتۆن: <strong className="font-mono text-emerald-700">{cPrice.toLocaleString()} IQD</strong></span>
                               <span>•</span>
                               <span>پاکەت: <strong className="font-mono text-emerald-700">{pPrice.toLocaleString()} IQD</strong></span>
@@ -4199,11 +4446,12 @@ export default function OrdersView({
 
                           <button
                             type="button"
+                            disabled={!canAdd}
                             onClick={() => handleAddItemToEditSale(catItem)}
-                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 transition shrink-0 active:scale-95 shadow-2xs"
+                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white rounded-lg font-bold text-xs flex items-center gap-1 transition shrink-0 active:scale-95 shadow-2xs"
                           >
                             <Plus size={14} />
-                            <span>زیادکردن</span>
+                            <span>{canAdd ? 'زیادکردن' : 'لە ڤان نییە'}</span>
                           </button>
                         </div>
                       );
