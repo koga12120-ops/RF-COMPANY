@@ -3,22 +3,20 @@ import { collection, query, where, onSnapshot, doc, setDoc } from 'firebase/fire
 import { auth, db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { getStoredSession } from '../../lib/authService';
-import { Calendar, CheckCircle2, Clock, MapPin, Menu, ShoppingCart, CreditCard, Phone, DollarSign } from 'lucide-react';
+import { Calendar, CheckCircle2, Clock, MapPin, Menu, ShoppingCart, CreditCard, Phone, DollarSign, RefreshCw, Layers, ArrowRightLeft } from 'lucide-react';
 import { Market, Transaction } from '../../types';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
+import {
+  createEmptySchedule,
+  getWeekScheduleInfo,
+  getCalculatedWeekSchedule,
+  getWeekId,
+  ScheduleRotationConfig
+} from '../../lib/scheduleRotation';
 
 const WEEK_DAYS = ['6', '0', '1', '2', '3', '4']; // Saturday to Thursday
 const DAY_NAMES: Record<string, string> = {
   '6': 'شەممە', '0': 'یەکشەممە', '1': 'دووشەممە', '2': 'سێشەممە', '3': 'چوارشەممە', '4': 'پێنجشەممە'
-};
-
-const getWeekId = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  const day = d.getDay();
-  const diff = day === 6 ? 0 : day + 1;
-  d.setDate(d.getDate() - diff);
-  return `week_${d.toISOString().split('T')[0]}`;
 };
 
 export default function RepScheduleView() {
@@ -28,7 +26,14 @@ export default function RepScheduleView() {
 
   const [repId, setRepId] = useState<string | null>(initialRepId || null);
   const [repName, setRepName] = useState<string>(initialRepName);
-  const [schedule, setSchedule] = useState<Record<string, string[]>>({});
+  const [schedule1, setSchedule1] = useState<Record<string, string[]>>(createEmptySchedule());
+  const [schedule2, setSchedule2] = useState<Record<string, string[]>>(createEmptySchedule());
+  const [rotationConfig, setRotationConfig] = useState<ScheduleRotationConfig>({
+    activeScheduleOverride: 'auto',
+    startingSchedule: '1'
+  });
+  const [viewingScheduleTab, setViewingScheduleTab] = useState<'1' | '2' | 'auto'>('auto');
+
   const [visits, setVisits] = useState<Record<string, boolean>>({});
   const [markets, setMarkets] = useState<Record<string, Market>>({});
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -43,6 +48,15 @@ export default function RepScheduleView() {
 
   const weekId = getWeekId();
   const currentDayStr = new Date().getDay().toString();
+
+  // Rotation details
+  const weekInfo = useMemo(() => {
+    return getWeekScheduleInfo(rotationConfig);
+  }, [rotationConfig]);
+
+  const activeCalculated = weekInfo.currentSchedule; // '1' or '2'
+  const activeViewingSchedule: '1' | '2' = viewingScheduleTab === 'auto' ? activeCalculated : viewingScheduleTab;
+  const currentSchedule = activeViewingSchedule === '1' ? schedule1 : schedule2;
 
   // Close menu on click outside
   useEffect(() => {
@@ -89,12 +103,39 @@ export default function RepScheduleView() {
     let unsubSchedule2 = () => {};
     let unsubAllSchedules = () => {};
 
+    const applyScheduleData = (data: any) => {
+      const s1 = data.schedule1 || data.schedule || createEmptySchedule();
+      const s2 = data.schedule2 || createEmptySchedule();
+      setSchedule1({
+        '6': s1['6'] || [],
+        '0': s1['0'] || [],
+        '1': s1['1'] || [],
+        '2': s1['2'] || [],
+        '3': s1['3'] || [],
+        '4': s1['4'] || []
+      });
+      setSchedule2({
+        '6': s2['6'] || [],
+        '0': s2['0'] || [],
+        '1': s2['1'] || [],
+        '2': s2['2'] || [],
+        '3': s2['3'] || [],
+        '4': s2['4'] || []
+      });
+      if (data.activeScheduleOverride || data.startingSchedule) {
+        setRotationConfig({
+          activeScheduleOverride: data.activeScheduleOverride || 'auto',
+          startingSchedule: data.startingSchedule || '1'
+        });
+      }
+    };
+
     if (activeTargetId) {
       unsubSchedule1 = onSnapshot(
         doc(db, 'schedules', activeTargetId),
         (docSnap) => {
-          if (docSnap.exists() && docSnap.data().schedule) {
-            setSchedule(docSnap.data().schedule);
+          if (docSnap.exists()) {
+            applyScheduleData(docSnap.data());
           }
         },
         (error) => {
@@ -107,8 +148,8 @@ export default function RepScheduleView() {
       unsubSchedule2 = onSnapshot(
         doc(db, 'schedules', activeTargetName),
         (docSnap) => {
-          if (docSnap.exists() && docSnap.data().schedule) {
-            setSchedule(docSnap.data().schedule);
+          if (docSnap.exists()) {
+            applyScheduleData(docSnap.data());
           }
         },
         (error) => {
@@ -128,9 +169,7 @@ export default function RepScheduleView() {
             data.repId === activeTargetId ||
             (activeTargetName && data.repName === activeTargetName)
           ) {
-            if (data.schedule && Object.keys(data.schedule).length > 0) {
-              setSchedule(data.schedule);
-            }
+            applyScheduleData(data);
           }
         });
       },
@@ -252,7 +291,7 @@ export default function RepScheduleView() {
   WEEK_DAYS.forEach(d => displaySchedule[d] = []);
 
   WEEK_DAYS.forEach(day => {
-    const originalMarkets = schedule[day] || [];
+    const originalMarkets = currentSchedule[day] || [];
     originalMarkets.forEach(mId => {
       const isPast = WEEK_DAYS.indexOf(day) < todayIndex;
       if (isPast && !visits[mId]) {
@@ -270,20 +309,77 @@ export default function RepScheduleView() {
   return (
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4 mb-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4 mb-5">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
               <Calendar size={22} />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-800">خشتەی سەردانەکانی هەفتەی مەندووب</h2>
-              <p className="text-xs text-slate-500">کاتی سەردانەکان بەپێی ڕۆژەکانی هەفتە</p>
+              <h2 className="text-lg font-bold text-slate-800">خشتەی سەردانەکانی مەندووب</h2>
+              <p className="text-xs text-slate-500">دوو خشتەی هەفتانە بە سووڕی ئۆتۆماتیکی (شەممە تا پێنجشەممە)</p>
             </div>
           </div>
-          {repName && (
-            <span className="px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold">
-              👤 {repName}
+          <div className="flex items-center gap-2 flex-wrap">
+            {repName && (
+              <span className="px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold">
+                👤 {repName}
+              </span>
+            )}
+            {/* Dual Tabs for Schedule 1 and Schedule 2 */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setViewingScheduleTab('1')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  activeViewingSchedule === '1'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>خشتەی یەکەم</span>
+                {activeCalculated === '1' && (
+                  <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[9px] rounded-full font-bold">
+                    ئەم هەفتەیە
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingScheduleTab('2')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  activeViewingSchedule === '2'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>خشتەی دووەم</span>
+                {activeCalculated === '2' && (
+                  <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[9px] rounded-full font-bold">
+                    ئەم هەفتەیە
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Automatic Rotation Information Banner */}
+        <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-indigo-900">
+            <RefreshCw size={15} className="text-indigo-600 shrink-0" />
+            <span>
+              ئەم هەفتەیە لەسەر <strong className="font-black text-indigo-700">{weekInfo.currentScheduleLabel}</strong> کار دەکات ({weekInfo.currentWeekRangeShort}) • هەفتەی داهاتوو دەبێتە <strong className="font-black text-slate-800">{weekInfo.nextScheduleLabel}</strong> ({weekInfo.nextWeekRangeShort})
             </span>
+          </div>
+
+          {viewingScheduleTab !== 'auto' && viewingScheduleTab !== activeCalculated && (
+            <button
+              type="button"
+              onClick={() => setViewingScheduleTab('auto')}
+              className="text-[11px] font-bold text-indigo-700 hover:underline bg-white px-2 py-0.5 rounded border border-indigo-200 shrink-0"
+            >
+              گەڕانەوە بۆ خشتەی ئەم هەفتەیە
+            </button>
           )}
         </div>
 

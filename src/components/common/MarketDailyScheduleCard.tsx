@@ -16,8 +16,18 @@ import {
   MapPin,
   Search,
   X,
-  Lock
+  Lock,
+  RefreshCw,
+  Layers,
+  ArrowRightLeft
 } from 'lucide-react';
+import {
+  createEmptySchedule,
+  getWeekScheduleInfo,
+  getCalculatedWeekSchedule,
+  getWeekId,
+  ScheduleRotationConfig
+} from '../../lib/scheduleRotation';
 
 export interface MarketDailyScheduleCardProps {
   role: 'sales_rep' | 'cashvan' | 'admin' | 'warehouse' | null;
@@ -42,15 +52,6 @@ const DAYS = [
   { key: '5', label: 'هەینی' }
 ];
 
-const getWeekId = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  const day = d.getDay();
-  const diff = day === 6 ? 0 : day + 1;
-  d.setDate(d.getDate() - diff);
-  return `week_${d.toISOString().split('T')[0]}`;
-};
-
 export default function MarketDailyScheduleCard({
   role,
   activeRepName,
@@ -64,7 +65,14 @@ export default function MarketDailyScheduleCard({
   isCashvanAllowed
 }: MarketDailyScheduleCardProps) {
   const [repDocId, setRepDocId] = useState<string | null>(null);
-  const [schedule, setSchedule] = useState<Record<string, string[]>>({});
+  const [schedule1, setSchedule1] = useState<Record<string, string[]>>(createEmptySchedule());
+  const [schedule2, setSchedule2] = useState<Record<string, string[]>>(createEmptySchedule());
+  const [rotationConfig, setRotationConfig] = useState<ScheduleRotationConfig>({
+    activeScheduleOverride: 'auto',
+    startingSchedule: '1'
+  });
+  const [viewingScheduleTab, setViewingScheduleTab] = useState<'1' | '2' | 'auto'>('auto');
+
   const [visits, setVisits] = useState<Record<string, boolean>>({});
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,7 +98,16 @@ export default function MarketDailyScheduleCard({
   const effectiveIsRep = isRepAllowed !== undefined ? isRepAllowed : (role === 'admin' || role === 'warehouse' || userType === 'both' || userType === 'rep');
   const effectiveIsCashvan = isCashvanAllowed !== undefined ? isCashvanAllowed : (role === 'admin' || role === 'warehouse' || userType === 'both' || userType === 'cashvan');
 
-  // Calculate week days with dates for header pills (like the screenshot)
+  // Rotation information
+  const weekInfo = useMemo(() => {
+    return getWeekScheduleInfo(rotationConfig);
+  }, [rotationConfig]);
+
+  const activeCalculated = weekInfo.currentSchedule; // '1' or '2'
+  const activeViewingSchedule: '1' | '2' = viewingScheduleTab === 'auto' ? activeCalculated : viewingScheduleTab;
+  const currentSchedule = activeViewingSchedule === '1' ? schedule1 : schedule2;
+
+  // Calculate week days with dates for header pills
   const weekDays = useMemo(() => {
     const now = new Date();
     const currentDay = now.getDay();
@@ -105,7 +122,7 @@ export default function MarketDailyScheduleCard({
       const dayNum = d.getDate();
       const monthNum = d.getMonth() + 1;
       const yearNum = d.getFullYear();
-      const count = (schedule[day.key] || []).length;
+      const count = (currentSchedule[day.key] || []).length;
       const isToday = day.key === currentDayIndex;
       const isSelected = selectedDay === day.key;
       return {
@@ -116,7 +133,7 @@ export default function MarketDailyScheduleCard({
         isSelected
       };
     });
-  }, [schedule, currentDayIndex, selectedDay]);
+  }, [currentSchedule, currentDayIndex, selectedDay]);
 
   // 1. Locate rep/cashvan doc id in Firestore (from reps or cashvans collection, or session)
   useEffect(() => {
@@ -201,12 +218,39 @@ export default function MarketDailyScheduleCard({
     let unsubSchedule2 = () => {};
     let unsubAllSchedules = () => {};
 
+    const applyScheduleData = (data: any) => {
+      const s1 = data.schedule1 || data.schedule || createEmptySchedule();
+      const s2 = data.schedule2 || createEmptySchedule();
+      setSchedule1({
+        '6': s1['6'] || [],
+        '0': s1['0'] || [],
+        '1': s1['1'] || [],
+        '2': s1['2'] || [],
+        '3': s1['3'] || [],
+        '4': s1['4'] || []
+      });
+      setSchedule2({
+        '6': s2['6'] || [],
+        '0': s2['0'] || [],
+        '1': s2['1'] || [],
+        '2': s2['2'] || [],
+        '3': s2['3'] || [],
+        '4': s2['4'] || []
+      });
+      if (data.activeScheduleOverride || data.startingSchedule) {
+        setRotationConfig({
+          activeScheduleOverride: data.activeScheduleOverride || 'auto',
+          startingSchedule: data.startingSchedule || '1'
+        });
+      }
+    };
+
     if (activeTargetId) {
       unsubSchedule1 = onSnapshot(
         doc(db, 'schedules', activeTargetId),
         (docSnap) => {
-          if (docSnap.exists() && docSnap.data().schedule) {
-            setSchedule(docSnap.data().schedule);
+          if (docSnap.exists()) {
+            applyScheduleData(docSnap.data());
           }
         },
         (error) => {
@@ -218,8 +262,8 @@ export default function MarketDailyScheduleCard({
         unsubSchedule2 = onSnapshot(
           doc(db, 'schedules', effectiveName),
           (docSnap) => {
-            if (docSnap.exists() && docSnap.data().schedule) {
-              setSchedule(docSnap.data().schedule);
+            if (docSnap.exists()) {
+              applyScheduleData(docSnap.data());
             }
           },
           (error) => {
@@ -243,9 +287,7 @@ export default function MarketDailyScheduleCard({
             data.repId === sessionRepId ||
             (effectiveName && data.repName === effectiveName)
           ) {
-            if (data.schedule && Object.keys(data.schedule).length > 0) {
-              setSchedule(data.schedule);
-            }
+            applyScheduleData(data);
           }
         });
       },
@@ -335,7 +377,7 @@ export default function MarketDailyScheduleCard({
         isVisited: !!visits[m.id]
       }));
     } else {
-      const scheduledIds = schedule[selectedDay] || [];
+      const scheduledIds = currentSchedule[selectedDay] || [];
       list = scheduledIds
         .map((id) => marketMap.get(id))
         .filter((m): m is Market => Boolean(m))
@@ -357,7 +399,7 @@ export default function MarketDailyScheduleCard({
     }
 
     return list;
-  }, [markets, schedule, selectedDay, marketMap, visits, searchTerm]);
+  }, [markets, currentSchedule, selectedDay, marketMap, visits, searchTerm]);
 
   const getDebt = (marketName: string) => {
     if (!marketDebtMap) return 0;
@@ -377,8 +419,87 @@ export default function MarketDailyScheduleCard({
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-6">
-      {/* Top Header Bar: Clean Light Theme with Horizontally Scrollable Days */}
-      <div className="bg-slate-50 border-b border-slate-200 p-3 sm:p-4">
+      {/* Top Header Bar: Schedule 1 / Schedule 2 Tabs & Auto-Rotation Info */}
+      <div className="bg-slate-50/80 border-b border-slate-200 p-3 sm:p-4 space-y-3">
+        {/* Dual Schedule Switcher & Title */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-indigo-100 text-indigo-700 rounded-xl">
+              <Layers size={18} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-sm text-slate-800">خشتەی سەردانی مارکێتەکان</h3>
+                {effectiveName && (
+                  <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md font-bold">
+                    {effectiveName}
+                  </span>
+                )}
+              </div>
+              <div className="text-[11px] text-slate-500">
+                سیستەمی دوو خشتەیی بە سووڕی ئۆتۆماتیکی هەفتانە (شەممە تا پێنجشەممە)
+              </div>
+            </div>
+          </div>
+
+          {/* Schedule 1 / Schedule 2 Segmented Tabs */}
+          <div className="flex items-center bg-slate-200/80 p-1 rounded-xl self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setViewingScheduleTab('1')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                activeViewingSchedule === '1'
+                  ? 'bg-white text-indigo-700 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>خشتەی یەکەم</span>
+              {activeCalculated === '1' && (
+                <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[9px] rounded-full font-bold">
+                  ئەم هەفتەیە
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewingScheduleTab('2')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                activeViewingSchedule === '2'
+                  ? 'bg-white text-indigo-700 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>خشتەی دووەم</span>
+              {activeCalculated === '2' && (
+                <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[9px] rounded-full font-bold">
+                  ئەم هەفتەیە
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Auto Rotation Banner */}
+        <div className="bg-indigo-50/70 border border-indigo-100/80 rounded-xl px-3 py-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-indigo-900">
+            <RefreshCw size={14} className="text-indigo-600 shrink-0" />
+            <span>
+              ئەم هەفتەیە لەسەر <strong className="font-black text-indigo-700">{weekInfo.currentScheduleLabel}</strong> کار دەکات ({weekInfo.currentWeekRangeShort}) • هەفتەی داهاتوو دەبێتە <strong className="font-black text-slate-800">{weekInfo.nextScheduleLabel}</strong> ({weekInfo.nextWeekRangeShort})
+            </span>
+          </div>
+
+          {viewingScheduleTab !== 'auto' && viewingScheduleTab !== activeCalculated && (
+            <button
+              type="button"
+              onClick={() => setViewingScheduleTab('auto')}
+              className="text-[11px] font-bold text-indigo-700 hover:underline bg-white px-2 py-0.5 rounded border border-indigo-200 shrink-0"
+            >
+              گەڕانەوە بۆ خشتەی ئەم هەفتەیە
+            </button>
+          )}
+        </div>
+
         {/* Days Horizontal Scroll */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
           {weekDays.map((day) => {

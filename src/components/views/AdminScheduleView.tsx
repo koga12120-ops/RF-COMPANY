@@ -1,9 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Market, SalesRep } from '../../types';
-import { Calendar, Save, Trash2, Search, Store, UserCheck, Plus, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
+import { 
+  Calendar, Save, Trash2, Search, Store, UserCheck, Plus, CheckCircle2, 
+  AlertCircle, Sparkles, RefreshCw, Copy, Layers, Clock, ArrowRightLeft, Info
+} from 'lucide-react';
+import { 
+  createEmptySchedule, 
+  getWeekScheduleInfo, 
+  ScheduleRotationConfig,
+  getCalculatedWeekSchedule
+} from '../../lib/scheduleRotation';
 
 const DAYS = [
   { id: '6', label: 'شەممە', color: 'border-indigo-200 bg-indigo-50/40 text-indigo-900' },
@@ -18,9 +27,16 @@ export default function AdminScheduleView() {
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [selectedRep, setSelectedRep] = useState<string>('');
-  const [schedule, setSchedule] = useState<Record<string, string[]>>({
-    '6': [], '0': [], '1': [], '2': [], '3': [], '4': []
-  });
+  
+  // Two distinct schedules: Plan 1 (خشتەی یەکەم) and Plan 2 (خشتەی دووەم)
+  const [schedule1, setSchedule1] = useState<Record<string, string[]>>(createEmptySchedule());
+  const [schedule2, setSchedule2] = useState<Record<string, string[]>>(createEmptySchedule());
+  
+  // Rotation Settings
+  const [activeEditingSchedule, setActiveEditingSchedule] = useState<'1' | '2'>('1');
+  const [activeScheduleOverride, setActiveScheduleOverride] = useState<'auto' | '1' | '2'>('auto');
+  const [startingSchedule, setStartingSchedule] = useState<'1' | '2'>('1');
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
@@ -89,18 +105,50 @@ export default function AdminScheduleView() {
     };
   }, []);
 
+  // Fetch Rep's Dual Schedules
   useEffect(() => {
     if (!selectedRep) {
-      setSchedule({ '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
+      setSchedule1(createEmptySchedule());
+      setSchedule2(createEmptySchedule());
+      setActiveScheduleOverride('auto');
+      setStartingSchedule('1');
       return;
     }
+
     const unsubSchedule = onSnapshot(
       doc(db, 'schedules', selectedRep),
       (docSnap) => {
         if (docSnap.exists()) {
-          setSchedule(docSnap.data().schedule || { '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
+          const data = docSnap.data();
+          // Backward compatibility: if only legacy `schedule` exists, load into schedule1
+          const s1 = data.schedule1 || data.schedule || createEmptySchedule();
+          const s2 = data.schedule2 || createEmptySchedule();
+
+          setSchedule1({
+            '6': s1['6'] || [],
+            '0': s1['0'] || [],
+            '1': s1['1'] || [],
+            '2': s1['2'] || [],
+            '3': s1['3'] || [],
+            '4': s1['4'] || []
+          });
+
+          setSchedule2({
+            '6': s2['6'] || [],
+            '0': s2['0'] || [],
+            '1': s2['1'] || [],
+            '2': s2['2'] || [],
+            '3': s2['3'] || [],
+            '4': s2['4'] || []
+          });
+
+          setActiveScheduleOverride(data.activeScheduleOverride || 'auto');
+          setStartingSchedule(data.startingSchedule || '1');
         } else {
-          setSchedule({ '6': [], '0': [], '1': [], '2': [], '3': [], '4': [] });
+          setSchedule1(createEmptySchedule());
+          setSchedule2(createEmptySchedule());
+          setActiveScheduleOverride('auto');
+          setStartingSchedule('1');
         }
       },
       (error) => {
@@ -110,9 +158,23 @@ export default function AdminScheduleView() {
     return () => unsubSchedule();
   }, [selectedRep]);
 
+  // Current active schedule for display
+  const currentEditingSchedule = activeEditingSchedule === '1' ? schedule1 : schedule2;
+  const setCurrentEditingSchedule = activeEditingSchedule === '1' ? setSchedule1 : setSchedule2;
+
+  // Rotation Information
+  const rotationConfig: ScheduleRotationConfig = useMemo(() => ({
+    activeScheduleOverride,
+    startingSchedule
+  }), [activeScheduleOverride, startingSchedule]);
+
+  const weekInfo = useMemo(() => {
+    return getWeekScheduleInfo(rotationConfig);
+  }, [rotationConfig]);
+
   const handleAddMarket = (day: string, marketId: string) => {
     if (!marketId) return;
-    setSchedule(prev => {
+    setCurrentEditingSchedule(prev => {
       const dayList = prev[day] || [];
       if (dayList.includes(marketId)) return prev;
       return { ...prev, [day]: [...dayList, marketId] };
@@ -120,10 +182,34 @@ export default function AdminScheduleView() {
   };
 
   const handleRemoveMarket = (day: string, marketId: string) => {
-    setSchedule(prev => ({
+    setCurrentEditingSchedule(prev => ({
       ...prev,
-      [day]: prev[day].filter(id => id !== marketId)
+      [day]: (prev[day] || []).filter(id => id !== marketId)
     }));
+  };
+
+  // Copy helper
+  const handleCopySchedule = (from: '1' | '2', to: '1' | '2') => {
+    const source = from === '1' ? schedule1 : schedule2;
+    const copied: Record<string, string[]> = {};
+    Object.keys(source).forEach(key => {
+      copied[key] = [...(source[key] || [])];
+    });
+
+    if (to === '1') {
+      setSchedule1(copied);
+    } else {
+      setSchedule2(copied);
+    }
+
+    setSaveSuccess(`مارکێتەکانی (${from === '1' ? 'خشتەی یەکەم' : 'خشتەی دووەم'}) بە سەرکەوتوویی کۆپیکران بۆ (${to === '1' ? 'خشتەی یەکەم' : 'خشتەی دووەم'}).`);
+    setTimeout(() => setSaveSuccess(null), 4000);
+  };
+
+  const handleClearCurrentSchedule = () => {
+    if (confirm(`دڵنیایت لە بەتاڵکردنەوەی تەواوی مارکێتەکانی (${activeEditingSchedule === '1' ? 'خشتەی یەکەم' : 'خشتەی دووەم'})؟`)) {
+      setCurrentEditingSchedule(createEmptySchedule());
+    }
   };
 
   useEffect(() => {
@@ -135,7 +221,7 @@ export default function AdminScheduleView() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [schedule, selectedRep, saving]);
+  }, [schedule1, schedule2, selectedRep, saving, activeScheduleOverride, startingSchedule]);
 
   const handleSave = async () => {
     if (!selectedRep) return;
@@ -146,23 +232,28 @@ export default function AdminScheduleView() {
       const repObj = reps.find(r => r.id === selectedRep);
       const repDisplayName = repObj?.name || 'مەندووب';
 
-      await setDoc(doc(db, 'schedules', selectedRep), {
+      // Current active schedule for legacy fallback
+      const activeScheduleNow = getCalculatedWeekSchedule(rotationConfig);
+      const legacySchedule = activeScheduleNow === '2' ? schedule2 : schedule1;
+
+      const payload = {
         repId: selectedRep,
         repName: repDisplayName,
-        schedule,
+        schedule: legacySchedule, // fallback for legacy versions
+        schedule1,
+        schedule2,
+        activeScheduleOverride,
+        startingSchedule,
         updatedAt: Date.now()
-      }, { merge: true });
+      };
+
+      await setDoc(doc(db, 'schedules', selectedRep), payload, { merge: true });
 
       if (repObj?.name && repObj.name !== selectedRep) {
-        await setDoc(doc(db, 'schedules', repObj.name), {
-          repId: selectedRep,
-          repName: repObj.name,
-          schedule,
-          updatedAt: Date.now()
-        }, { merge: true });
+        await setDoc(doc(db, 'schedules', repObj.name), payload, { merge: true });
       }
 
-      setSaveSuccess(`خشتەی سەردانی (${repDisplayName}) بە سەرکەوتوویی لە سیستم پاشەکەوت کرا.`);
+      setSaveSuccess(`خشتەی سەردانی دوو هەفتەیی (${repDisplayName}) بە سەرکەوتوویی پاشەکەوت کرا.`);
       setTimeout(() => {
         setSaveSuccess(null);
       }, 5000);
@@ -178,7 +269,9 @@ export default function AdminScheduleView() {
   };
 
   const selectedRepObj = reps.find(r => r.id === selectedRep);
-  const totalAssignedMarkets = (Object.values(schedule) as string[][]).reduce((acc, curr) => acc + (curr?.length || 0), 0);
+
+  const totalAssigned1 = (Object.values(schedule1) as string[][]).reduce((acc, curr) => acc + (curr?.length || 0), 0);
+  const totalAssigned2 = (Object.values(schedule2) as string[][]).reduce((acc, curr) => acc + (curr?.length || 0), 0);
 
   if (loading) return <div className="text-center py-10 text-slate-500 font-bold">خەریکی هێنانە...</div>;
 
@@ -192,8 +285,15 @@ export default function AdminScheduleView() {
               <Calendar size={22} />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-bold text-slate-800">دانانی خشتەی سەردانی مەندووب و کاشڤان</h2>
-              <p className="text-xs text-slate-500">دیاریکردنی مارکێتەکان بۆ ڕۆژەکانی هەفتە بۆ مەندووب و کاشڤانەکان</p>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-bold text-slate-800">سیستەمی دوو خشتەیی بە نۆرە بۆ مەندووب و کاشڤان</h2>
+                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[11px] font-bold rounded-md border border-emerald-200">
+                  خۆکارانە بە نۆرە (Alternating)
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                دانانی دوو نەخشەی سەردان (خشتەی یەکەم و خشتەی دووەم) لە شەممە تا پێنجشەممە کە هەفتانە تۆماتیکی دەگۆڕێنەوە
+              </p>
             </div>
           </div>
 
@@ -215,7 +315,7 @@ export default function AdminScheduleView() {
               ) : (
                 <>
                   <Save size={18} />
-                  <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی خشتە'}</span>
+                  <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی هەردوو خشتەکە'}</span>
                 </>
               )}
             </button>
@@ -288,9 +388,11 @@ export default function AdminScheduleView() {
           {selectedRepObj && (
             <div className="flex items-center gap-4 bg-white px-4 py-2.5 rounded-xl border border-slate-200 shadow-2xs">
               <div className="text-right">
-                <div className="text-xs text-slate-500">کۆی مارکێتە دانراوەکان</div>
-                <div className="text-sm sm:text-base font-bold text-indigo-700">
-                  {totalAssignedMarkets} مارکێت لە هەفتەدا
+                <div className="text-xs text-slate-500">کۆی مارکێتەکانی هەردوو خشتە</div>
+                <div className="text-xs sm:text-sm font-bold text-indigo-700 flex items-center gap-2">
+                  <span>خشتەی ١: <strong>{totalAssigned1}</strong></span>
+                  <span>•</span>
+                  <span>خشتەی ٢: <strong>{totalAssigned2}</strong></span>
                 </div>
               </div>
             </div>
@@ -299,9 +401,143 @@ export default function AdminScheduleView() {
 
         {selectedRep ? (
           <div className="space-y-6">
+            {/* Automatic Alternating Rotation Banner */}
+            <div className="p-4 bg-gradient-to-r from-indigo-50 via-blue-50 to-emerald-50 rounded-2xl border border-indigo-200/80 shadow-xs">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 bg-indigo-600 text-white rounded-lg">
+                      <RefreshCw size={15} />
+                    </span>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      دۆخی ئێستای سوڕی دوو خشتەیی بۆ ئەم هەفتەیە:
+                    </h3>
+                    <span className="px-2.5 py-0.5 bg-indigo-600 text-white text-xs font-black rounded-lg shadow-2xs">
+                      {weekInfo.currentScheduleLabel}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    بەرواری ئەم هەفتەیە: <strong className="text-indigo-950 font-bold">{weekInfo.currentWeekRangeFull}</strong>
+                    {' '}— لە ڕۆژی شەممەی داهاتوودا تۆماتیکی دەگۆڕێت بۆ: <strong className="text-emerald-700 font-bold">{weekInfo.nextScheduleLabel}</strong> ({weekInfo.nextWeekRangeShort}).
+                  </p>
+                </div>
+
+                {/* Optional Override Selector for Admin */}
+                <div className="flex items-center gap-2 self-start md:self-auto bg-white p-1.5 rounded-xl border border-indigo-100 shadow-2xs">
+                  <span className="text-[11px] font-bold text-slate-600 pr-1">مۆدی سوڕانەوە:</span>
+                  <select
+                    value={activeScheduleOverride}
+                    onChange={(e) => setActiveScheduleOverride(e.target.value as any)}
+                    className="px-2.5 py-1 text-xs font-bold rounded-lg border border-slate-200 bg-slate-50 text-slate-800 outline-none"
+                  >
+                    <option value="auto">🔄 خۆکار (تۆماتیکی نۆرە بە نۆرە هەموو شەممەیەک)</option>
+                    <option value="1">قوفڵکردن لەسەر خشتەی یەکەم</option>
+                    <option value="2">قوفڵکردن لەسەر خشتەی دووەم</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => setStartingSchedule(prev => prev === '1' ? '2' : '1')}
+                    className="px-2 py-1 text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg border border-indigo-200 transition flex items-center gap-1"
+                    title="گۆڕینی ڕیزبەندی سەرەتای هەفتەکان (پێچەوانەکردنەوەی نۆرە)"
+                  >
+                    <ArrowRightLeft size={12} />
+                    <span>پێچەوانەکردنی نۆرە</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Tabs: Switch between Editing Schedule 1 and Schedule 2 */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveEditingSchedule('1')}
+                  className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition border ${
+                    activeEditingSchedule === '1'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <Layers size={16} />
+                  <span>خشتەی یەکەم (Plan 1)</span>
+                  <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono ${
+                    activeEditingSchedule === '1' ? 'bg-indigo-800 text-white' : 'bg-slate-100 text-slate-700'
+                  }`}>
+                    {totalAssigned1} مارکێت
+                  </span>
+                  {weekInfo.currentSchedule === '1' && (
+                    <span className="text-[10px] bg-emerald-400 text-emerald-950 font-black px-1.5 py-0.5 rounded-md">
+                      ئەم هەفتەیە چالاکە
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveEditingSchedule('2')}
+                  className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition border ${
+                    activeEditingSchedule === '2'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <Layers size={16} />
+                  <span>خشتەی دووەم (Plan 2)</span>
+                  <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono ${
+                    activeEditingSchedule === '2' ? 'bg-indigo-800 text-white' : 'bg-slate-100 text-slate-700'
+                  }`}>
+                    {totalAssigned2} مارکێت
+                  </span>
+                  {weekInfo.currentSchedule === '2' && (
+                    <span className="text-[10px] bg-emerald-400 text-emerald-950 font-black px-1.5 py-0.5 rounded-md">
+                      ئەم هەفتەیە چالاکە
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Utility Tools */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {activeEditingSchedule === '1' ? (
+                  <button
+                    type="button"
+                    onClick={() => handleCopySchedule('1', '2')}
+                    className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition flex items-center gap-1.5"
+                    title="کۆپیکردنی سەرجەم مارکێتەکانی خشتەی یەکەم بۆ ناو خشتەی دووەم"
+                  >
+                    <Copy size={13} />
+                    <span>کۆپیکردن بۆ خشتەی دووەم</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleCopySchedule('2', '1')}
+                    className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition flex items-center gap-1.5"
+                    title="کۆپیکردنی سەرجەم مارکێتەکانی خشتەی دووەم بۆ ناو خشتەی یەکەم"
+                  >
+                    <Copy size={13} />
+                    <span>کۆپیکردن بۆ خشتەی یەکەم</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleClearCurrentSchedule}
+                  className="px-2.5 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 rounded-lg transition border border-rose-200 flex items-center gap-1"
+                  title="سڕینەوە و بەتاڵکردنەوەی هەموو مارکێتەکانی ئەم خشتەیە"
+                >
+                  <Trash2 size={13} />
+                  <span>بەتاڵکردنەوە</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Days Grid for currently selected editing schedule */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {DAYS.map(day => {
-                const dayMarkets = schedule[day.id] || [];
+                const dayMarkets = currentEditingSchedule[day.id] || [];
                 const search = (marketSearch[day.id] || '').toLowerCase();
                 const availableMarkets = markets.filter(
                   m => !dayMarkets.includes(m.id) && (search === '' || m.name.toLowerCase().includes(search) || (m.location && m.location.toLowerCase().includes(search)))
@@ -331,7 +567,7 @@ export default function AdminScheduleView() {
                           }}
                           defaultValue=""
                         >
-                          <option value="" disabled>+ زیادکردنی مارکێت بۆ {day.label}</option>
+                          <option value="" disabled>+ زیادکردنی مارکێت بۆ {day.label} ({activeEditingSchedule === '1' ? 'خشتەی ١' : 'خشتەی ٢'})</option>
                           {availableMarkets.map(m => (
                             <option key={m.id} value={m.id}>
                               {m.name} {m.location ? `(${m.location})` : ''}
@@ -377,7 +613,7 @@ export default function AdminScheduleView() {
 
                         {dayMarkets.length === 0 && (
                           <div className="text-center text-slate-400 text-xs py-6 bg-white/60 rounded-xl border border-dashed border-slate-200">
-                            هیچ مارکێتێک دانەنراوە بۆ ئەم ڕۆژە
+                            هیچ مارکێتێک دانەنراوە بۆ ئەم ڕۆژە لە {activeEditingSchedule === '1' ? 'خشتەی یەکەم' : 'خشتەی دووەم'}
                           </div>
                         )}
                       </div>
@@ -401,12 +637,12 @@ export default function AdminScheduleView() {
                 {saveSuccess ? (
                   <>
                     <CheckCircle2 size={20} className="animate-bounce" />
-                    <span>خشتەکە بە سەرکەوتوویی پاشەکەوت کرا!</span>
+                    <span>خشتەکان بە سەرکەوتوویی پاشەکەوت کران!</span>
                   </>
                 ) : (
                   <>
                     <Save size={18} />
-                    <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی سەرجەم گۆڕانکارییەکان'}</span>
+                    <span>{saving ? 'پاشەکەوت دەکرێت...' : 'پاشەکەوتکردنی هەردوو خشتەی یەکەم و دووەم'}</span>
                   </>
                 )}
               </button>
@@ -416,7 +652,7 @@ export default function AdminScheduleView() {
           <div className="text-center py-16 text-slate-500 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
             <Calendar size={40} className="mx-auto text-slate-300 mb-3" />
             <div className="font-bold text-slate-700 text-sm sm:text-base">تکایە مەندووب یان کاشڤانێک هەڵبژێرە</div>
-            <div className="text-xs text-slate-400 mt-1">بۆ بینین، ڕێکخستن و دانانی خشتەی سەردانی مارکێتەکان</div>
+            <div className="text-xs text-slate-400 mt-1">بۆ بینین، ڕێکخستن و دانانی خشتەی یەکەم و دووەمی سەردانەکان</div>
           </div>
         )}
       </div>
