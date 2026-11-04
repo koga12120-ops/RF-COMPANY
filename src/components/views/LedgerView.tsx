@@ -8,6 +8,7 @@ import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, 
 import ConfirmModal from '../common/ConfirmModal';
 import { printStatementPopup, renderReceiptHeaderHtml, printExpenseVoucherPopup, printExpensesListReportPopup } from '../../lib/statementPrinter';
 import { getCompanySettings } from '../../lib/companySettings';
+import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
 export const PRESET_EXPENSE_CATEGORIES = [
   'بەنزین و سووتەمەنی',
@@ -22,7 +23,7 @@ export const PRESET_EXPENSE_CATEGORIES = [
 
 export default function LedgerView() {
   const [activeTab, setActiveTab] = useState<'current' | 'expenses' | 'archive'>('current');
-  const [timeFilter, setTimeFilter] = useState<'all' | 'day' | 'week' | 'month'>('day');
+  const [timeFilter, setTimeFilter] = useState<'all' | 'day' | 'week' | 'month'>('all');
   
   const [archiveYear, setArchiveYear] = useState(new Date().getFullYear().toString());
   const [archiveMonth, setArchiveMonth] = useState((new Date().getMonth() + 1).toString());
@@ -57,6 +58,7 @@ export default function LedgerView() {
   const [dealFilterType, setDealFilterType] = useState<'all' | 'cash' | 'debt' | 'company' | 'market' | 'warehouse' | 'expense'>('all');
   const [dealFilterName, setDealFilterName] = useState('all');
   const [dealFilterRep, setDealFilterRep] = useState('all');
+  const [searchDealTerm, setSearchDealTerm] = useState('');
 
   useEffect(() => {
     const qTrans = query(collection(db, 'transactions'), orderBy('date', 'desc'));
@@ -304,10 +306,15 @@ export default function LedgerView() {
     fTrans.forEach(t => {
       const inv = t.invoiceNo;
       const invKey = inv ? String(inv).trim() : null;
-      if (invKey && seenInvoices.has(invKey)) {
+
+      // Only deduplicate market sales that were already added by orders or cashvan_sales
+      const isMarketSaleTr = ['market_cash', 'market_debt', 'cash_sale', 'cash_in', 'debt'].includes(t.type);
+      if (isMarketSaleTr && invKey && seenInvoices.has(invKey)) {
         return; // Skip duplicate transaction for an already processed invoice
       }
-      if (invKey) seenInvoices.add(invKey);
+      if (isMarketSaleTr && invKey) {
+        seenInvoices.add(invKey);
+      }
 
       const isExp = t.type === 'expense';
       const isCompany = ['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type);
@@ -375,9 +382,25 @@ export default function LedgerView() {
        list = list.filter(d => d.personName === dealFilterRep || d.entityName === dealFilterRep);
     }
 
+    // Text search filter (ناوی کاڵا، وەسڵ، کۆمپانیا یان مارکێت)
+    if (searchDealTerm.trim()) {
+      const q = normalizeKurdishArabicText(searchDealTerm.trim().toLowerCase());
+      list = list.filter(d => {
+        const ent = normalizeKurdishArabicText(d.entityName || '').toLowerCase();
+        const desc = normalizeKurdishArabicText(d.rawItem?.description || d.rawItem?.notes || '').toLowerCase();
+        const inv = normalizeKurdishArabicText(d.invoiceNumber || '').toLowerCase();
+        const person = normalizeKurdishArabicText(d.personName || '').toLowerCase();
+        return ent.includes(q) || desc.includes(q) || inv.includes(q) || person.includes(q);
+      });
+    }
+
     list.sort((a, b) => b.date - a.date);
     return list;
-  }, [fTrans, fOrders, fCashvan, dealFilterType, dealFilterName, dealFilterRep]);
+  }, [fTrans, fOrders, fCashvan, dealFilterType, dealFilterName, dealFilterRep, searchDealTerm]);
+
+  const dealsTotalAmount = useMemo(() => {
+    return deals.filter(d => !d.isDeleted).reduce((acc, d) => acc + (d.amount || 0), 0);
+  }, [deals]);
   
   // Get unique reps and cashvans for classification
   const uniqueReps = useMemo(() => {
@@ -875,14 +898,29 @@ export default function LedgerView() {
       <div className="w-full">
         {/* Transactions List */}
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden w-full">
-          <div className="border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 gap-4">
-            <h4 className="font-bold text-slate-700 flex items-center gap-2">
-              <ShoppingBag size={18} />
-              مامەڵەکان
-            </h4>
-            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+          <div className="border-b border-slate-100 bg-slate-50 flex flex-col lg:flex-row justify-between items-start lg:items-center p-4 gap-4">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                <ShoppingBag size={18} className="text-indigo-600" />
+                <span>مامەڵەکان ({deals.length})</span>
+              </h4>
+              <span className="text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1 rounded-xl">
+                کۆی ئەم مامەڵانە: <strong className="font-mono text-sm" dir="ltr">{dealsTotalAmount.toLocaleString()}</strong> د.ع
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+              <div className="relative flex-1 sm:w-60">
+                <input
+                  type="text"
+                  placeholder="گەڕان بەپێی کاڵا، وەسڵ، ناو..."
+                  className="w-full pr-8 pl-3 py-1.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs bg-white"
+                  value={searchDealTerm}
+                  onChange={(e) => setSearchDealTerm(e.target.value)}
+                />
+                <Search size={14} className="absolute right-2.5 top-2.5 text-slate-400" />
+              </div>
               <select
-                className="px-3 py-1.5 border border-indigo-200 bg-indigo-50/40 font-bold text-indigo-900 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
+                className="px-3 py-1.5 border border-indigo-200 bg-indigo-50/40 font-bold text-indigo-900 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none cursor-pointer"
                 value={dealFilterRep}
                 onChange={(e) => setDealFilterRep(e.target.value)}
                 title="پۆلێنکردن بەپێی مەندووب / کاشڤان"
@@ -893,7 +931,7 @@ export default function LedgerView() {
                 ))}
               </select>
               <select
-                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none font-bold"
+                className="px-3 py-1.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none font-bold bg-white cursor-pointer"
                 value={dealFilterType}
                 onChange={(e) => {
                   setDealFilterType(e.target.value as any);
@@ -908,7 +946,7 @@ export default function LedgerView() {
                 <option value="market">مارکێت/کۆگا</option>
               </select>
               <select
-                className="px-3 py-1.5 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none"
+                className="px-3 py-1.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs flex-1 sm:flex-none bg-white cursor-pointer"
                 value={dealFilterName}
                 onChange={(e) => setDealFilterName(e.target.value)}
               >

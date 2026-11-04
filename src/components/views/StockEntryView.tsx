@@ -265,7 +265,7 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
             amount: totalCostVal,
             date: Date.now(),
             description: transactionDesc,
-            relatedEntityId: supplier.trim() || 'نەزانراو',
+            relatedEntityId: supplier.trim() || name.trim() || 'کۆگا',
             invoiceNo: cleanInvoice || ''
           });
         }

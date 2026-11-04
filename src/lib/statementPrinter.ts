@@ -1752,5 +1752,172 @@ export function printCompanyInvoiceCashPopup(data: {
   }
 }
 
+export interface WarehouseStockSummaryPrintData {
+  items: Array<{
+    name: string;
+    totalCartons: number;
+    totalCartonBonus?: number;
+    totalPackets?: number;
+    totalPacketBonus?: number;
+    latestCartonSellingPrice?: number;
+    latestPacketSellingPrice?: number;
+    suppliers?: string[];
+    invoicesCount?: number;
+  }>;
+  totalCartonsAll: number;
+  totalCartonBonusAll?: number;
+  totalPacketsAll?: number;
+  totalPacketBonusAll?: number;
+  date?: number;
+}
+
+export function printWarehouseStockSummaryPopup(data: WarehouseStockSummaryPrintData) {
+  const settings = getCompanySettings();
+  const cName = settings.name || 'کۆمپانیای RF';
+  const cPhone = settings.phone || '07506144894';
+  const dateStr = format(data.date || Date.now(), 'yyyy/MM/dd HH:mm');
+
+  const rows = data.items.map((it, idx) => {
+    const cPurchased = Math.max(0, it.totalCartons - (it.totalCartonBonus || 0));
+    const cBonus = it.totalCartonBonus || 0;
+    const cartonStr = it.totalCartons > 0
+      ? (cBonus > 0 ? `${cPurchased.toLocaleString()} + ${cBonus.toLocaleString()} هەدیە` : `${it.totalCartons.toLocaleString()}`)
+      : '-';
+
+    const pPurchased = Math.max(0, (it.totalPackets || 0) - (it.totalPacketBonus || 0));
+    const pBonus = it.totalPacketBonus || 0;
+    const packetStr = (it.totalPackets || 0) > 0
+      ? (pBonus > 0 ? `${pPurchased.toLocaleString()} + ${pBonus.toLocaleString()} هەدیە` : `${(it.totalPackets || 0).toLocaleString()}`)
+      : '-';
+
+    const priceParts = [];
+    if (it.latestCartonSellingPrice) priceParts.push(`ک: ${it.latestCartonSellingPrice.toLocaleString()} د.ع`);
+    if (it.latestPacketSellingPrice) priceParts.push(`پ: ${it.latestPacketSellingPrice.toLocaleString()} د.ع`);
+    const priceStr = priceParts.join(' | ') || '-';
+
+    const suppStr = it.suppliers && it.suppliers.length > 0 ? it.suppliers.join('، ') : '-';
+
+    return `
+      <tr>
+        <td style="text-align: center; color: #64748b; font-family: monospace; padding: 7px;">${idx + 1}</td>
+        <td style="font-weight: 800; color: #0f172a; padding: 7px; font-size: 13px;">${it.name}</td>
+        <td style="text-align: center; font-weight: 900; color: #1e1b4b; padding: 7px; font-family: monospace; font-size: 13px;" dir="rtl">
+          ${cartonStr}
+        </td>
+        <td style="text-align: center; font-weight: 700; color: #065f46; padding: 7px; font-family: monospace;" dir="rtl">
+          ${packetStr}
+        </td>
+        <td style="text-align: center; font-weight: 700; color: #4338ca; padding: 7px; font-family: monospace;" dir="ltr">
+          ${priceStr}
+        </td>
+        <td style="padding: 7px; color: #475569; font-size: 11px;">
+          ${suppStr}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ckb">
+      <head>
+        <meta charset="utf-8" />
+        <title>کۆی گشتی بەردەستی کۆگا بەپێی کاڵا</title>
+        <style>
+          @page { size: A4 portrait; margin: 12mm; }
+          body { font-family: system-ui, -apple-system, sans-serif; direction: rtl; margin: 0; padding: 12px; color: #0f172a; background: #fff; }
+          .container { max-width: 800px; margin: 0 auto; }
+          .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 16px; }
+          .title { font-size: 20px; font-weight: 900; color: #1e1b4b; margin: 4px 0; }
+          .subtitle { font-size: 13px; color: #64748b; font-weight: 600; }
+          .meta-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; margin-bottom: 16px; font-size: 12px; }
+          .meta-item { display: flex; flex-direction: column; }
+          .meta-label { font-size: 10px; color: #64748b; font-weight: 700; }
+          .meta-val { font-size: 14px; font-weight: 900; color: #0f172a; margin-top: 2px; }
+          table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 16px; }
+          th { background: #f1f5f9; border-bottom: 2px solid #cbd5e1; padding: 8px; font-weight: 800; color: #334155; text-align: right; }
+          td { border-bottom: 1px solid #e2e8f0; }
+          .summary-card { background: #eef2ff; border: 2px solid #c7d2fe; border-radius: 12px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+          .summary-title { font-size: 14px; font-weight: 800; color: #312e81; }
+          .summary-value { font-size: 20px; font-weight: 900; color: #3730a3; font-family: monospace; }
+          .signatures { display: flex; justify-content: space-between; margin-top: 35px; }
+          .sig-box { width: 40%; text-align: center; font-size: 11px; font-weight: 700; color: #64748b; }
+          .sig-line { border-bottom: 1px solid #94a3b8; margin-top: 40px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div style="font-size: 20px; font-weight: 900; letter-spacing: 1px; color: #000;">TAM TAM</div>
+            <div style="font-size: 14px; font-weight: 900; color: #000;">${cName}</div>
+            <div class="title">لیستی کۆی گشتی بەردەستی کاڵاکان لە کۆگا (بە کارتۆن)</div>
+            <div class="subtitle">بەرواری دەرکردن: ${dateStr} | مۆبایل: ${cPhone}</div>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-label">ژمارەی جۆرەکان:</span>
+              <span class="meta-val">${data.items.length} جۆر کاڵا</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">کۆی گشتی کارتۆن لە کۆگا:</span>
+              <span class="meta-val" style="color: #4338ca;">${data.totalCartonsAll.toLocaleString()} کارتۆن</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">کۆی پاکەت لە کۆگا:</span>
+              <span class="meta-val" style="color: #065f46;">${(data.totalPacketsAll || 0).toLocaleString()} پاکەت</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">کاتی چاپ:</span>
+              <span class="meta-val" style="font-size: 12px;" dir="ltr">${dateStr}</span>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30px; text-align: center;">#</th>
+                <th>ناوی کاڵا</th>
+                <th style="text-align: center;">کۆی کارتۆن</th>
+                <th style="text-align: center;">کۆی پاکەت</th>
+                <th style="text-align: center;">نرخی فرۆشتن</th>
+                <th>کۆمپانیاکان</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+
+          <div class="summary-card">
+            <div class="summary-title">کۆی گشتی هەموو کارتۆنە بەردەستەکانی کۆگا:</div>
+            <div class="summary-value" dir="rtl">${data.totalCartonsAll.toLocaleString()} کارتۆن</div>
+          </div>
+
+          <div class="signatures">
+            <div class="sig-box">
+              <div>واژووی سەرپەرشتیاری کۆگا</div>
+              <div class="sig-line"></div>
+            </div>
+            <div class="sig-box">
+              <div>واژووی بەڕێوەبەر / ژمێریار</div>
+              <div class="sig-line"></div>
+            </div>
+          </div>
+        </div>
+        <script>
+          window.onload = () => window.print();
+        </script>
+      </body>
+    </html>
+  `;
+
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
 
 

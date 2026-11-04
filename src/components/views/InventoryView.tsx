@@ -3,11 +3,11 @@ import { collection, doc, deleteDoc, onSnapshot, query } from 'firebase/firestor
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, Role } from '../../types';
-import { Plus, Search, Edit2, Trash2, Package, Printer, ChevronDown, ChevronUp, FileText, List, Building2, Calendar, Layers, PackagePlus, ArrowRight } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Package, Printer, ChevronDown, ChevronUp, FileText, List, Building2, Calendar, Layers, PackagePlus, ArrowRight, Boxes } from 'lucide-react';
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import { updateItemAndSyncEverywhere } from '../../lib/invoiceSync';
-import { printWarehouseInvoicePopup } from '../../lib/statementPrinter';
+import { printWarehouseInvoicePopup, printWarehouseStockSummaryPopup } from '../../lib/statementPrinter';
 import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
 interface InventoryViewProps {
@@ -29,6 +29,27 @@ interface InvoiceGroup {
   totalSelling: number;
 }
 
+interface AggregatedStockItem {
+  key: string;
+  name: string;
+  totalCartons: number;
+  totalCartonPurchased: number;
+  totalCartonBonus: number;
+  totalPackets: number;
+  totalPacketPurchased: number;
+  totalPacketBonus: number;
+  latestCartonSellingPrice?: number;
+  latestPacketSellingPrice?: number;
+  latestCartonCostPrice?: number;
+  latestPacketCostPrice?: number;
+  suppliers: string[];
+  invoicesCount: number;
+  items: Item[];
+  totalValueSelling: number;
+  totalValueCost: number;
+  lastUpdated: number;
+}
+
 export default function InventoryView({ role, onNavigateToEntry }: InventoryViewProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [companies, setCompanies] = useState<any[]>([]);
@@ -37,9 +58,10 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
   const [filterSupplier, setFilterSupplier] = useState('');
   const [sortDate, setSortDate] = useState<'desc' | 'asc'>('desc');
   
-  // Two viewing modes: 'item' (ئایتم ئایتم) and 'invoice' (بەپێی وەسڵ)
-  const [viewMode, setViewMode] = useState<'item' | 'invoice'>('item');
+  // Three viewing modes: 'total_stock' (کۆی کاڵاکان بە کارتۆن), 'invoice' (بەپێی وەسڵ), 'item' (ئایتم ئایتم)
+  const [viewMode, setViewMode] = useState<'total_stock' | 'invoice' | 'item'>('total_stock');
   const [expandedInvoices, setExpandedInvoices] = useState<Record<string, boolean>>({});
+  const [expandedAggregated, setExpandedAggregated] = useState<Record<string, boolean>>({});
 
   // Deleting item modal state
   const [deletingItem, setDeletingItem] = useState<Item | null>(null);
@@ -388,6 +410,111 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
     return groups;
   }, [filteredItems, sortDate]);
 
+  const toggleAggregatedExpand = (key: string) => {
+    setExpandedAggregated(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  // Group items by Item Name for the requested "کۆی کاڵاکان بە کارتۆن" view
+  // کۆی هەموو وەسڵەکان بۆ هەر ئایتمێک پێکەوە کۆدەکاتەوە (بۆ نمونە: ٥٠ کارتۆن بوشاری ترێ)
+  const aggregatedItems: AggregatedStockItem[] = useMemo(() => {
+    const map = new Map<string, AggregatedStockItem>();
+
+    filteredItems.forEach(item => {
+      const rawName = (item.name || '').trim();
+      if (!rawName) return;
+      const normKey = normalizeKurdishArabicText(rawName).toLowerCase();
+
+      const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+      const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+      const cPurchased = item.cartonPurchasedQuantity !== undefined ? item.cartonPurchasedQuantity : Math.max(0, cTotal - cBonus);
+
+      const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+      const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+      const pPurchased = item.packetPurchasedQuantity !== undefined ? item.packetPurchasedQuantity : Math.max(0, pTotal - pBonus);
+
+      const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
+      const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
+      const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
+      const pSell = item.packetSellingPrice || 0;
+
+      const itemCost = (cPurchased * cCost) + (pPurchased * pCost);
+      const itemSelling = (cTotal * cSell) + (pTotal * pSell);
+      const itemDate = item.createdAt || 0;
+
+      if (!map.has(normKey)) {
+        map.set(normKey, {
+          key: normKey,
+          name: rawName,
+          totalCartons: cTotal,
+          totalCartonPurchased: cPurchased,
+          totalCartonBonus: cBonus,
+          totalPackets: pTotal,
+          totalPacketPurchased: pPurchased,
+          totalPacketBonus: pBonus,
+          latestCartonSellingPrice: cSell,
+          latestPacketSellingPrice: pSell,
+          latestCartonCostPrice: cCost,
+          latestPacketCostPrice: pCost,
+          suppliers: item.supplier && item.supplier.trim() ? [item.supplier.trim()] : [],
+          invoicesCount: 1,
+          items: [item],
+          totalValueSelling: itemSelling,
+          totalValueCost: itemCost,
+          lastUpdated: itemDate
+        });
+      } else {
+        const ag = map.get(normKey)!;
+        ag.totalCartons += cTotal;
+        ag.totalCartonPurchased += cPurchased;
+        ag.totalCartonBonus += cBonus;
+        ag.totalPackets += pTotal;
+        ag.totalPacketPurchased += pPurchased;
+        ag.totalPacketBonus += pBonus;
+        ag.invoicesCount += 1;
+        ag.items.push(item);
+        ag.totalValueSelling += itemSelling;
+        ag.totalValueCost += itemCost;
+
+        if (cSell > 0) ag.latestCartonSellingPrice = cSell;
+        if (pSell > 0) ag.latestPacketSellingPrice = pSell;
+        if (cCost > 0) ag.latestCartonCostPrice = cCost;
+        if (pCost > 0) ag.latestPacketCostPrice = pCost;
+
+        if (item.supplier && item.supplier.trim() && !ag.suppliers.includes(item.supplier.trim())) {
+          ag.suppliers.push(item.supplier.trim());
+        }
+        if (itemDate > ag.lastUpdated) {
+          ag.lastUpdated = itemDate;
+        }
+      }
+    });
+
+    const list = Array.from(map.values());
+    list.sort((a, b) => a.name.localeCompare(b.name, 'ckb'));
+    return list;
+  }, [filteredItems]);
+
+  const handlePrintStockSummary = () => {
+    printWarehouseStockSummaryPopup({
+      items: aggregatedItems.map(ag => ({
+        name: ag.name,
+        totalCartons: ag.totalCartons,
+        totalCartonBonus: ag.totalCartonBonus,
+        totalPackets: ag.totalPackets,
+        totalPacketBonus: ag.totalPacketBonus,
+        latestCartonSellingPrice: ag.latestCartonSellingPrice,
+        latestPacketSellingPrice: ag.latestPacketSellingPrice,
+        suppliers: ag.suppliers,
+        invoicesCount: ag.invoicesCount
+      })),
+      totalCartonsAll: aggregatedItems.reduce((acc, a) => acc + a.totalCartons, 0),
+      totalCartonBonusAll: aggregatedItems.reduce((acc, a) => acc + a.totalCartonBonus, 0),
+      totalPacketsAll: aggregatedItems.reduce((acc, a) => acc + a.totalPackets, 0),
+      totalPacketBonusAll: aggregatedItems.reduce((acc, a) => acc + a.totalPacketBonus, 0),
+      date: Date.now()
+    });
+  };
+
   const uniqueSuppliers = Array.from(new Set(items.map(i => i.supplier).filter(Boolean)));
 
   // Calculate totals
@@ -464,28 +591,28 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
           
-          {/* The 2 requested viewing modes: (ئایتم ئایتم) و (بەپێی وەسڵ) */}
-          <div className="flex items-center p-1 bg-slate-100 rounded-xl w-full sm:w-auto">
+          {/* The 3 viewing modes: (کۆی کاڵاکان بە کارتۆن) و (بەپێی وەسڵ) و (ئایتم ئایتم) */}
+          <div className="flex items-center p-1 bg-slate-100 rounded-xl w-full sm:w-auto flex-wrap gap-1">
             <button
               type="button"
-              onClick={() => setViewMode('item')}
-              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
-                viewMode === 'item'
+              onClick={() => setViewMode('total_stock')}
+              className={`flex-1 sm:flex-none px-3.5 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                viewMode === 'total_stock'
                   ? 'bg-white text-indigo-700 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <List size={15} />
-              <span>ئایتم ئایتم</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 font-mono">
-                {filteredItems.length}
+              <Boxes size={15} />
+              <span>کۆی کاڵاکان بە کارتۆن</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 font-mono font-bold">
+                {aggregatedItems.length}
               </span>
             </button>
 
             <button
               type="button"
               onClick={() => setViewMode('invoice')}
-              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+              className={`flex-1 sm:flex-none px-3.5 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
                 viewMode === 'invoice'
                   ? 'bg-white text-indigo-700 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -493,8 +620,24 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
             >
               <FileText size={15} />
               <span>بەپێی وەسڵ</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 font-mono">
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 font-mono font-bold">
                 {invoiceGroups.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode('item')}
+              className={`flex-1 sm:flex-none px-3.5 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                viewMode === 'item'
+                  ? 'bg-white text-indigo-700 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <List size={15} />
+              <span>ئایتم ئایتم (وەجبەکان)</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 font-mono font-bold">
+                {filteredItems.length}
               </span>
             </button>
           </div>
@@ -524,7 +667,7 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
             <div className="relative flex-1 sm:w-64">
               <input
                 type="text"
-                placeholder="گەڕان بەپێی وەسڵ، کۆمپانیا، ناو، بارکۆد..."
+                placeholder="گەڕان بەپێی ناوی کاڵا، کۆمپانیا، وەسڵ..."
                 className="w-full pr-9 pl-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -536,9 +679,240 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
 
         {loading ? (
           <div className="text-center py-16 text-slate-400 text-sm">خەریکی هێنانی زانیارییەکانی کۆگایە...</div>
+        ) : viewMode === 'total_stock' ? (
+          /* ========================================================================= */
+          /* 1. VIEW MODE: (کۆی کاڵاکان بە کارتۆن) - Total Aggregated Stock by Item Name */
+          /* ========================================================================= */
+          <div className="space-y-4 p-4">
+            {/* Action Bar for Total Stock */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-indigo-50/70 border border-indigo-100 p-3.5 rounded-xl">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-600 text-white rounded-lg shrink-0">
+                  <Boxes size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-indigo-950">
+                    کۆی بەردەستی کاڵاکان بەپێی کارتۆن (بێ دابەشبوون بەسەر وەسڵەکان)
+                  </h3>
+                  <p className="text-xs text-indigo-700 mt-0.5">
+                    لەم پەڕەیەدا کۆی هەموو وەسڵەکان بۆ هەر کاڵایەک کۆکراوەتەوە (بۆ نمونە ئەگەر بە چەند جار هاتبێت لێرە کۆی گشتی کارتۆنەکان دەبینیت)
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handlePrintStockSummary}
+                className="px-3.5 py-2 bg-white hover:bg-slate-50 text-indigo-900 border border-indigo-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-2xs cursor-pointer shrink-0"
+              >
+                <Printer size={15} className="text-indigo-600" />
+                <span>چاپکردنی لیستی گشتی کۆگا</span>
+              </button>
+            </div>
+
+            {aggregatedItems.length === 0 ? (
+              <div className="text-center py-14 text-slate-400 text-sm">
+                هیچ کاڵایەک نەدۆزرایەوە بەم فلتەر و گەڕانە
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="px-4 py-3.5 w-12 text-center">#</th>
+                      <th className="px-4 py-3.5 text-sm">ناوی کاڵا</th>
+                      <th className="px-4 py-3.5 text-center text-sm font-black text-indigo-950">کۆی کارتۆن لە کۆگا</th>
+                      <th className="px-4 py-3.5 text-center">کۆی پاکەت لە کۆگا</th>
+                      <th className="px-4 py-3.5">نرخی فرۆشتن</th>
+                      <th className="px-4 py-3.5">کۆمپانیا و وەجبەکان</th>
+                      <th className="px-4 py-3.5 text-center w-28">وردەکاری وەسڵ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {aggregatedItems.map((ag, idx) => {
+                      const isExpanded = !!expandedAggregated[ag.key];
+                      const isLowStock = ag.totalCartons > 0 && ag.totalCartons <= 5;
+
+                      return (
+                        <React.Fragment key={ag.key}>
+                          <tr className={`hover:bg-slate-50/70 transition ${isExpanded ? 'bg-indigo-50/20' : ''}`}>
+                            <td className="px-4 py-3.5 text-center font-mono text-slate-400 font-bold">
+                              {idx + 1}
+                            </td>
+                            
+                            <td className="px-4 py-3.5 font-bold text-slate-900">
+                              <div className="text-sm font-black text-slate-900">{ag.name}</div>
+                              {ag.invoicesCount > 1 && (
+                                <span className="inline-block mt-0.5 text-[10px] text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded font-bold border border-indigo-100">
+                                  {ag.invoicesCount} وەسڵی جیاواز کۆکراوەتەوە
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Carton Total: prominent and clear */}
+                            <td className="px-4 py-3.5 text-center">
+                              {ag.totalCartons > 0 ? (
+                                <div className="inline-flex flex-col items-center">
+                                  <span className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-xl font-black text-sm bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs font-mono" dir="rtl">
+                                    {ag.totalCartonBonus > 0 ? (
+                                      <span>
+                                        {ag.totalCartonPurchased.toLocaleString()} + {ag.totalCartonBonus.toLocaleString()} هەدیە کارتۆن
+                                      </span>
+                                    ) : (
+                                      <span>{ag.totalCartons.toLocaleString()} کارتۆن</span>
+                                    )}
+                                  </span>
+                                  {isLowStock && (
+                                    <span className="text-[10px] text-amber-600 font-bold mt-1">
+                                      کەم ماوە
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="inline-block px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                  سفر (نەماوە)
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Packet Total */}
+                            <td className="px-4 py-3.5 text-center">
+                              {ag.totalPackets > 0 ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold text-xs bg-slate-100 text-slate-800 border border-slate-200 font-mono" dir="rtl">
+                                  {ag.totalPacketBonus > 0 ? (
+                                    <span>
+                                      {ag.totalPacketPurchased.toLocaleString()} + {ag.totalPacketBonus.toLocaleString()} هەدیە پاکەت
+                                    </span>
+                                  ) : (
+                                    <span>{ag.totalPackets.toLocaleString()} پاکەت</span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-mono">-</span>
+                              )}
+                            </td>
+
+                            {/* Selling Price */}
+                            <td className="px-4 py-3.5">
+                              <div className="flex flex-col gap-0.5 text-xs font-mono font-bold" dir="ltr">
+                                {ag.latestCartonSellingPrice ? (
+                                  <span className="text-indigo-700">
+                                    ک: {ag.latestCartonSellingPrice.toLocaleString()} د.ع
+                                  </span>
+                                ) : null}
+                                {ag.latestPacketSellingPrice ? (
+                                  <span className="text-emerald-700">
+                                    پ: {ag.latestPacketSellingPrice.toLocaleString()} د.ع
+                                  </span>
+                                ) : null}
+                              </div>
+                            </td>
+
+                            {/* Suppliers */}
+                            <td className="px-4 py-3.5 text-slate-600">
+                              <div className="font-semibold text-xs">
+                                {ag.suppliers.length > 0 ? ag.suppliers.join('، ') : 'کۆمپانیای نەزانراو'}
+                              </div>
+                            </td>
+
+                            {/* Expand / View Invoices */}
+                            <td className="px-4 py-3.5 text-center">
+                              <button
+                                type="button"
+                                onClick={() => toggleAggregatedExpand(ag.key)}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 mx-auto cursor-pointer ${
+                                  isExpanded
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                }`}
+                              >
+                                <span>{isExpanded ? 'داخستن' : 'وەسڵەکان'}</span>
+                                {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                              </button>
+                            </td>
+                          </tr>
+
+                          {/* Expanded sub-table showing underlying invoices */}
+                          {isExpanded && (
+                            <tr className="bg-indigo-50/30">
+                              <td colSpan={7} className="p-3">
+                                <div className="bg-white rounded-xl border border-indigo-100 p-3 shadow-2xs">
+                                  <div className="text-xs font-bold text-indigo-900 mb-2 flex items-center gap-2">
+                                    <FileText size={14} className="text-indigo-600" />
+                                    <span>وردەکاری ئەو وەسڵانەی ئەم {ag.totalCartons} کارتۆنەیان پێک هێناوە:</span>
+                                  </div>
+                                  <table className="w-full text-right text-xs">
+                                    <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                                      <tr>
+                                        <th className="p-2">ژمارەی وەسڵ</th>
+                                        <th className="p-2">کۆمپانیا</th>
+                                        <th className="p-2">بەروار</th>
+                                        <th className="p-2">بڕی ماوە لەم وەسڵە</th>
+                                        <th className="p-2">تێچوو</th>
+                                        <th className="p-2">فرۆشتن</th>
+                                        <th className="p-2 text-center">کردار</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {ag.items.map(subItem => (
+                                        <tr key={subItem.id} className="hover:bg-slate-50/50">
+                                          <td className="p-2 font-mono font-bold text-indigo-700" dir="ltr">
+                                            #{subItem.invoiceNo || 'بێ وەسڵ'}
+                                          </td>
+                                          <td className="p-2 text-slate-800 font-medium">
+                                            {subItem.supplier || '-'}
+                                          </td>
+                                          <td className="p-2 font-mono text-slate-500" dir="ltr">
+                                            {format(subItem.createdAt || Date.now(), 'yyyy/MM/dd')}
+                                          </td>
+                                          <td className="p-2 font-bold text-emerald-700 font-mono" dir="rtl">
+                                            {formatStock(subItem)}
+                                          </td>
+                                          <td className="p-2 font-mono text-slate-600" dir="ltr">
+                                            {subItem.cartonCostPrice ? `${subItem.cartonCostPrice.toLocaleString()} ک` : '-'}
+                                          </td>
+                                          <td className="p-2 font-mono text-slate-800 font-bold" dir="ltr">
+                                            {subItem.cartonSellingPrice ? `${subItem.cartonSellingPrice.toLocaleString()} ک` : '-'}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            <div className="flex items-center justify-center gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => openEditModal(subItem)}
+                                                className="p-1 hover:bg-slate-100 text-slate-500 hover:text-indigo-600 rounded transition"
+                                                title="دەستکاریکردن"
+                                              >
+                                                <Edit2 size={13} />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDeletingItem(subItem)}
+                                                className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition"
+                                                title="سڕینەوە"
+                                              >
+                                                <Trash2 size={13} />
+                                              </button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         ) : viewMode === 'item' ? (
           /* ========================================================= */
-          /* 1. VIEW MODE: (ئایتم ئایتم) - Item by Item Table           */
+          /* 2. VIEW MODE: (ئایتم ئایتم) - Item by Item Table           */
           /* ========================================================= */
           <div className="overflow-x-auto">
             <table className="w-full text-right text-xs">
