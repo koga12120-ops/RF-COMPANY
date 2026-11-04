@@ -13,6 +13,7 @@ import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 interface InventoryViewProps {
   role: Role;
   onNavigateToEntry?: () => void;
+  onNavigateToAudit?: () => void;
 }
 
 interface InvoiceGroup {
@@ -50,7 +51,7 @@ interface AggregatedStockItem {
   lastUpdated: number;
 }
 
-export default function InventoryView({ role, onNavigateToEntry }: InventoryViewProps) {
+export default function InventoryView({ role, onNavigateToEntry, onNavigateToAudit }: InventoryViewProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [companies, setCompanies] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -574,6 +575,17 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
               </>
             )}
           </div>
+
+          {onNavigateToAudit && (
+            <button
+              onClick={onNavigateToAudit}
+              className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-indigo-200"
+              title="چوون بۆ جەردی کۆگا"
+            >
+              <Boxes size={16} />
+              <span>جەردی کۆگا</span>
+            </button>
+          )}
 
           {onNavigateToEntry && (
             <button

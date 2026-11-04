@@ -4,7 +4,12 @@ import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
-import { Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, Store, CreditCard, Edit2, X, Search, CheckCircle, Tag, Wallet, Sparkles } from 'lucide-react';
+import { 
+  Plus, TrendingUp, TrendingDown, DollarSign, Trash2, Calendar, Archive, Clock, 
+  ShoppingBag, Printer, FileText, PackagePlus, PackageMinus, Receipt, Building2, 
+  Store, CreditCard, Edit2, X, Search, CheckCircle, Tag, Wallet, Sparkles,
+  ChevronDown, ChevronUp, Layers, Boxes
+} from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
 import { printStatementPopup, renderReceiptHeaderHtml, printExpenseVoucherPopup, printExpensesListReportPopup } from '../../lib/statementPrinter';
 import { getCompanySettings } from '../../lib/companySettings';
@@ -59,6 +64,14 @@ export default function LedgerView() {
   const [dealFilterName, setDealFilterName] = useState('all');
   const [dealFilterRep, setDealFilterRep] = useState('all');
   const [searchDealTerm, setSearchDealTerm] = useState('');
+
+  // Mode: 'grouped' (بەپێی وەسڵ) or 'single' (مامەڵە بە مامەڵە)
+  const [displayMode, setDisplayMode] = useState<'grouped' | 'single'>('grouped');
+  const [expandedInvoices, setExpandedInvoices] = useState<Record<string, boolean>>({});
+
+  const toggleInvoiceExpand = (groupKey: string) => {
+    setExpandedInvoices(prev => ({ ...prev, [groupKey]: !prev[groupKey] }));
+  };
 
   useEffect(() => {
     const qTrans = query(collection(db, 'transactions'), orderBy('date', 'desc'));
@@ -401,6 +414,78 @@ export default function LedgerView() {
   const dealsTotalAmount = useMemo(() => {
     return deals.filter(d => !d.isDeleted).reduce((acc, d) => acc + (d.amount || 0), 0);
   }, [deals]);
+
+  // Group deals by invoice number so multiple items in the same invoice are cleanly unified
+  const invoiceGroups = useMemo(() => {
+    const map = new Map<string, {
+      groupKey: string;
+      invoiceNo: string;
+      invoiceNumber: string;
+      entityName: string;
+      personName: string;
+      channel: string;
+      type: string;
+      dealCategory: string;
+      entityType: string;
+      date: number;
+      totalAmount: number;
+      itemsCount: number;
+      isDeleted: boolean;
+      deletedBy: string;
+      items: any[];
+    }>();
+
+    deals.forEach((d) => {
+      const rawInv = d.invoiceNo ? String(d.invoiceNo).trim() : '';
+      const rawEntity = d.entityName ? String(d.entityName).trim() : '';
+      
+      let key: string;
+      if (rawInv) {
+        key = `INV_${rawInv}__${rawEntity}`;
+      } else if (d.invoiceNumber && !d.invoiceNumber.startsWith('TRN-') && !d.invoiceNumber.startsWith('EXP-')) {
+        key = `INVNUM_${d.invoiceNumber}__${rawEntity}`;
+      } else {
+        key = `DEAL_${d.id}`;
+      }
+
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, {
+          groupKey: key,
+          invoiceNo: rawInv || (d.invoiceNumber ? d.invoiceNumber.replace(/^#/, '') : ''),
+          invoiceNumber: d.invoiceNumber || (rawInv ? `#${rawInv}` : 'بێ ژمارە'),
+          entityName: d.entityName,
+          personName: d.personName,
+          channel: d.channel,
+          type: d.type,
+          dealCategory: d.dealCategory,
+          entityType: d.entityType,
+          date: d.date,
+          totalAmount: d.isDeleted ? 0 : (d.amount || 0),
+          itemsCount: 1,
+          isDeleted: d.isDeleted,
+          deletedBy: d.deletedBy,
+          items: [d]
+        });
+      } else {
+        existing.items.push(d);
+        existing.itemsCount += 1;
+        if (!d.isDeleted) {
+          existing.totalAmount += (d.amount || 0);
+        }
+        if (d.date > existing.date) {
+          existing.date = d.date;
+        }
+        if (!d.isDeleted && existing.isDeleted) {
+          existing.isDeleted = false;
+        }
+      }
+    });
+
+    const list = Array.from(map.values());
+    list.sort((a, b) => b.date - a.date);
+    return list;
+  }, [deals]);
   
   // Get unique reps and cashvans for classification
   const uniqueReps = useMemo(() => {
@@ -690,6 +775,115 @@ export default function LedgerView() {
     printWindow.document.write(html);
     printWindow.document.close();
   };
+
+  const printInvoiceGroup = (group: any) => {
+    if (group.itemsCount === 1) {
+      printDeal(group.items[0]);
+      return;
+    }
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    const isCompany = group.entityType === 'company' || (group.type && group.type.includes('کۆمپانیا'));
+
+    const itemsRows = group.items.map((item: any, idx: number) => `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 10px 8px; text-align: center; color: #888;">${idx + 1}</td>
+        <td style="padding: 10px 8px; font-weight: bold; color: #1e293b;">${item.rawItem?.description || item.entityName || item.type}</td>
+        <td style="padding: 10px 8px; text-align: center;"><span style="background: #f1f5f9; padding: 3px 8px; border-radius: 6px; font-size: 11px;">${item.type}</span></td>
+        <td style="padding: 10px 8px; text-align: left; font-family: monospace; font-weight: bold; color: #0f172a;" dir="ltr">${(item.amount || 0).toLocaleString()} د.ع</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <html dir="rtl">
+        <head>
+          <title>وەسڵی کۆکراوە - ${group.invoiceNumber}</title>
+          <style>
+            body { font-family: Tahoma, Arial, sans-serif; padding: 25px; color: #1e293b; }
+            .header { text-align: center; margin-bottom: 25px; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
+            .title { font-size: 22px; font-weight: bold; margin-bottom: 5px; color: #0f172a; }
+            .details { margin-bottom: 25px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
+            .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+            .label { font-weight: bold; color: #64748b; }
+            table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
+            th { background: #f1f5f9; padding: 10px 8px; border-bottom: 2px solid #cbd5e1; font-weight: bold; color: #334155; }
+            .amount-box { font-size: 22px; font-weight: bold; text-align: center; margin: 30px 0; padding: 16px; border: 2px solid #0f172a; border-radius: 12px; background: #fafafa; }
+            .footer { text-align: center; margin-top: 45px; font-size: 12px; color: #94a3b8; }
+            @media print {
+              body { padding: 0; }
+              button { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          ${renderReceiptHeaderHtml({
+            title: `پسوڵەی وەسڵی کۆکراوە (${group.itemsCount} کاڵا)`,
+            invoiceNo: group.invoiceNumber,
+            date: group.date
+          })}
+          
+          <div class="details">
+            <div class="row">
+              <span class="label">ناوی لایەن:</span>
+              <span style="font-weight: bold; color: #0f172a;">${group.entityName}</span>
+            </div>
+            <div class="row">
+              <span class="label">تۆمارکار / کەس:</span>
+              <span>${group.personName} (${group.channel})</span>
+            </div>
+            <div class="row">
+              <span class="label">بەرواری وەسڵ:</span>
+              <span dir="ltr">${format(group.date, 'yyyy-MM-dd HH:mm')}</span>
+            </div>
+            <div class="row">
+              <span class="label">ژمارەی وەسڵ:</span>
+              <span dir="ltr" style="font-weight: bold; color: #4338ca;">${group.invoiceNumber}</span>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 35px;">#</th>
+                <th style="text-align: right;">بڕگە / ناوی کاڵا</th>
+                <th style="width: 100px; text-align: center;">جۆری مامەڵە</th>
+                <th style="width: 130px; text-align: left;">بڕی پارە</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsRows}
+            </tbody>
+          </table>
+          
+          <div class="amount-box" dir="ltr">
+            کۆی گشتی ئەم وەسڵە: ${(group.totalAmount || 0).toLocaleString()} د.ع
+          </div>
+          
+          <div style="display: flex; justify-content: space-between; margin-top: 50px;">
+            <div style="text-align: center;">
+              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی پێدەر'}</div>
+              <div style="margin-top: 35px; border-top: 1px solid #333; width: 150px;"></div>
+            </div>
+            <div style="text-align: center;">
+              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
+              <div style="margin-top: 35px; border-top: 1px solid #333; width: 150px;"></div>
+            </div>
+          </div>
+          
+          <div class="footer">
+            کات و بەرواری چاپ: <span dir="ltr">${format(new Date(), 'yyyy-MM-dd HH:mm:ss')}</span>
+          </div>
+          <script>
+            window.onload = () => window.print();
+          </script>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
   return (
     <div className="space-y-6">
       {/* Tabs */}
@@ -902,8 +1096,44 @@ export default function LedgerView() {
             <div className="flex items-center gap-3 flex-wrap">
               <h4 className="font-bold text-slate-800 flex items-center gap-2">
                 <ShoppingBag size={18} className="text-indigo-600" />
-                <span>مامەڵەکان ({deals.length})</span>
+                <span>مامەڵە و وەسڵەکان</span>
               </h4>
+
+              {/* View Switcher: Grouped by Invoice (Default) vs Individual Deals */}
+              <div className="flex items-center p-1 bg-slate-200/70 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode('grouped')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                    displayMode === 'grouped'
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers size={13} />
+                  <span>بەپێی ژمارەی وەسڵ</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 font-mono font-bold">
+                    {invoiceGroups.length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode('single')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                    displayMode === 'single'
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <ShoppingBag size={13} />
+                  <span>مامەڵە بە مامەڵە</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 font-mono font-bold">
+                    {deals.length}
+                  </span>
+                </button>
+              </div>
+
               <span className="text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1 rounded-xl">
                 کۆی ئەم مامەڵانە: <strong className="font-mono text-sm" dir="ltr">{dealsTotalAmount.toLocaleString()}</strong> د.ع
               </span>
@@ -959,7 +1189,215 @@ export default function LedgerView() {
           </div>
           {loading ? (
             <div className="text-center py-10 text-slate-500">خەریکی هێنانە...</div>
+          ) : displayMode === 'grouped' ? (
+            /* Grouped by Invoice Table */
+            <div className="flex-1 overflow-x-auto">
+              <table className="w-full text-right">
+                <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">بەروار</th>
+                    <th className="px-4 py-3 font-semibold">ژمارەی وەسڵ</th>
+                    <th className="px-4 py-3 font-semibold">ناوی کۆمپانیا / مارکێت</th>
+                    <th className="px-4 py-3 font-semibold">جۆر و کەناڵ</th>
+                    <th className="px-4 py-3 font-semibold text-center">ژمارەی کاڵاکان</th>
+                    <th className="px-4 py-3 font-semibold">کۆی گشتی وەسڵ</th>
+                    <th className="px-4 py-3 font-semibold text-left">کردار</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm divide-y divide-slate-100">
+                  {invoiceGroups.map((group) => {
+                    const isExpanded = !!expandedInvoices[group.groupKey];
+                    const isExp = group.entityType === 'expense' || group.type === 'خەرجی';
+
+                    return (
+                      <React.Fragment key={group.groupKey}>
+                        <tr 
+                          onClick={() => toggleInvoiceExpand(group.groupKey)}
+                          className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${
+                            isExpanded ? 'bg-indigo-50/30' : ''
+                          }`}
+                        >
+                          {/* Date */}
+                          <td className="px-4 py-4 text-slate-500 text-xs font-mono" dir="ltr">
+                            {format(group.date, 'yyyy-MM-dd HH:mm')}
+                          </td>
+
+                          {/* Invoice Number Badge */}
+                          <td className="px-4 py-4">
+                            <span className="font-mono font-bold text-xs bg-slate-100 text-slate-800 px-2.5 py-1 rounded-lg border border-slate-200">
+                              {group.invoiceNumber}
+                            </span>
+                          </td>
+
+                          {/* Entity Name */}
+                          <td className="px-4 py-4">
+                            <div className="font-black text-slate-900">{group.entityName}</div>
+                            <div className="text-[11px] text-slate-400 font-medium">
+                              {group.personName} {group.channel ? `(${group.channel})` : ''}
+                            </div>
+                          </td>
+
+                          {/* Type */}
+                          <td className="px-4 py-4">
+                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                              group.isDeleted ? 'bg-red-100 text-red-700' :
+                              group.type === 'خەرجی' ? 'bg-rose-100 text-rose-800 border border-rose-200' :
+                              group.type === 'نەقد' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                              group.type === 'قەرز' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                              group.type.includes('کۆمپانیا') ? 'bg-amber-100 text-amber-700' :
+                              'bg-slate-100 text-slate-700'
+                            }`}>
+                              {group.isDeleted ? 'سڕاوەتەوە' : group.type}
+                            </span>
+                          </td>
+
+                          {/* Items Count in Invoice */}
+                          <td className="px-4 py-4 text-center">
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
+                              group.itemsCount > 1 
+                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' 
+                                : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              <Layers size={12} />
+                              <span>{group.itemsCount} کاڵا</span>
+                            </span>
+                          </td>
+
+                          {/* Grand Total Amount for Invoice */}
+                          <td className="px-4 py-4" dir="ltr">
+                            <div className={`font-mono font-black text-base ${
+                              group.isDeleted ? 'text-slate-400 line-through' :
+                              isExp ? 'text-rose-600' : 'text-emerald-700'
+                            }`}>
+                              {isExp ? `-${group.totalAmount.toLocaleString()}` : group.totalAmount.toLocaleString()}
+                              <span className="text-xs font-normal text-slate-400 ml-1">د.ع</span>
+                            </div>
+                            {group.itemsCount > 1 && (
+                              <div className="text-[10px] text-indigo-600 font-bold" dir="rtl">
+                                کۆی هەموو کاڵاکانی ئەم وەسڵە
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Actions */}
+                          <td className="px-4 py-4 text-left">
+                            <div className="flex items-center gap-1.5 justify-end" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => printInvoiceGroup(group)}
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-xl transition"
+                                title="چاپکردنی وەسڵ"
+                              >
+                                <Printer size={16} />
+                              </button>
+                              {!isExp && (
+                                <button
+                                  type="button"
+                                  onClick={() => printStatement(group.entityName)}
+                                  className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-xl transition"
+                                  title="کەشف حیساب"
+                                >
+                                  <FileText size={16} />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => toggleInvoiceExpand(group.groupKey)}
+                                className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl transition flex items-center gap-1"
+                                title={isExpanded ? 'داخستنی بڕگەکان' : 'بینینی بڕگەکانی ئەم وەسڵە'}
+                              >
+                                {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* Expandable Accordion with all items belonging to this invoice */}
+                        {isExpanded && (
+                          <tr className="bg-slate-50/70">
+                            <td colSpan={7} className="p-4 sm:p-5">
+                              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3" dir="rtl">
+                                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                                  <h5 className="text-xs font-black text-slate-800 flex items-center gap-2">
+                                    <Layers size={14} className="text-indigo-600" />
+                                    <span>کاڵا و بڕگەکانی نێو وەسڵی {group.invoiceNumber} ({group.items.length})</span>
+                                  </h5>
+                                  <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg">
+                                    کۆی وەسڵەکە: {group.totalAmount.toLocaleString()} د.ع
+                                  </span>
+                                </div>
+
+                                <div className="divide-y divide-slate-100">
+                                  {group.items.map((item, idx) => (
+                                    <div key={item.id + idx} className="py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+                                      <div className="flex items-center gap-3">
+                                        <span className="w-6 h-6 rounded-full bg-slate-100 text-slate-600 font-bold flex items-center justify-center text-[10px]">
+                                          {idx + 1}
+                                        </span>
+                                        <div>
+                                          <div className="font-bold text-slate-800">
+                                            {item.rawItem?.description || item.entityName || item.type}
+                                          </div>
+                                          <div className="text-[11px] text-slate-400 mt-0.5">
+                                            {format(item.date, 'yyyy-MM-dd HH:mm')} | جۆر: {item.type}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+                                        <div className="font-mono font-bold text-sm text-slate-900" dir="ltr">
+                                          {(item.amount || 0).toLocaleString()} د.ع
+                                        </div>
+
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => printDeal(item)}
+                                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                            title="چاپی تاکە وەسڵ"
+                                          >
+                                            <Printer size={14} />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleStartEditDeal(item)}
+                                            className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition"
+                                            title="دەستکاری"
+                                          >
+                                            <Edit2 size={14} />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setDeletingDeal(item)}
+                                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                            title="سڕینەوە"
+                                          >
+                                            <Trash2 size={14} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                  {invoiceGroups.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-8 text-slate-500 font-bold">
+                        هیچ وەسڵێک نەدۆزرایەوە
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           ) : (
+            /* Flat Individual Deals Table */
             <div className="flex-1 overflow-x-auto">
                 <table className="w-full text-right">
                   <thead className="bg-slate-50 text-slate-500 text-xs uppercase">

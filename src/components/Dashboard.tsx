@@ -40,13 +40,14 @@ import AdminCashvanView from './views/AdminCashvanView';
 import ReturnsView from './views/ReturnsView';
 import RepScheduleView from './views/RepScheduleView';
 import AdminScheduleView from './views/AdminScheduleView';
-import { Truck, Undo2, ClipboardList, Calendar, PackagePlus } from 'lucide-react';
+import { Truck, Undo2, ClipboardList, Calendar, PackagePlus, Boxes } from 'lucide-react';
 
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestoreErrors';
 import StockHistoryView from './views/StockHistoryView';
 import StockEntryView from './views/StockEntryView';
+import WarehouseAuditView from './views/WarehouseAuditView';
 import { UserSession, getStoredSession } from '../lib/authService';
 
 interface DashboardProps {
@@ -150,6 +151,7 @@ export default function Dashboard({ role, onLogout, session }: DashboardProps) {
   const adminMenu = [
     { id: 'stock_entry', label: 'داخڵکردنی کاڵا', icon: PackagePlus },
     { id: 'inventory', label: 'کۆگا', icon: Package },
+    { id: 'warehouse_audit', label: 'جەردی کۆگا', icon: Boxes },
     { id: 'stock_history', label: 'مێژووی هاتنی کاڵا', icon: History },
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
     { id: 'admin_cashvan', label: 'حساباتی مەندووب و کاشڤان', icon: Truck },
@@ -162,6 +164,7 @@ export default function Dashboard({ role, onLogout, session }: DashboardProps) {
   const warehouseMenu = [
     { id: 'stock_entry', label: 'داخڵکردنی کاڵا', icon: PackagePlus },
     { id: 'inventory', label: 'کۆگا', icon: Package },
+    { id: 'warehouse_audit', label: 'جەردی کۆگا', icon: Boxes },
     { id: 'stock_history', label: 'مێژووی هاتنی کاڵا', icon: History },
     { id: 'returns', label: 'گەڕاوەی کاڵا', icon: Undo2 },
     { id: 'warehouse_orders', label: 'داواکارییەکان', icon: ClipboardList },
@@ -214,7 +217,8 @@ export default function Dashboard({ role, onLogout, session }: DashboardProps) {
   const renderContent = () => {
     switch (activeTab) {
       case 'stock_entry': return <StockEntryView role={role} onNavigateToInventory={() => setActiveTab('inventory')} />;
-      case 'inventory': return <InventoryView role={role} onNavigateToEntry={() => setActiveTab('stock_entry')} />;
+      case 'inventory': return <InventoryView role={role} onNavigateToEntry={() => setActiveTab('stock_entry')} onNavigateToAudit={() => setActiveTab('warehouse_audit')} />;
+      case 'warehouse_audit': return <WarehouseAuditView role={role} onNavigateToEntry={() => setActiveTab('stock_entry')} onNavigateToInventory={() => setActiveTab('inventory')} />;
       case 'admin_cashvan': return <AdminCashvanView />;
       case 'warehouse_orders': return <WarehouseOrdersView />;
       case 'warehouse_cashvan': return <WarehouseOrdersView />;
