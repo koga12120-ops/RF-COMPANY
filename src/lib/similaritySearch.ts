@@ -67,10 +67,75 @@ export function levenshteinDistance(s1: string, s2: string): number {
   return dp[m][n];
 }
 
+/**
+ * Fast Autocomplete search for dropdown directly under the item name input.
+ * Starts from the very 1st letter, prioritizing items whose first letter matches!
+ * Deduplicates by unique item name.
+ */
+export function getAutocompleteItemSuggestions(
+  query: string,
+  allItems: Item[],
+  limitCount: number = 10
+): Item[] {
+  const clean = query.trim();
+  if (!clean) return [];
+
+  const normQ = normalizeKurdishArabicText(clean);
+  if (!normQ) return [];
+
+  const seenNames = new Set<string>();
+  const startsWithMatches: { item: Item; score: number }[] = [];
+  const wordStartsMatches: { item: Item; score: number }[] = [];
+  const containsMatches: { item: Item; score: number }[] = [];
+
+  allItems.forEach((item) => {
+    const rawName = (item.name || '').trim();
+    if (!rawName) return;
+
+    const normName = normalizeKurdishArabicText(rawName);
+    if (seenNames.has(normName)) return; // Avoid duplicate names in suggestions
+
+    const words = normName.split(' ').filter(Boolean);
+
+    // 1. Starts with query (highest priority for "هەر پیتی یەکەم لێدەم")
+    if (normName.startsWith(normQ)) {
+      seenNames.add(normName);
+      startsWithMatches.push({ item, score: 100 - normName.length });
+      return;
+    }
+
+    // 2. Any word in the item name starts with the query (e.g. second word starts with letter)
+    const wordIndex = words.findIndex((w) => w.startsWith(normQ));
+    if (wordIndex !== -1) {
+      seenNames.add(normName);
+      wordStartsMatches.push({ item, score: 80 - wordIndex });
+      return;
+    }
+
+    // 3. Contains query anywhere
+    if (normName.includes(normQ)) {
+      seenNames.add(normName);
+      containsMatches.push({ item, score: 60 });
+      return;
+    }
+  });
+
+  startsWithMatches.sort((a, b) => b.score - a.score);
+  wordStartsMatches.sort((a, b) => b.score - a.score);
+
+  const combined = [
+    ...startsWithMatches.map((m) => m.item),
+    ...wordStartsMatches.map((m) => m.item),
+    ...containsMatches.map((m) => m.item)
+  ];
+
+  return combined.slice(0, limitCount);
+}
+
 export interface SimilarItemMatch {
   item: Item;
   score: number; // 0 - 100
-  matchType: 'barcode' | 'exact_name' | 'high_similarity' | 'word_match';
+  matchType: 'exact_name' | 'high_similarity' | 'word_match';
   matchedReason: string;
 }
 
@@ -99,34 +164,24 @@ export function findSimilarItems(
     // Exclude the item currently being edited
     if (currentEditingId && item.id === currentEditingId) return;
 
-    const itemBarcode = (item.barcode || '').trim();
     const itemName = (item.name || '').trim();
     const normItemName = normalizeKurdishArabicText(itemName);
     const itemTokens = normItemName.split(' ').filter(Boolean);
 
-    // 1. Exact Barcode Match
-    if (cleanBarcode && itemBarcode && cleanBarcode.toLowerCase() === itemBarcode.toLowerCase()) {
+    if (!cleanName || normQuery.length < 1) return;
+
+    // 2. Starts with (from 1st letter)
+    if (normItemName.startsWith(normQuery)) {
       matches.push({
         item,
-        score: 100,
-        matchType: 'barcode',
-        matchedReason: `بارکۆدی یەکسان (${itemBarcode})`
+        score: normItemName === normQuery ? 100 : 96,
+        matchType: normItemName === normQuery ? 'exact_name' : 'high_similarity',
+        matchedReason: normItemName === normQuery ? 'ناوی تەواو یەکسان' : `بە «${cleanName}» دەستپێدەکات`
       });
       return;
     }
 
-    if (!cleanName || normQuery.length < 2) return;
-
-    // 2. Exact Name Match (after normalization)
-    if (normQuery === normItemName) {
-      matches.push({
-        item,
-        score: 100,
-        matchType: 'exact_name',
-        matchedReason: 'ناوی تەواو یەکسان لەگەڵ ئەم ئایتمە'
-      });
-      return;
-    }
+    if (normQuery.length < 2) return;
 
     // 3. Substring containment
     if (normItemName.includes(normQuery) || normQuery.includes(normItemName)) {
@@ -179,21 +234,6 @@ export function findSimilarItems(
           });
           return;
         }
-      }
-    }
-
-    // 5. Levenshtein ratio for fuzzy typo tolerance
-    const maxLen = Math.max(normQuery.length, normItemName.length);
-    if (maxLen >= 4 && Math.abs(normQuery.length - normItemName.length) <= 3) {
-      const dist = levenshteinDistance(normQuery, normItemName);
-      const sim = Math.round((1 - dist / maxLen) * 100);
-      if (sim >= Math.max(minThreshold, 65)) {
-        matches.push({
-          item,
-          score: sim,
-          matchType: 'high_similarity',
-          matchedReason: `هاوشێوەیی دەنگی و نوسین (${sim}٪)`
-        });
       }
     }
   });

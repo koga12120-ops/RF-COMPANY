@@ -2772,7 +2772,6 @@ export default function OrdersView({
                       <h4 className="text-xs sm:text-sm font-bold text-slate-800 line-clamp-1">{item.name}</h4>
                       <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
                         <span>کۆگا: <strong className="text-slate-700 font-mono font-bold">{item.quantity}</strong></span>
-                        {item.barcode && <span className="text-slate-400 font-mono">| {item.barcode}</span>}
                         {currentGiftQty > 0 && (
                           <span className="bg-yellow-200 text-yellow-900 px-1.5 py-0.5 rounded-md font-black text-[10px]">
                             {currentGiftQty} هەدیە
@@ -3183,7 +3182,6 @@ export default function OrdersView({
                       <h4 className="text-xs sm:text-sm font-bold text-slate-800 line-clamp-1">{item.name}</h4>
                       <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
                         <span>لە ڤان: <strong className="text-slate-700 font-mono font-bold">{item.quantity} {unitLabel}</strong></span>
-                        {item.barcode && <span className="text-slate-400 font-mono">| {item.barcode}</span>}
                         {currentGiftQty > 0 && (
                           <span className="bg-yellow-200 text-yellow-900 px-1.5 py-0.5 rounded-md font-black text-[10px]">
                             {currentGiftQty} هەدیە
@@ -4064,10 +4062,7 @@ export default function OrdersView({
                     .filter((item) => {
                       if (!editOrderSearchTerm.trim()) return true;
                       const term = editOrderSearchTerm.toLowerCase();
-                      return (
-                        (item.name || '').toLowerCase().includes(term) ||
-                        (item.barcode || '').toLowerCase().includes(term)
-                      );
+                      return (item.name || '').toLowerCase().includes(term);
                     })
                     .slice(0, 30)
                     .map((catItem) => {
@@ -4405,10 +4400,7 @@ export default function OrdersView({
                     .filter((item) => {
                       if (!editSaleSearchTerm.trim()) return true;
                       const term = editSaleSearchTerm.toLowerCase();
-                      return (
-                        (item.name || '').toLowerCase().includes(term) ||
-                        (item.barcode || '').toLowerCase().includes(term)
-                      );
+                      return (item.name || '').toLowerCase().includes(term);
                     })
                     .slice(0, 30)
                     .map((catItem) => {

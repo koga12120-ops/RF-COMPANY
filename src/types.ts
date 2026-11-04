@@ -8,7 +8,7 @@ export interface UserState {
 export interface Item {
   id: string;
   name: string;
-  barcode: string;
+  barcode?: string;
   quantity: number; // بڕی بەردەست لە کۆگا (بە کارتۆن یان پاکەت)
   unitType?: 'carton' | 'packet' | 'both'; // یەکەی سەرەکی
   supplier?: string;

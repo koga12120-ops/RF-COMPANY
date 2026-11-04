@@ -1267,7 +1267,6 @@ export function printWarehouseInvoicePopup(data: WarehouseInvoicePrintData) {
         <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${idx + 1}</td>
         <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 700; color: #0f172a;">
           ${item.name}
-          ${item.barcode ? `<div style="font-size: 11px; font-family: monospace; color: #64748b;" dir="ltr">${item.barcode}</div>` : ''}
         </td>
         <td style="padding: 8px; text-align: center; border-bottom: 1px solid #e2e8f0; font-weight: 700; font-family: monospace;" dir="rtl">
           ${cartonDisplay}

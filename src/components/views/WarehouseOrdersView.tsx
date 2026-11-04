@@ -1167,8 +1167,7 @@ export default function WarehouseOrdersView() {
   };
 
   const filteredWarehouseItems = items.filter(item =>
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (item.barcode && item.barcode.includes(searchTerm))
+    item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -2468,10 +2467,7 @@ export default function WarehouseOrdersView() {
                     .filter((item) => {
                       if (!editOrderSearchTerm.trim()) return true;
                       const term = editOrderSearchTerm.toLowerCase();
-                      return (
-                        (item.name || '').toLowerCase().includes(term) ||
-                        (item.barcode || '').toLowerCase().includes(term)
-                      );
+                      return (item.name || '').toLowerCase().includes(term);
                     })
                     .slice(0, 30)
                     .map((wItem) => {

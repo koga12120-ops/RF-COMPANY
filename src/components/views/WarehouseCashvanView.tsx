@@ -965,8 +965,7 @@ export default function WarehouseCashvanView() {
   const pendingRequisitions = requisitions.filter(r => r.status === 'pending' || r.status === 'preparing');
 
   const filteredItems = items.filter(item => 
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (item.barcode && item.barcode.includes(searchTerm))
+    item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -1339,7 +1338,6 @@ export default function WarehouseCashvanView() {
                 <thead className="bg-slate-50 text-slate-500 text-xs font-bold">
                   <tr>
                     <th className="p-3">ناوی کاڵا لەناو ڤاندا</th>
-                    <th className="p-3">بارکۆد</th>
                     <th className="p-3">بڕی بەردەست لەناو ڤان</th>
                     <th className="p-3">نرخی فرۆشتن</th>
                     <th className="p-3 text-center">کردارەکان</th>
@@ -1349,7 +1347,6 @@ export default function WarehouseCashvanView() {
                   {selectedVanInventory.map(inv => (
                     <tr key={inv.id} className="hover:bg-slate-50/60 transition">
                       <td className="p-3 font-bold text-slate-800">{inv.name}</td>
-                      <td className="p-3 font-mono text-slate-400" dir="ltr">{inv.barcode || '-'}</td>
                       <td className="p-3 font-bold text-indigo-700">
                         <span className="bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100">
                           {inv.quantity || 0} {inv.unit === 'packet' ? 'پاکەت' : 'کارتۆن'}
@@ -1610,14 +1607,14 @@ export default function WarehouseCashvanView() {
                 </div>
                 <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-slate-50">
                   {items
-                    .filter(i => !editSearchTerm || i.name.toLowerCase().includes(editSearchTerm.toLowerCase()) || (i.barcode && i.barcode.includes(editSearchTerm)))
+                    .filter(i => !editSearchTerm || i.name.toLowerCase().includes(editSearchTerm.toLowerCase()))
                     .slice(0, 10)
                     .map((item) => (
                       <div key={item.id} className="p-2 flex items-center justify-between hover:bg-white text-xs">
                         <div>
                           <div className="font-bold text-slate-800">{item.name}</div>
                           <div className="text-[10px] text-slate-500">
-                            مەخزەن: {item.quantity || 0} | بارکۆد: {item.barcode || '—'}
+                            مەخزەن: {item.quantity || 0}
                           </div>
                         </div>
                         <button

@@ -8,6 +8,7 @@ import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import { updateItemAndSyncEverywhere } from '../../lib/invoiceSync';
 import { printWarehouseInvoicePopup } from '../../lib/statementPrinter';
+import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
 interface InventoryViewProps {
   role: Role;
@@ -46,7 +47,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
   // Edit item modal state
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [editName, setEditName] = useState('');
-  const [editBarcode, setEditBarcode] = useState('');
   const [editSupplier, setEditSupplier] = useState('');
   const [editInvoiceNo, setEditInvoiceNo] = useState('');
   const [editHasCarton, setEditHasCarton] = useState(true);
@@ -147,7 +147,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
   const openEditModal = (item: Item) => {
     setEditingItem(item);
     setEditName(item.name || '');
-    setEditBarcode(item.barcode || '');
     setEditSupplier(item.supplier || '');
     setEditInvoiceNo(item.invoiceNo || '');
 
@@ -218,7 +217,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
 
       const itemData: any = {
         name: editName.trim(),
-        barcode: editBarcode.trim(),
         supplier: editSupplier.trim(),
         invoiceNo: cleanInvoice,
         quantity: totalQty,
@@ -282,21 +280,42 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
     setExpandedInvoices(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // Filter items by search and supplier
+  // Filter items by search and supplier with first-letter prefix prioritization
   const filteredItems = useMemo(() => {
-    let result = items.filter(item => {
-      const nameMatch = item.name ? item.name.toLowerCase().includes(searchTerm.toLowerCase()) : false;
-      const barcodeMatch = item.barcode ? item.barcode.includes(searchTerm) : false;
-      const invoiceMatch = item.invoiceNo ? item.invoiceNo.includes(searchTerm) : false;
-      const supplierMatch = item.supplier ? item.supplier.toLowerCase().includes(searchTerm.toLowerCase()) : false;
-      
-      const textMatches = nameMatch || barcodeMatch || invoiceMatch || supplierMatch;
-      const supplierMatches = filterSupplier ? item.supplier === filterSupplier : true;
+    const rawQuery = searchTerm.trim();
+    const normQuery = normalizeKurdishArabicText(rawQuery);
 
-      return textMatches && supplierMatches;
+    let result = items.filter(item => {
+      const supplierMatches = filterSupplier ? item.supplier === filterSupplier : true;
+      if (!supplierMatches) return false;
+      if (!normQuery) return true;
+
+      const normName = normalizeKurdishArabicText(item.name || '');
+      const normInvoice = normalizeKurdishArabicText(item.invoiceNo || '');
+      const normSupplier = normalizeKurdishArabicText(item.supplier || '');
+
+      return (
+        normName.includes(normQuery) ||
+        normInvoice.includes(normQuery) ||
+        normSupplier.includes(normQuery)
+      );
     });
 
     result.sort((a, b) => {
+      if (normQuery) {
+        const normNameA = normalizeKurdishArabicText(a.name || '');
+        const normNameB = normalizeKurdishArabicText(b.name || '');
+        const aStarts = normNameA.startsWith(normQuery);
+        const bStarts = normNameB.startsWith(normQuery);
+        if (aStarts && !bStarts) return -1;
+        if (!aStarts && bStarts) return 1;
+
+        const aWordStarts = normNameA.split(/\s+/).some(w => w.startsWith(normQuery));
+        const bWordStarts = normNameB.split(/\s+/).some(w => w.startsWith(normQuery));
+        if (aWordStarts && !bWordStarts) return -1;
+        if (!aWordStarts && bWordStarts) return 1;
+      }
+
       const dateA = a.createdAt || 0;
       const dateB = b.createdAt || 0;
       return sortDate === 'desc' ? dateB - dateA : dateA - dateB;
@@ -538,7 +557,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
                   <tr key={item.id} className="hover:bg-slate-50/70 transition">
                     <td className="px-4 py-3 font-bold text-slate-800">
                       <div className="text-sm">{item.name}</div>
-                      {item.barcode && <div className="text-[11px] font-mono text-slate-400" dir="ltr">{item.barcode}</div>}
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-600">
                       <div className="font-bold text-slate-800">{item.supplier || '-'}</div>
@@ -758,7 +776,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
                                     <tr>
                                       <th className="px-3 py-2 w-10 text-center">#</th>
                                       <th className="px-3 py-2">ناوی کاڵا</th>
-                                      <th className="px-3 py-2">بارکۆد</th>
                                       <th className="px-3 py-2">ماوە لە کۆگا</th>
                                       <th className="px-3 py-2">تێچوو</th>
                                       <th className="px-3 py-2">فرۆشتن</th>
@@ -770,7 +787,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
                                       <tr key={it.id} className="hover:bg-slate-50/60">
                                         <td className="px-3 py-2 text-center font-mono text-slate-400">{idx + 1}</td>
                                         <td className="px-3 py-2 font-bold text-slate-800">{it.name}</td>
-                                        <td className="px-3 py-2 font-mono text-slate-500" dir="ltr">{it.barcode || '-'}</td>
                                         <td className="px-3 py-2 font-bold text-slate-800" dir="ltr">
                                           <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded text-[11px] font-bold">
                                             {formatStock(it)}
@@ -844,8 +860,8 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
             </div>
 
             <form onSubmit={handleSaveEdit} className="p-5 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-1">
                   <label className="block text-xs font-bold text-slate-700 mb-1">ناوی کاڵا *</label>
                   <input
                     type="text"
@@ -853,16 +869,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">بارکۆد</label>
-                  <input
-                    type="text"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-mono outline-none focus:ring-2 focus:ring-indigo-500"
-                    value={editBarcode}
-                    onChange={(e) => setEditBarcode(e.target.value)}
-                    dir="ltr"
                   />
                 </div>
                 <div>
@@ -1042,7 +1048,6 @@ export default function InventoryView({ role, onNavigateToEntry }: InventoryView
         message="ئایا دڵنیایت لە سڕینەوەی ئەم کاڵایە لە کۆگادا؟ ئەم کردارە هەڵناوەشێتەوە."
         itemName={deletingItem?.name}
         details={deletingItem ? [
-          { label: 'بارکۆد', value: deletingItem.barcode || '-' },
           { label: 'بڕی ماوە لە کۆگا', value: formatStock(deletingItem) },
           { label: 'کۆمپانیا', value: deletingItem.supplier || '-' },
           { label: 'ژمارەی وەسڵ', value: deletingItem.invoiceNo ? `#${deletingItem.invoiceNo}` : '-' }

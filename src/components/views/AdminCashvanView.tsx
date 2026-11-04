@@ -5308,10 +5308,7 @@ export default function AdminCashvanView() {
                     .filter((item) => {
                       if (!editSaleSearchTerm.trim()) return true;
                       const term = editSaleSearchTerm.toLowerCase();
-                      return (
-                        (item.name || '').toLowerCase().includes(term) ||
-                        (item.barcode || '').toLowerCase().includes(term)
-                      );
+                      return (item.name || '').toLowerCase().includes(term);
                     })
                     .slice(0, 25)
                     .map((catItem) => {

@@ -153,8 +153,7 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
 
   const filteredVanForReturn = useMemo(() => {
     return inventory.filter(item =>
-      item.name?.toLowerCase().includes(returnSearch.toLowerCase()) ||
-      item.barcode?.includes(returnSearch)
+      item.name?.toLowerCase().includes(returnSearch.toLowerCase())
     );
   }, [inventory, returnSearch]);
 
@@ -873,11 +872,6 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                           <span>گەڕاندنەوە</span>
                         </button>
                       </div>
-                      {item.barcode && (
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5" dir="ltr">
-                          {item.barcode}
-                        </div>
-                      )}
                     </div>
 
                     <div className="mt-3 pt-2.5 border-t border-slate-100 flex justify-between items-center">
@@ -1044,11 +1038,6 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                       <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg">
                         لە کۆگا: <strong className="text-emerald-700 font-mono">{item.quantity || 0}</strong>
                       </span>
-                      {item.barcode && (
-                        <span className="text-[10px] text-slate-400 font-mono" dir="ltr">
-                          {item.barcode}
-                        </span>
-                      )}
                     </div>
                   </div>
 
