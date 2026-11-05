@@ -12,6 +12,8 @@ import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPo
 import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
 import { getStoredSession } from '../../lib/authService';
 import { getCompanySettings } from '../../lib/companySettings';
+import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
+import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
 interface ActivityItem {
   id: string;
@@ -479,10 +481,12 @@ export default function OrdersView({
   };
 
   // --- ORDER FORM HANDLERS ---
-  const handleAddItemToOrder = (item: Item, initialQty: number = 1) => {
+  const handleAddItemToOrder = (item: Item | any, initialQty: number = 1) => {
     const exists = orderSelectedItems.find(si => si.item.id === item.id);
     const defaultUnit: 'carton' | 'packet' = (item.packetSellingPrice && !item.cartonSellingPrice) ? 'packet' : 'carton';
-    const stock = item.quantity || 0;
+    const stock = defaultUnit === 'packet'
+      ? (item.totalPackets !== undefined ? item.totalPackets : (item.quantity || 0))
+      : (item.totalCartons !== undefined ? item.totalCartons : (item.quantity || 0));
 
     if (isOrderGiftMode) {
       if (exists) {
@@ -525,8 +529,10 @@ export default function OrdersView({
     const itemObj = orderSelectedItems.find(si => si.item.id === id);
     if (!itemObj) return;
 
-    const stock = itemObj.item.quantity || 0;
     const currentUnit = unit || itemObj.unit;
+    const stock = currentUnit === 'packet'
+      ? ((itemObj.item as any).totalPackets !== undefined ? (itemObj.item as any).totalPackets : (itemObj.item.quantity || 0))
+      : ((itemObj.item as any).totalCartons !== undefined ? (itemObj.item as any).totalCartons : (itemObj.item.quantity || 0));
 
     if (isGiftUpdate || isOrderGiftMode) {
       const newGiftQty = Math.max(0, Math.round(qty * 100) / 100);
@@ -623,6 +629,12 @@ export default function OrdersView({
       }
 
       if (editingOrderId) {
+        const existingOrder = orders.find(o => o.id === editingOrderId);
+        if (existingOrder?.items) {
+          await restoreWarehouseStock(existingOrder.items as any);
+        }
+        await deductWarehouseStock(orderItems);
+
         await updateDoc(doc(db, 'orders', editingOrderId), {
           repName: repName.trim(),
           marketName: orderMarketName.trim(),
@@ -636,7 +648,6 @@ export default function OrdersView({
         });
 
         // Sync corresponding transaction in accounts
-        const existingOrder = orders.find(o => o.id === editingOrderId);
         const invKey = existingOrder?.invoiceId || existingOrder?.invoiceNo || editingOrderId;
         const qT = query(collection(db, 'transactions'), where('invoiceNo', '==', invKey));
         const snapT = await getDocs(qT);
@@ -665,6 +676,7 @@ export default function OrdersView({
         }
         setEditingOrderId(null);
       } else {
+        await deductWarehouseStock(orderItems);
         const nextInvoiceNo = await getNextInvoiceNumber();
         const newOrderData = {
           invoiceId: nextInvoiceNo,
@@ -908,6 +920,11 @@ export default function OrdersView({
         lastEditedAt: Date.now(),
         lastEditedBy: isWarehouseMode ? 'warehouse' : (role || 'sales_rep')
       };
+
+      if (editingOrder.items) {
+        await restoreWarehouseStock(editingOrder.items as any);
+      }
+      await deductWarehouseStock(orderItems);
 
       await updateDoc(doc(db, 'orders', editingOrder.id), payload);
 
@@ -2632,9 +2649,76 @@ export default function OrdersView({
     const totalRegularCount = orderSelectedItems.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
     const totalGiftCount = orderSelectedItems.reduce((acc, curr) => acc + (curr.giftQuantity || 0), 0);
 
-    const filteredWarehouseItems = items.filter(
-      i => (i.quantity || 0) > 0
-    );
+    const aggregatedWarehouseItems = useMemo(() => {
+      const map = new Map<string, any>();
+      items.forEach(item => {
+        const rawName = (item.name || '').trim();
+        if (!rawName) return;
+        const normKey = normalizeKurdishArabicText(rawName).toLowerCase();
+
+        const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+        const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+        const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+        const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+
+        const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
+        const pSell = item.packetSellingPrice || 0;
+        const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
+        const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
+        const cWholesale = item.cartonWholesalePrice || item.wholesalePrice || 0;
+        const pWholesale = item.packetWholesalePrice || 0;
+
+        if (!map.has(normKey)) {
+          map.set(normKey, {
+            id: item.id,
+            key: normKey,
+            name: rawName,
+            totalCartons: cTotal,
+            totalCartonBonus: cBonus,
+            totalPackets: pTotal,
+            totalPacketBonus: pBonus,
+            quantity: cTotal > 0 ? cTotal : pTotal,
+            cartonSellingPrice: cSell,
+            packetSellingPrice: pSell,
+            cartonCostPrice: cCost,
+            packetCostPrice: pCost,
+            cartonWholesalePrice: cWholesale,
+            packetWholesalePrice: pWholesale,
+            sellingPrice: cSell || pSell,
+            costPrice: cCost || pCost,
+            wholesalePrice: cWholesale || pWholesale,
+            suppliers: item.supplier ? [item.supplier] : [],
+            invoicesCount: 1,
+            items: [item]
+          });
+        } else {
+          const ag = map.get(normKey)!;
+          ag.totalCartons += cTotal;
+          ag.totalCartonBonus += cBonus;
+          ag.totalPackets += pTotal;
+          ag.totalPacketBonus += pBonus;
+          ag.quantity = ag.totalCartons > 0 ? ag.totalCartons : ag.totalPackets;
+          ag.invoicesCount += 1;
+          ag.items.push(item);
+          if (cSell > 0) ag.cartonSellingPrice = cSell;
+          if (pSell > 0) ag.packetSellingPrice = pSell;
+          if (cCost > 0) ag.cartonCostPrice = cCost;
+          if (pCost > 0) ag.packetCostPrice = pCost;
+          if (cWholesale > 0) ag.cartonWholesalePrice = cWholesale;
+          if (pWholesale > 0) ag.packetWholesalePrice = pWholesale;
+        }
+      });
+
+      return Array.from(map.values()).filter(ag => (ag.totalCartons > 0 || ag.totalPackets > 0));
+    }, [items]);
+
+    const filteredWarehouseItems = useMemo(() => {
+      if (!orderItemSearch.trim()) return aggregatedWarehouseItems;
+      const q = normalizeKurdishArabicText(orderItemSearch.trim()).toLowerCase();
+      return aggregatedWarehouseItems.filter(it =>
+        normalizeKurdishArabicText(it.name).toLowerCase().includes(q)
+      );
+    }, [aggregatedWarehouseItems, orderItemSearch]);
 
     return (
       <div className="space-y-4 animate-in fade-in zoom-in-98 duration-200 pb-28">
@@ -2724,6 +2808,27 @@ export default function OrdersView({
           </div>
         </div>
 
+        {/* Search Bar for Order Form Items */}
+        <div className="relative">
+          <input
+            type="text"
+            placeholder="گەڕان لەناو کاڵاکانی کۆگا بەپێی ناو..."
+            value={orderItemSearch}
+            onChange={(e) => setOrderItemSearch(e.target.value)}
+            className="w-full pr-9 pl-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none shadow-2xs"
+          />
+          <Search className="absolute right-3 top-3 text-slate-400" size={16} />
+          {orderItemSearch && (
+            <button
+              type="button"
+              onClick={() => setOrderItemSearch('')}
+              className="absolute left-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
+
         {/* Gift Mode Active Notice Banner */}
         {isOrderGiftMode && (
           <div className="p-3 bg-yellow-50 border-2 border-yellow-400 rounded-2xl flex items-center justify-between gap-2 text-xs font-bold text-yellow-950 animate-in fade-in">
@@ -2770,8 +2875,15 @@ export default function OrdersView({
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <h4 className="text-xs sm:text-sm font-bold text-slate-800 line-clamp-1">{item.name}</h4>
-                      <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
-                        <span>کۆگا: <strong className="text-slate-700 font-mono font-bold">{item.quantity}</strong></span>
+                      <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md font-mono font-bold text-[11px]">
+                          کۆگا: {item.totalCartons > 0 ? `${item.totalCartons} کارتۆن` : ''} {item.totalPackets > 0 ? `${item.totalPackets} پاکەت` : ''}
+                        </span>
+                        {item.invoicesCount > 1 && (
+                          <span className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded font-bold text-[10px]">
+                            {item.invoicesCount} وەسڵ
+                          </span>
+                        )}
                         {currentGiftQty > 0 && (
                           <span className="bg-yellow-200 text-yellow-900 px-1.5 py-0.5 rounded-md font-black text-[10px]">
                             {currentGiftQty} هەدیە
@@ -4137,6 +4249,9 @@ export default function OrdersView({
         onConfirm={async () => {
           if (!deletingOrder) return;
           try {
+            if (deletingOrder.items) {
+              await restoreWarehouseStock(deletingOrder.items as any);
+            }
             await updateDoc(doc(db, 'orders', deletingOrder.id), { status: 'deleted' });
             setDeletingOrder(null);
           } catch (e) {

@@ -7,6 +7,8 @@ import { CashvanRequisition, Item, CashvanReturn, CashvanReturnItem } from '../.
 import { Search, Plus, Send, Clock, CheckCircle2, Truck, ClipboardList, Package, Layers, RotateCcw, Printer, Edit2, Trash2, X, AlertTriangle, Check } from 'lucide-react';
 import { format } from 'date-fns';
 import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
+import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
 export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorder?: boolean }) {
   const [inventory, setInventory] = useState<any[]>([]);
@@ -147,9 +149,76 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
     return inventory;
   }, [inventory]);
 
-  const filteredWarehouseItems = useMemo(() => {
-    return warehouseItems;
+  const aggregatedWarehouseItems = useMemo(() => {
+    const map = new Map<string, any>();
+    warehouseItems.forEach(item => {
+      const rawName = (item.name || '').trim();
+      if (!rawName) return;
+      const normKey = normalizeKurdishArabicText(rawName).toLowerCase();
+
+      const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+      const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+      const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+      const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+
+      const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
+      const pSell = item.packetSellingPrice || 0;
+      const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
+      const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
+      const cWholesale = item.cartonWholesalePrice || item.wholesalePrice || 0;
+      const pWholesale = item.packetWholesalePrice || 0;
+
+      if (!map.has(normKey)) {
+        map.set(normKey, {
+          id: item.id,
+          key: normKey,
+          name: rawName,
+          totalCartons: cTotal,
+          totalCartonBonus: cBonus,
+          totalPackets: pTotal,
+          totalPacketBonus: pBonus,
+          quantity: cTotal > 0 ? cTotal : pTotal,
+          cartonSellingPrice: cSell,
+          packetSellingPrice: pSell,
+          cartonCostPrice: cCost,
+          packetCostPrice: pCost,
+          cartonWholesalePrice: cWholesale,
+          packetWholesalePrice: pWholesale,
+          sellingPrice: cSell || pSell,
+          costPrice: cCost || pCost,
+          wholesalePrice: cWholesale || pWholesale,
+          suppliers: item.supplier ? [item.supplier] : [],
+          invoicesCount: 1,
+          items: [item]
+        });
+      } else {
+        const ag = map.get(normKey)!;
+        ag.totalCartons += cTotal;
+        ag.totalCartonBonus += cBonus;
+        ag.totalPackets += pTotal;
+        ag.totalPacketBonus += pBonus;
+        ag.quantity = ag.totalCartons > 0 ? ag.totalCartons : ag.totalPackets;
+        ag.invoicesCount += 1;
+        ag.items.push(item);
+        if (cSell > 0) ag.cartonSellingPrice = cSell;
+        if (pSell > 0) ag.packetSellingPrice = pSell;
+        if (cCost > 0) ag.cartonCostPrice = cCost;
+        if (pCost > 0) ag.packetCostPrice = pCost;
+        if (cWholesale > 0) ag.cartonWholesalePrice = cWholesale;
+        if (pWholesale > 0) ag.packetWholesalePrice = pWholesale;
+      }
+    });
+
+    return Array.from(map.values()).filter(ag => (ag.totalCartons > 0 || ag.totalPackets > 0));
   }, [warehouseItems]);
+
+  const filteredWarehouseItems = useMemo(() => {
+    if (!preOrderSearch.trim()) return aggregatedWarehouseItems;
+    const q = normalizeKurdishArabicText(preOrderSearch.trim()).toLowerCase();
+    return aggregatedWarehouseItems.filter(item =>
+      normalizeKurdishArabicText(item.name || '').toLowerCase().includes(q)
+    );
+  }, [aggregatedWarehouseItems, preOrderSearch]);
 
   const filteredVanForReturn = useMemo(() => {
     return inventory.filter(item =>
@@ -158,7 +227,7 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
   }, [inventory, returnSearch]);
 
   // Pre-order helpers
-  const addPreOrderItem = (item: Item, initialQty: number = 1) => {
+  const addPreOrderItem = (item: Item | any, initialQty: number = 1) => {
     const existing = preOrderCart.find(c => c.item.id === item.id);
     if (existing) {
       const nextQty = Math.round((existing.quantity + initialQty) * 100) / 100;
@@ -189,6 +258,9 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
         unit: c.unit,
         price: c.unit === 'packet' ? (c.item.packetSellingPrice || c.item.sellingPrice || 0) : (c.item.cartonSellingPrice || c.item.sellingPrice || 0)
       }));
+
+      // Deduct from warehouse stock immediately
+      await deductWarehouseStock(reqItems);
 
       const requisitionNo = `REQ-${Date.now().toString().slice(-6)}`;
 
@@ -1034,10 +1106,15 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
-                      <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg">
-                        لە کۆگا: <strong className="text-emerald-700 font-mono">{item.quantity || 0}</strong>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs">
+                      <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg font-mono">
+                        لە کۆگا: {item.totalCartons > 0 ? `${item.totalCartons} کارتۆن` : ''} {item.totalPackets > 0 ? `${item.totalPackets} پاکەت` : ''}
                       </span>
+                      {item.invoicesCount > 1 && (
+                        <span className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded font-bold">
+                          کۆی {item.invoicesCount} وەسڵ
+                        </span>
+                      )}
                     </div>
                   </div>
 
