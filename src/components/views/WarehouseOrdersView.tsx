@@ -33,7 +33,6 @@ import {
 } from 'lucide-react';
 import { format, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
-import { deductWarehouseStock } from '../../lib/invoiceSync';
 import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function WarehouseOrdersView() {
@@ -300,17 +299,31 @@ export default function WarehouseOrdersView() {
   const handleFulfillRepOrder = async (order: Order) => {
     setIsProcessing(true);
     try {
-      // If not already deducted on order creation, deduct now
-      if (!(order as any).stockDeducted) {
-        await deductWarehouseStock(order.items);
+      // Deduct all items in this order from warehouse items collection
+      for (const item of order.items) {
+        const itemRef = doc(db, 'items', item.itemId);
+        const itemSnap = await getDoc(itemRef);
+        if (itemSnap.exists()) {
+          const curData = itemSnap.data();
+          const currentTotal = curData.quantity || 0;
+          const totalOrderQty = (item.quantity || 0) + (item.giftQuantity || 0);
+          const newQty = Math.max(0, currentTotal - totalOrderQty);
+
+          const updatePayload: any = { quantity: newQty };
+          if (item.unit === 'carton' && curData.cartonQuantity !== undefined) {
+            updatePayload.cartonQuantity = Math.max(0, (curData.cartonQuantity || 0) - totalOrderQty);
+          } else if (item.unit === 'packet' && curData.packetQuantity !== undefined) {
+            updatePayload.packetQuantity = Math.max(0, (curData.packetQuantity || 0) - totalOrderQty);
+          }
+          await updateDoc(itemRef, updatePayload);
+        }
       }
 
       // Mark order as completed & accepted by warehouse
       await updateDoc(doc(db, 'orders', order.id), {
         status: 'completed',
         acceptedByWarehouse: true,
-        fulfilledAt: Date.now(),
-        stockDeducted: true
+        fulfilledAt: Date.now()
       });
 
       setFulfillingOrder(null);
@@ -681,13 +694,20 @@ export default function WarehouseOrdersView() {
       };
       await addDoc(collection(db, 'cashvan_transfers'), transferData);
 
-      // 2. Deduct warehouse stock (if not already deducted upon requisition creation)
-      if (!(req as any).stockDeducted) {
-        await deductWarehouseStock(req.items);
-      }
-
+      // 2. Deduct warehouse & update cashvan inventory
       for (const rItem of req.items) {
-        const itemObj = items.find(i => i.id === rItem.itemId || i.name === rItem.name);
+        const itemObj = items.find(i => i.id === rItem.itemId);
+        if (itemObj) {
+          const itemRef = doc(db, 'items', itemObj.id);
+          const newQty = Math.max(0, (itemObj.quantity || 0) - rItem.quantity);
+          const updatePayload: any = { quantity: newQty };
+          if (rItem.unit === 'carton' && itemObj.cartonQuantity !== undefined) {
+            updatePayload.cartonQuantity = Math.max(0, (itemObj.cartonQuantity || 0) - rItem.quantity);
+          } else if (rItem.unit === 'packet' && itemObj.packetQuantity !== undefined) {
+            updatePayload.packetQuantity = Math.max(0, (itemObj.packetQuantity || 0) - rItem.quantity);
+          }
+          await updateDoc(itemRef, updatePayload);
+        }
 
         // Add to isolated cashvan inventory
         const cInvRef = doc(db, 'cashvan_inventory', `${req.cashvanName}_${rItem.itemId}`);

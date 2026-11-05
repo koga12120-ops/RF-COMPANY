@@ -6,7 +6,6 @@ import { Item, CashvanTransfer, CashvanRequisition } from '../../types';
 import { Plus, Search, Check, Send, Printer, Truck, ClipboardList, CheckCircle2, Clock, Eye, X, Package, Edit2, Trash2, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
 import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
-import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
 
 export default function WarehouseCashvanView() {
   const [items, setItems] = useState<Item[]>([]);
@@ -448,13 +447,14 @@ export default function WarehouseCashvanView() {
       };
       const transRef = await addDoc(collection(db, 'cashvan_transfers'), transferData);
 
-      // 2. Deduct warehouse stock (if not already deducted) & update cashvan inventory
-      if (!(req as any).stockDeducted) {
-        await deductWarehouseStock(req.items);
-      }
-
+      // 2. Deduct warehouse & update cashvan inventory
       for (const rItem of req.items) {
-        const itemObj = items.find(i => i.id === rItem.itemId || i.name === rItem.name);
+        const itemObj = items.find(i => i.id === rItem.itemId);
+        if (itemObj) {
+          const itemRef = doc(db, 'items', itemObj.id);
+          const newQty = Math.max(0, (itemObj.quantity || 0) - rItem.quantity);
+          await updateDoc(itemRef, { quantity: newQty });
+        }
 
         const cInvRef = doc(db, 'cashvan_inventory', `${req.cashvanName}_${rItem.itemId}`);
         const cInvSnap = await getDoc(cInvRef);
@@ -913,9 +913,6 @@ export default function WarehouseCashvanView() {
     if (!deletingRequisition) return;
     setIsProcessing(true);
     try {
-      if (deletingRequisition.items && (deletingRequisition as any).stockDeducted) {
-        await restoreWarehouseStock(deletingRequisition.items);
-      }
       await deleteDoc(doc(db, 'cashvan_requisitions', deletingRequisition.id));
       setDeletingRequisition(null);
       alert('تەڵەبیەی پێشوەختەکە بە سەرکەوتوویی سڕایەوە');
