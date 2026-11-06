@@ -1052,7 +1052,7 @@ export default function WarehouseCashvanView() {
               <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
               <input
                 type="text"
-                placeholder="گەڕان بۆ کاڵا بەپێی ناو یان بارکۆد..."
+                placeholder="گەڕان بۆ کاڵا بەپێی ناو..."
                 className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl outline-none text-xs"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}

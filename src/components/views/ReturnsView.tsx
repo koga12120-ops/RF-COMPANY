@@ -68,10 +68,23 @@ export default function ReturnsView({ role }: { role: Role }) {
       
       const newQty = selectedItem.quantity + totalPieces;
       
-      // Update item quantity
-      await updateDoc(doc(db, 'items', selectedItem.id), {
-        quantity: newQty
-      });
+      // Update item quantity & carton/packet quantities
+      const updateData: any = { quantity: newQty };
+      if (unit === 'carton') {
+        const curCarton = selectedItem.cartonQuantity !== undefined ? selectedItem.cartonQuantity : selectedItem.quantity;
+        updateData.cartonQuantity = curCarton + parsedQuantity;
+        if (selectedItem.cartonPurchasedQuantity !== undefined) {
+          updateData.cartonPurchasedQuantity = selectedItem.cartonPurchasedQuantity + parsedQuantity;
+        }
+      } else if (unit === 'packet') {
+        const curPacket = selectedItem.packetQuantity !== undefined ? selectedItem.packetQuantity : selectedItem.quantity;
+        updateData.packetQuantity = curPacket + parsedQuantity;
+        if (selectedItem.packetPurchasedQuantity !== undefined) {
+          updateData.packetPurchasedQuantity = selectedItem.packetPurchasedQuantity + parsedQuantity;
+        }
+      }
+
+      await updateDoc(doc(db, 'items', selectedItem.id), updateData);
       
       // Add to returns collection for log
       await addDoc(collection(db, 'returns'), {

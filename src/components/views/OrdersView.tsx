@@ -362,6 +362,78 @@ export default function OrdersView({
     return map;
   }, [transactions, markets]);
 
+  // Aggregated Warehouse Items grouped by product name (like Warehouse Audit / جەردی کۆگا)
+  const aggregatedWarehouseItems = useMemo(() => {
+    const map = new Map<string, any>();
+    items.forEach(item => {
+      const rawName = (item.name || '').trim();
+      if (!rawName) return;
+      const normKey = normalizeKurdishArabicText(rawName).toLowerCase();
+
+      const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
+      const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
+      const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
+      const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
+
+      const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
+      const pSell = item.packetSellingPrice || 0;
+      const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
+      const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
+      const cWholesale = item.cartonWholesalePrice || item.wholesalePrice || 0;
+      const pWholesale = item.packetWholesalePrice || 0;
+
+      if (!map.has(normKey)) {
+        map.set(normKey, {
+          id: item.id,
+          key: normKey,
+          name: rawName,
+          totalCartons: cTotal,
+          totalCartonBonus: cBonus,
+          totalPackets: pTotal,
+          totalPacketBonus: pBonus,
+          quantity: cTotal > 0 ? cTotal : pTotal,
+          cartonSellingPrice: cSell,
+          packetSellingPrice: pSell,
+          cartonCostPrice: cCost,
+          packetCostPrice: pCost,
+          cartonWholesalePrice: cWholesale,
+          packetWholesalePrice: pWholesale,
+          sellingPrice: cSell || pSell,
+          costPrice: cCost || pCost,
+          wholesalePrice: cWholesale || pWholesale,
+          suppliers: item.supplier ? [item.supplier] : [],
+          invoicesCount: 1,
+          items: [item]
+        });
+      } else {
+        const ag = map.get(normKey)!;
+        ag.totalCartons += cTotal;
+        ag.totalCartonBonus += cBonus;
+        ag.totalPackets += pTotal;
+        ag.totalPacketBonus += pBonus;
+        ag.quantity = ag.totalCartons > 0 ? ag.totalCartons : ag.totalPackets;
+        ag.invoicesCount += 1;
+        ag.items.push(item);
+        if (cSell > 0) ag.cartonSellingPrice = cSell;
+        if (pSell > 0) ag.packetSellingPrice = pSell;
+        if (cCost > 0) ag.cartonCostPrice = cCost;
+        if (pCost > 0) ag.packetCostPrice = pCost;
+        if (cWholesale > 0) ag.cartonWholesalePrice = cWholesale;
+        if (pWholesale > 0) ag.packetWholesalePrice = pWholesale;
+      }
+    });
+
+    return Array.from(map.values()).filter(ag => (ag.totalCartons > 0 || ag.totalPackets > 0));
+  }, [items]);
+
+  const filteredWarehouseItems = useMemo(() => {
+    if (!orderItemSearch.trim()) return aggregatedWarehouseItems;
+    const q = normalizeKurdishArabicText(orderItemSearch.trim()).toLowerCase();
+    return aggregatedWarehouseItems.filter(it =>
+      normalizeKurdishArabicText(it.name).toLowerCase().includes(q)
+    );
+  }, [aggregatedWarehouseItems, orderItemSearch]);
+
   // Price calculations
   const calcPrice = (item: any, unit: 'carton' | 'packet', currentMarketName?: string) => {
     if (!item) return 0;
@@ -644,6 +716,7 @@ export default function OrdersView({
           items: orderItems,
           status: 'completed',
           paymentStatus: orderPaymentType,
+          stockDeducted: true,
           timestamp: Date.now()
         });
 
@@ -689,6 +762,7 @@ export default function OrdersView({
           items: orderItems,
           status: 'completed' as const,
           paymentStatus: orderPaymentType,
+          stockDeducted: true,
           timestamp: Date.now()
         };
         const orderRef = await addDoc(collection(db, 'orders'), newOrderData);
@@ -917,6 +991,7 @@ export default function OrdersView({
         totalProfit,
         paymentStatus: editOrderPaymentType,
         paymentType: editOrderPaymentType,
+        stockDeducted: true,
         lastEditedAt: Date.now(),
         lastEditedBy: isWarehouseMode ? 'warehouse' : (role || 'sales_rep')
       };
@@ -2649,77 +2724,6 @@ export default function OrdersView({
     const totalRegularCount = orderSelectedItems.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
     const totalGiftCount = orderSelectedItems.reduce((acc, curr) => acc + (curr.giftQuantity || 0), 0);
 
-    const aggregatedWarehouseItems = useMemo(() => {
-      const map = new Map<string, any>();
-      items.forEach(item => {
-        const rawName = (item.name || '').trim();
-        if (!rawName) return;
-        const normKey = normalizeKurdishArabicText(rawName).toLowerCase();
-
-        const cTotal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-        const cBonus = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
-        const pTotal = item.packetQuantity !== undefined ? item.packetQuantity : (item.unitType === 'packet' ? (item.quantity || 0) : 0);
-        const pBonus = item.packetBonusQuantity || (item.unitType === 'packet' ? (item.bonusQuantity || 0) : 0) || 0;
-
-        const cSell = item.cartonSellingPrice || item.sellingPrice || 0;
-        const pSell = item.packetSellingPrice || 0;
-        const cCost = item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice || 0;
-        const pCost = item.packetCostPrice || item.packetPurchaseCost || 0;
-        const cWholesale = item.cartonWholesalePrice || item.wholesalePrice || 0;
-        const pWholesale = item.packetWholesalePrice || 0;
-
-        if (!map.has(normKey)) {
-          map.set(normKey, {
-            id: item.id,
-            key: normKey,
-            name: rawName,
-            totalCartons: cTotal,
-            totalCartonBonus: cBonus,
-            totalPackets: pTotal,
-            totalPacketBonus: pBonus,
-            quantity: cTotal > 0 ? cTotal : pTotal,
-            cartonSellingPrice: cSell,
-            packetSellingPrice: pSell,
-            cartonCostPrice: cCost,
-            packetCostPrice: pCost,
-            cartonWholesalePrice: cWholesale,
-            packetWholesalePrice: pWholesale,
-            sellingPrice: cSell || pSell,
-            costPrice: cCost || pCost,
-            wholesalePrice: cWholesale || pWholesale,
-            suppliers: item.supplier ? [item.supplier] : [],
-            invoicesCount: 1,
-            items: [item]
-          });
-        } else {
-          const ag = map.get(normKey)!;
-          ag.totalCartons += cTotal;
-          ag.totalCartonBonus += cBonus;
-          ag.totalPackets += pTotal;
-          ag.totalPacketBonus += pBonus;
-          ag.quantity = ag.totalCartons > 0 ? ag.totalCartons : ag.totalPackets;
-          ag.invoicesCount += 1;
-          ag.items.push(item);
-          if (cSell > 0) ag.cartonSellingPrice = cSell;
-          if (pSell > 0) ag.packetSellingPrice = pSell;
-          if (cCost > 0) ag.cartonCostPrice = cCost;
-          if (pCost > 0) ag.packetCostPrice = pCost;
-          if (cWholesale > 0) ag.cartonWholesalePrice = cWholesale;
-          if (pWholesale > 0) ag.packetWholesalePrice = pWholesale;
-        }
-      });
-
-      return Array.from(map.values()).filter(ag => (ag.totalCartons > 0 || ag.totalPackets > 0));
-    }, [items]);
-
-    const filteredWarehouseItems = useMemo(() => {
-      if (!orderItemSearch.trim()) return aggregatedWarehouseItems;
-      const q = normalizeKurdishArabicText(orderItemSearch.trim()).toLowerCase();
-      return aggregatedWarehouseItems.filter(it =>
-        normalizeKurdishArabicText(it.name).toLowerCase().includes(q)
-      );
-    }, [aggregatedWarehouseItems, orderItemSearch]);
-
     return (
       <div className="space-y-4 animate-in fade-in zoom-in-98 duration-200 pb-28">
         {/* Compact Integrated Header Bar */}
@@ -4162,7 +4166,7 @@ export default function OrdersView({
                   <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
                   <input
                     type="text"
-                    placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
+                    placeholder="گەڕان بەپێی ناوی کاڵا..."
                     className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl bg-white outline-none text-xs"
                     value={editOrderSearchTerm}
                     onChange={(e) => setEditOrderSearchTerm(e.target.value)}
@@ -4503,7 +4507,7 @@ export default function OrdersView({
                   <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
                   <input
                     type="text"
-                    placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
+                    placeholder="گەڕان بەپێی ناوی کاڵا..."
                     className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl bg-white outline-none text-xs"
                     value={editSaleSearchTerm}
                     onChange={(e) => setEditSaleSearchTerm(e.target.value)}

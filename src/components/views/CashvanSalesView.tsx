@@ -228,36 +228,59 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
 
   // Pre-order helpers
   const addPreOrderItem = (item: Item | any, initialQty: number = 1) => {
-    const existing = preOrderCart.find(c => c.item.id === item.id);
-    if (existing) {
-      const nextQty = Math.round((existing.quantity + initialQty) * 100) / 100;
-      setPreOrderCart(preOrderCart.map(c => c.item.id === item.id ? { ...c, quantity: nextQty } : c));
-    } else {
-      const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
-      setPreOrderCart([...preOrderCart, { item, quantity: initialQty, unit: defaultUnit }]);
-    }
+    setPreOrderCart(prev => {
+      const existingIndex = prev.findIndex(c => c.item.id === item.id || (c.item.name && c.item.name === item.name));
+      if (existingIndex > -1) {
+        const next = [...prev];
+        const nextQty = Math.round((next[existingIndex].quantity + initialQty) * 100) / 100;
+        next[existingIndex] = { ...next[existingIndex], quantity: nextQty };
+        return next;
+      } else {
+        const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
+        return [...prev, { item, quantity: initialQty, unit: defaultUnit }];
+      }
+    });
   };
 
   const updatePreOrderQty = (itemId: string, quantity: number, unit?: 'carton' | 'packet') => {
     const cleanQty = Math.round(quantity * 100) / 100;
-    if (cleanQty <= 0) {
-      setPreOrderCart(preOrderCart.filter(c => c.item.id !== itemId));
-    } else {
-      setPreOrderCart(preOrderCart.map(c => c.item.id === itemId ? { ...c, quantity: cleanQty, unit: unit || c.unit } : c));
-    }
+    setPreOrderCart(prev => {
+      if (cleanQty <= 0) {
+        return prev.filter(c => c.item.id !== itemId && c.item.name !== itemId);
+      } else {
+        return prev.map(c => (c.item.id === itemId || c.item.name === itemId) ? { ...c, quantity: cleanQty, unit: unit || c.unit } : c);
+      }
+    });
   };
 
   const handleSendPreOrder = async () => {
     if (preOrderCart.length === 0) return;
     setIsProcessing(true);
     try {
-      const reqItems = preOrderCart.map(c => ({
-        itemId: c.item.id,
-        name: c.item.name,
-        quantity: c.quantity,
-        unit: c.unit,
-        price: c.unit === 'packet' ? (c.item.packetSellingPrice || c.item.sellingPrice || 0) : (c.item.cartonSellingPrice || c.item.sellingPrice || 0)
-      }));
+      // Group and consolidate preOrderCart by item name & unit to prevent duplicate items
+      const consolidatedMap = new Map<string, { itemId: string; name: string; quantity: number; unit: 'carton' | 'packet'; price: number }>();
+
+      preOrderCart.forEach(c => {
+        const key = `${c.item.name}_${c.unit || 'carton'}`;
+        const price = c.unit === 'packet'
+          ? (c.item.packetSellingPrice || c.item.sellingPrice || 0)
+          : (c.item.cartonSellingPrice || c.item.sellingPrice || 0);
+
+        if (consolidatedMap.has(key)) {
+          const existing = consolidatedMap.get(key)!;
+          existing.quantity = Math.round((existing.quantity + c.quantity) * 100) / 100;
+        } else {
+          consolidatedMap.set(key, {
+            itemId: c.item.id,
+            name: c.item.name,
+            quantity: c.quantity,
+            unit: c.unit || 'carton',
+            price
+          });
+        }
+      });
+
+      const reqItems = Array.from(consolidatedMap.values());
 
       // Deduct from warehouse stock immediately
       await deductWarehouseStock(reqItems);
@@ -271,6 +294,7 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
         items: reqItems,
         notes: preOrderNotes.trim(),
         status: 'pending',
+        stockDeducted: true,
         createdAt: Date.now()
       });
 
@@ -358,8 +382,14 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
           const updatePayload: any = { quantity: currentWHQty + rItem.quantity };
           if (rItem.unit === 'carton' && whData.cartonQuantity !== undefined) {
             updatePayload.cartonQuantity = (whData.cartonQuantity || 0) + rItem.quantity;
+            if (whData.cartonPurchasedQuantity !== undefined) {
+              updatePayload.cartonPurchasedQuantity = (whData.cartonPurchasedQuantity || 0) + rItem.quantity;
+            }
           } else if (rItem.unit === 'packet' && whData.packetQuantity !== undefined) {
             updatePayload.packetQuantity = (whData.packetQuantity || 0) + rItem.quantity;
+            if (whData.packetPurchasedQuantity !== undefined) {
+              updatePayload.packetPurchasedQuantity = (whData.packetPurchasedQuantity || 0) + rItem.quantity;
+            }
           }
           await updateDoc(whItemRef, updatePayload);
         }
@@ -1157,10 +1187,7 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
                     {currentQty === 0 ? (
                       <button
                         type="button"
-                        onClick={() => {
-                          const defaultUnit = item.packetSellingPrice && !item.cartonSellingPrice ? 'packet' : 'carton';
-                          setPreOrderCart([...preOrderCart, { item, quantity: 1, unit: defaultUnit }]);
-                        }}
+                        onClick={() => addPreOrderItem(item, 1)}
                         className="w-full py-2 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border border-indigo-200 shadow-2xs"
                       >
                         <Plus size={15} />

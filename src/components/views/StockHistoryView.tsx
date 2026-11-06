@@ -165,11 +165,24 @@ export default function StockHistoryView() {
         const itemRef = doc(db, 'items', editingHistory.itemId);
         const itemSnap = await getDoc(itemRef);
         if (itemSnap.exists()) {
-          const currentQty = itemSnap.data().quantity || 0;
-          await updateDoc(itemRef, { 
-            quantity: currentQty + diff,
+          const itemData = itemSnap.data();
+          const currentQty = itemData.quantity || 0;
+          const updatePayload: any = { 
+            quantity: Math.max(0, currentQty + diff),
             invoiceNo: cleanNewInvoice
-          });
+          };
+          if (editingHistory.unit === 'carton' && itemData.cartonQuantity !== undefined) {
+            updatePayload.cartonQuantity = Math.max(0, (itemData.cartonQuantity || 0) + diff);
+            if (itemData.cartonPurchasedQuantity !== undefined) {
+              updatePayload.cartonPurchasedQuantity = Math.max(0, (itemData.cartonPurchasedQuantity || 0) + diff);
+            }
+          } else if (editingHistory.unit === 'packet' && itemData.packetQuantity !== undefined) {
+            updatePayload.packetQuantity = Math.max(0, (itemData.packetQuantity || 0) + diff);
+            if (itemData.packetPurchasedQuantity !== undefined) {
+              updatePayload.packetPurchasedQuantity = Math.max(0, (itemData.packetPurchasedQuantity || 0) + diff);
+            }
+          }
+          await updateDoc(itemRef, updatePayload);
         }
       }
 

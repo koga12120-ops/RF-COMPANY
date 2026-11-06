@@ -1810,7 +1810,7 @@ export default function WarehouseOrdersView() {
               <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
               <input
                 type="text"
-                placeholder="گەڕان بۆ کاڵا بەپێی ناو یان بارکۆد..."
+                placeholder="گەڕان بۆ کاڵا بەپێی ناو..."
                 className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl outline-none text-xs"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -2435,7 +2435,7 @@ export default function WarehouseOrdersView() {
                   <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
                   <input
                     type="text"
-                    placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
+                    placeholder="گەڕان بەپێی ناوی کاڵا..."
                     className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl bg-white outline-none text-xs"
                     value={editOrderSearchTerm}
                     onChange={(e) => setEditOrderSearchTerm(e.target.value)}

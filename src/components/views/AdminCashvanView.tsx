@@ -5296,7 +5296,7 @@ export default function AdminCashvanView() {
                   <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
                   <input
                     type="text"
-                    placeholder="گەڕان بەپێی ناوی کاڵا یان بارکۆد..."
+                    placeholder="گەڕان بەپێی ناوی کاڵا..."
                     className="w-full pl-3 pr-9 py-2 border border-slate-200 rounded-xl bg-white outline-none text-xs"
                     value={editSaleSearchTerm}
                     onChange={(e) => setEditSaleSearchTerm(e.target.value)}

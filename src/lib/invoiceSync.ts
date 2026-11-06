@@ -304,14 +304,22 @@ export async function deductWarehouseStock(itemsToDeduct: StockAdjustmentItem[])
 
         if (unit === 'carton') {
           updates.cartonQuantity = Math.max(0, curCartonQty - actualDeduct);
+          if (curData.cartonPurchasedQuantity !== undefined) {
+            updates.cartonPurchasedQuantity = Math.max(0, curData.cartonPurchasedQuantity - actualDeduct);
+          }
         } else if (unit === 'packet') {
           updates.packetQuantity = Math.max(0, curPacketQty - actualDeduct);
+          if (curData.packetPurchasedQuantity !== undefined) {
+            updates.packetPurchasedQuantity = Math.max(0, curData.packetPurchasedQuantity - actualDeduct);
+          }
         }
 
         await updateDoc(mDoc.ref, updates);
         mDoc.data.quantity = updates.quantity;
         if (updates.cartonQuantity !== undefined) mDoc.data.cartonQuantity = updates.cartonQuantity;
         if (updates.packetQuantity !== undefined) mDoc.data.packetQuantity = updates.packetQuantity;
+        if (updates.cartonPurchasedQuantity !== undefined) mDoc.data.cartonPurchasedQuantity = updates.cartonPurchasedQuantity;
+        if (updates.packetPurchasedQuantity !== undefined) mDoc.data.packetPurchasedQuantity = updates.packetPurchasedQuantity;
 
         remainingNeeded -= actualDeduct;
       }
@@ -359,15 +367,23 @@ export async function restoreWarehouseStock(itemsToRestore: StockAdjustmentItem[
         if (unit === 'carton') {
           const curCarton = curData.cartonQuantity !== undefined ? curData.cartonQuantity : curTotalQty;
           updates.cartonQuantity = curCarton + quantityToRestore;
+          if (curData.cartonPurchasedQuantity !== undefined) {
+            updates.cartonPurchasedQuantity = curData.cartonPurchasedQuantity + quantityToRestore;
+          }
         } else if (unit === 'packet') {
           const curPacket = curData.packetQuantity !== undefined ? curData.packetQuantity : curTotalQty;
           updates.packetQuantity = curPacket + quantityToRestore;
+          if (curData.packetPurchasedQuantity !== undefined) {
+            updates.packetPurchasedQuantity = curData.packetPurchasedQuantity + quantityToRestore;
+          }
         }
 
         await updateDoc(targetDoc.ref, updates);
         targetDoc.data.quantity = updates.quantity;
         if (updates.cartonQuantity !== undefined) targetDoc.data.cartonQuantity = updates.cartonQuantity;
         if (updates.packetQuantity !== undefined) targetDoc.data.packetQuantity = updates.packetQuantity;
+        if (updates.cartonPurchasedQuantity !== undefined) targetDoc.data.cartonPurchasedQuantity = updates.cartonPurchasedQuantity;
+        if (updates.packetPurchasedQuantity !== undefined) targetDoc.data.packetPurchasedQuantity = updates.packetPurchasedQuantity;
       }
     }
   } catch (error) {
