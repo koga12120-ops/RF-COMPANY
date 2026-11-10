@@ -751,6 +751,8 @@ export default function OrdersView({
       } else {
         await deductWarehouseStock(orderItems);
         const nextInvoiceNo = await getNextInvoiceNumber();
+        const isFromWarehouse = isWarehouseMode || role === 'warehouse' || role === 'admin';
+
         const newOrderData = {
           invoiceId: nextInvoiceNo,
           invoiceNo: nextInvoiceNo,
@@ -760,38 +762,49 @@ export default function OrdersView({
           totalAmount,
           totalProfit,
           items: orderItems,
-          status: 'completed' as const,
+          status: isFromWarehouse ? ('completed' as const) : ('pending' as const),
+          acceptedByWarehouse: isFromWarehouse,
           paymentStatus: orderPaymentType,
+          paymentType: orderPaymentType,
           stockDeducted: true,
           timestamp: Date.now()
         };
         const orderRef = await addDoc(collection(db, 'orders'), newOrderData);
 
-        // Auto-post to accounts (transactions collection) immediately based on Cash or Debt
-        await addDoc(collection(db, 'transactions'), {
-          type: orderPaymentType === 'cash' ? 'cash' : 'debt',
-          invoiceNo: nextInvoiceNo,
-          amount: totalAmount,
-          date: Date.now(),
-          description: orderPaymentType === 'cash' 
-            ? `نەقدی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})` 
-            : `قەرزی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})`,
-          relatedEntityId: orderMarketName.trim(),
-          repName: repName.trim(),
-          orderId: orderRef.id
-        });
-
-        // Update Rep's totalSales and totalProfit directly
-        const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', repName.trim())));
-        if (!repSnap.empty) {
-          const rDoc = repSnap.docs[0];
-          await updateDoc(doc(db, 'reps', rDoc.id), {
-            totalSales: (rDoc.data().totalSales || 0) + totalAmount,
-            totalProfit: (rDoc.data().totalProfit || 0) + totalProfit
+        // ONLY post to accounts (transactions collection) immediately if created directly by warehouse!
+        // When sent by sales rep, it stays pending and will be posted to accounts when warehouse employee accepts/fulfills it!
+        if (isFromWarehouse) {
+          await addDoc(collection(db, 'transactions'), {
+            type: orderPaymentType === 'cash' ? 'cash' : 'debt',
+            invoiceNo: nextInvoiceNo,
+            amount: totalAmount,
+            date: Date.now(),
+            description: orderPaymentType === 'cash' 
+              ? `نەقدی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})` 
+              : `قەرزی داواکاری مەندووب (${repName.trim()}) بۆ (${orderMarketName.trim()})`,
+            relatedEntityId: orderMarketName.trim(),
+            repName: repName.trim(),
+            orderId: orderRef.id
           });
+
+          // Update Rep's totalSales and totalProfit directly
+          const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', repName.trim())));
+          if (!repSnap.empty) {
+            const rDoc = repSnap.docs[0];
+            await updateDoc(doc(db, 'reps', rDoc.id), {
+              totalSales: (rDoc.data().totalSales || 0) + totalAmount,
+              totalProfit: (rDoc.data().totalProfit || 0) + totalProfit
+            });
+          }
         }
 
         printOrderReceipt({ ...newOrderData, id: orderRef.id }, nextInvoiceNo);
+
+        if (isFromWarehouse) {
+          alert('داواکارییەکە لەلایەن کۆگاوە تۆمارکرا و خرایە نێو بەشەکانی حیسابات (' + (orderPaymentType === 'cash' ? 'نەقد' : 'قەرز') + ')');
+        } else {
+          alert('قائیمەی داواکاری (تەڵەبیە) بە سەرکەوتوویی نێردرا بۆ کۆگا. لە دوای قبوڵکردنی کۆگا، ڕاستەوخۆ دەچێتە بەشەکانی حیسابات.');
+        }
       }
       
       setActiveFormMode('none');
@@ -800,7 +813,6 @@ export default function OrdersView({
       setOrderLocation('');
       setOrderSelectedItems([]);
       setIsOrderGiftMode(false);
-      alert('داواکارییەکە بە سەرکەوتوویی تۆمارکرا و خۆکارانە چووە ناو حیساباتەکان (' + (orderPaymentType === 'cash' ? 'نەقد' : 'قەرز') + ')');
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە ناردنی داواکاری');
@@ -1735,6 +1747,10 @@ export default function OrdersView({
       }
     }
 
+    const totalCartonCount = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && !i.isGift && (i.price > 0 || !i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
+    const totalCartonGifts = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && (i.isGift || i.price === 0 || i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
+    const totalPacketCount = (sale.items || []).filter((i: any) => i.unit === 'packet' && !i.isGift && i.price > 0).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
+
     const itemsHtml = (sale.items || []).map((item: any, idx: number) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
       const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
@@ -1980,6 +1996,12 @@ export default function OrdersView({
               </table>
 
               <div class="summary">
+                <div class="summary-row" style="font-size: 11.5px; font-weight: 900; color: #000; margin-bottom: 4px; padding: 2px 0;">
+                  <span>ژمارەی کارتۆن:</span>
+                  <span dir="ltr" style="font-family: monospace; font-size: 12px; font-weight: 900;">
+                    ${totalCartonCount} کارتۆن ${totalCartonGifts > 0 ? `(+ ${totalCartonGifts} هەدیە)` : ''} ${totalPacketCount > 0 ? ` + ${totalPacketCount} پاکەت` : ''}
+                  </span>
+                </div>
                 <div class="summary-row main">
                   <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
@@ -2077,6 +2099,13 @@ export default function OrdersView({
         oldDebt = order.paymentStatus === 'debt' ? Math.max(0, liveDebt - (order.totalAmount || 0)) : liveDebt;
       }
     }
+
+    const totalOrderCartons = (order.items || []).reduce((acc, item) => {
+      if (item.unit !== 'packet') {
+        return acc + (Number(item.quantity) || 0);
+      }
+      return acc;
+    }, 0);
 
     const itemsHtml = (order.items || []).map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
@@ -2327,6 +2356,10 @@ export default function OrdersView({
               </table>
 
               <div class="summary">
+                <div class="summary-row" style="background: #f8fafc; border: 1px solid #000; padding: 4px 6px; border-radius: 4px; font-weight: bold; margin-bottom: 5px;">
+                  <span>کۆی ژمارەی کارتۆن:</span>
+                  <span dir="ltr" style="font-size: 12px; font-weight: 900;">${totalOrderCartons} کارتۆن</span>
+                </div>
                 <div class="summary-row main">
                   <span>کۆی ئەم وەسڵە (${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
@@ -3167,6 +3200,10 @@ export default function OrdersView({
     const totalAmount = vanCart.reduce((acc, curr) => acc + ((curr.cartQty || 0) * (curr.finalPrice || 0)), 0);
     const totalRegularCount = vanCart.reduce((acc, curr) => acc + (curr.cartQty || 0), 0);
     const totalGiftCount = vanCart.reduce((acc, curr) => acc + (curr.giftQty || 0), 0);
+    const totalCartonCount = vanCart.filter(c => (c.unit || 'carton') === 'carton').reduce((acc, curr) => acc + (curr.cartQty || 0), 0);
+    const totalCartonGifts = vanCart.filter(c => (c.unit || 'carton') === 'carton').reduce((acc, curr) => acc + (curr.giftQty || 0), 0);
+    const totalPacketCount = vanCart.filter(c => c.unit === 'packet').reduce((acc, curr) => acc + (curr.cartQty || 0), 0);
+    const totalPacketGifts = vanCart.filter(c => c.unit === 'packet').reduce((acc, curr) => acc + (curr.giftQty || 0), 0);
 
     const filteredVanItems = vanInventory.filter(
       i => (i.quantity || 0) > 0
@@ -3193,36 +3230,8 @@ export default function OrdersView({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Payment Type Selector (نەقد / قەرز) */}
-            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setVanPaymentType('cash')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  vanPaymentType === 'cash'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <DollarSign size={13} />
-                <span>بە نەقد</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setVanPaymentType('debt')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  vanPaymentType === 'debt'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <CreditCard size={13} />
-                <span>بە قەرز</span>
-              </button>
-            </div>
-
-            {/* Yellow Gift Mode Button Next to Debt/Cash */}
+          <div className="flex items-center gap-2">
+            {/* Yellow Gift Mode Button */}
             <button
               type="button"
               onClick={() => setIsVanGiftMode(!isVanGiftMode)}
@@ -3467,28 +3476,93 @@ export default function OrdersView({
           )}
         </div>
 
+        {/* Payment Type Selection (قەرز و نەقد) - لە خوارەوەی لیستەکە بەپێی داواکاری */}
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border-2 border-indigo-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-2">
+              <CreditCard size={18} className="text-indigo-600 shrink-0" />
+              <span>شێوازی پارەدانی ئەم وەسڵە:</span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              دیاریبکە ئەم فرۆشتنە بۆ مارکێتی <strong className="text-indigo-900">({vanMarketName})</strong> بە نەقدە یان دەچێتە سەر حسابی قەرز
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 w-full md:w-auto">
+            <button
+              type="button"
+              onClick={() => setVanPaymentType('cash')}
+              className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition flex items-center justify-center gap-2 ${
+                vanPaymentType === 'cash'
+                  ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-400'
+                  : 'text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <DollarSign size={16} />
+              <span>بە نەقد (کاش) 💵</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setVanPaymentType('debt')}
+              className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition flex items-center justify-center gap-2 ${
+                vanPaymentType === 'debt'
+                  ? 'bg-amber-600 text-white shadow-md ring-2 ring-amber-400'
+                  : 'text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <CreditCard size={16} />
+              <span>بە قەرز 💳</span>
+            </button>
+          </div>
+        </div>
+
         {/* Sticky Bottom Checkout Bar */}
-        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 p-4 shadow-lg">
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-4">
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 p-3 sm:p-4 shadow-lg">
+          <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-start">
               <div>
                 <div className="text-[11px] text-slate-400 font-bold">کۆی گشتی فرۆشتن:</div>
                 <div className="text-lg sm:text-xl font-bold font-mono text-emerald-700" dir="ltr">
                   {totalAmount.toLocaleString()} د.ع
                 </div>
               </div>
-              <div className="h-8 w-px bg-slate-200"></div>
-              <div className="text-xs font-bold text-slate-600">
+              <div className="hidden sm:block h-8 w-px bg-slate-200"></div>
+
+              {/* Carton quantity badge */}
+              <div className="bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5 text-xs font-bold text-amber-900">
+                <Package size={15} className="text-amber-700 shrink-0" />
+                <span>ژمارەی کارتۆن:</span>
+                <span className="font-mono text-sm font-black text-amber-950">
+                  {totalCartonCount}
+                </span>
+                <span>کارتۆن</span>
+                {totalCartonGifts > 0 && (
+                  <span className="text-amber-700 font-semibold">(+{totalCartonGifts} هەدیە)</span>
+                )}
+                {totalPacketCount > 0 && (
+                  <span className="text-slate-600 font-normal mr-1">، {totalPacketCount} پاکەت</span>
+                )}
+              </div>
+
+              <div className="text-xs font-bold text-slate-600 hidden lg:block">
                 <span>{vanCart.length} جۆر کاڵا</span>
                 <span className="text-slate-400 mr-1">({totalRegularCount} فرۆشتن {totalGiftCount > 0 ? `+ ${totalGiftCount} هەدیە` : ''})</span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              {/* Payment Mode Indicator */}
+              <div className={`px-3 py-2 rounded-xl text-xs font-bold hidden sm:flex items-center gap-1.5 ${
+                vanPaymentType === 'cash' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+              }`}>
+                <span>شێواز:</span>
+                <span>{vanPaymentType === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}</span>
+              </div>
+
               <button
                 type="button"
                 onClick={() => setCurrentView(activeActionMarket ? 'market_actions' : 'main')}
-                className="flex-1 sm:flex-none px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
+                className="flex-1 md:flex-none px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
               >
                 پاشگەزبوونەوە
               </button>
@@ -3496,7 +3570,7 @@ export default function OrdersView({
                 type="button"
                 onClick={submitCashvanSale}
                 disabled={vanCart.length === 0}
-                className="flex-2 sm:flex-none px-6 py-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-center gap-2 transition active:scale-95"
+                className="flex-2 md:flex-none px-6 py-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm flex items-center justify-center gap-2 transition active:scale-95"
               >
                 <Printer size={16} />
                 <span>تۆمارکردن و چاپکردنی وەسڵ</span>

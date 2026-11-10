@@ -268,7 +268,7 @@ export default function LedgerView() {
       const invKey = inv ? String(inv).trim() : null;
       if (invKey) seenInvoices.add(invKey);
 
-      const isDebt = o.paymentMethod === 'debt';
+      const isDebt = o.paymentStatus === 'debt' || o.paymentType === 'debt' || o.paymentMethod === 'debt' || (o.type && String(o.type).includes('debt'));
       list.push({
         id: o.id,
         sourceCollection: 'orders',
@@ -295,7 +295,7 @@ export default function LedgerView() {
       if (invKey && seenInvoices.has(invKey)) return;
       if (invKey) seenInvoices.add(invKey);
 
-      const isDebt = c.paymentMethod === 'debt';
+      const isDebt = c.paymentType === 'debt' || c.paymentStatus === 'debt' || c.paymentMethod === 'debt' || (c.type && String(c.type).includes('debt'));
       list.push({
         id: c.id,
         sourceCollection: 'cashvan_sales',
@@ -321,7 +321,7 @@ export default function LedgerView() {
       const invKey = inv ? String(inv).trim() : null;
 
       // Only deduplicate market sales that were already added by orders or cashvan_sales
-      const isMarketSaleTr = ['market_cash', 'market_debt', 'cash_sale', 'cash_in', 'debt'].includes(t.type);
+      const isMarketSaleTr = ['market_cash', 'market_debt', 'cash_sale', 'cash_in', 'debt', 'cash'].includes(t.type);
       if (isMarketSaleTr && invKey && seenInvoices.has(invKey)) {
         return; // Skip duplicate transaction for an already processed invoice
       }
@@ -331,7 +331,7 @@ export default function LedgerView() {
 
       const isExp = t.type === 'expense';
       const isCompany = ['company_paid_debt', 'company_cash', 'company_debt'].includes(t.type);
-      const isDebt = t.type === 'debt' || t.type === 'market_debt';
+      const isDebt = t.type === 'debt' || t.type === 'market_debt' || (t as any).paymentType === 'debt' || (t as any).paymentStatus === 'debt';
 
       let displayType = 'نەقد';
       let dealCategory = 'cash';

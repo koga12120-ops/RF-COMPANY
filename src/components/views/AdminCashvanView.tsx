@@ -278,9 +278,9 @@ export default function AdminCashvanView() {
     const syncToAccounts = async () => {
       isSyncingAccountsRef.current = true;
       try {
-        // 1. Sync any rep orders not yet in transactions
+        // 1. Sync any rep orders not yet in transactions (ONLY completed/accepted orders)
         for (const order of orders) {
-          if (order.status === 'deleted') continue;
+          if (order.status !== 'completed' || (order as any).status === 'deleted') continue;
           const invKey = order.invoiceId || (order as any).invoiceNo || order.id;
           const exists = transactions.some(t => t.invoiceNo === invKey);
           if (!exists) {
@@ -297,11 +297,6 @@ export default function AdminCashvanView() {
               repName: order.repName,
               orderId: order.id
             });
-            if (order.status !== 'completed') {
-              await updateDoc(doc(db, 'orders', order.id), { status: 'completed', paymentStatus: pType });
-            }
-          } else if (order.status !== 'completed') {
-            await updateDoc(doc(db, 'orders', order.id), { status: 'completed' });
           }
         }
 

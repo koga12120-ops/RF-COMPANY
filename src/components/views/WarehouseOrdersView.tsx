@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, addDoc, doc, updateDoc, deleteDoc, getDoc, setDoc, orderBy } from 'firebase/firestore';
+import { collection, query, onSnapshot, addDoc, doc, updateDoc, deleteDoc, getDoc, setDoc, orderBy, where, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, CashvanTransfer, CashvanRequisition, Order } from '../../types';
@@ -296,7 +296,7 @@ export default function WarehouseOrdersView() {
 
   // --- ACTIONS: REP ORDER ---
 
-  // Fulfill / Prepare Rep Order (Deduct from warehouse stock & mark completed)
+  // Fulfill / Prepare Rep Order (Deduct from warehouse stock, mark completed & post to accounts)
   const handleFulfillRepOrder = async (order: Order) => {
     setIsProcessing(true);
     try {
@@ -313,8 +313,41 @@ export default function WarehouseOrdersView() {
         stockDeducted: true
       });
 
+      // Post to accounts (transactions collection) immediately upon warehouse acceptance
+      const pType = (order.paymentStatus === 'cash' || (order as any).paymentType === 'cash') ? 'cash' : 'debt';
+      const invKey = order.invoiceId || (order as any).invoiceNo || order.id;
+
+      const qT = query(collection(db, 'transactions'), where('invoiceNo', '==', invKey));
+      const snapT = await getDocs(qT);
+      if (snapT.empty) {
+        await addDoc(collection(db, 'transactions'), {
+          type: pType,
+          invoiceNo: invKey,
+          amount: Number(order.totalAmount) || 0,
+          date: Date.now(),
+          description: pType === 'cash' 
+            ? `نەقدی داواکاری مەندووب (${order.repName || 'مەندووب'}) بۆ (${order.marketName || 'مارکێت'})` 
+            : `قەرزی داواکاری مەندووب (${order.repName || 'مەندووب'}) بۆ (${order.marketName || 'مارکێت'})`,
+          relatedEntityId: order.marketName || 'مارکێت',
+          repName: order.repName,
+          orderId: order.id
+        });
+      }
+
+      // Update Rep's totalSales and totalProfit directly now that order is accepted
+      if (order.repName) {
+        const repSnap = await getDocs(query(collection(db, 'reps'), where('name', '==', order.repName.trim())));
+        if (!repSnap.empty) {
+          const rDoc = repSnap.docs[0];
+          await updateDoc(doc(db, 'reps', rDoc.id), {
+            totalSales: (rDoc.data().totalSales || 0) + (order.totalAmount || 0),
+            totalProfit: (rDoc.data().totalProfit || 0) + (order.totalProfit || 0)
+          });
+        }
+      }
+
       setFulfillingOrder(null);
-      alert('تەڵەبیەی مەندووب بە سەرکەوتوویی ئامادەکرا و لە عەدەدی کۆگای سەرەکی دابەزی');
+      alert('تەڵەبیەی مەندووب بە سەرکەوتوویی لەلایەن کۆگاوە قبوڵکرا و تۆمارکرا لە حیسابات');
     } catch (err) {
       console.error(err);
       alert('هەڵەیەک ڕوویدا لە ئامادەکردنی تەڵەبیە');
@@ -1385,7 +1418,7 @@ export default function WarehouseOrdersView() {
                             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5 active:scale-95"
                           >
                             <Check size={14} />
-                            <span>تەواوکردنی بار</span>
+                            <span>قبوڵکردن و تۆمار لە حیسابات</span>
                           </button>
                         )}
                         <button
@@ -2205,7 +2238,7 @@ export default function WarehouseOrdersView() {
                   className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95"
                 >
                   <Check size={16} />
-                  <span>ئامادەکرا و بارکرا (دابەزین لە کۆگا)</span>
+                  <span>قبوڵکردن و تۆمارکردن لە حیسابات</span>
                 </button>
               )}
             </div>
@@ -2523,9 +2556,9 @@ export default function WarehouseOrdersView() {
       {fulfillingOrder && (
         <ConfirmModal
           isOpen={true}
-          title="پەسەندکردن و بارکردنی تەڵەبیەی مەندووب"
-          message={`ئایا دڵنیایت لە بارکردن و ئامادەکردنی تەڵەبیەی مارکێتی (${fulfillingOrder.marketName})؟ کاڵاکان بە عەدەدی فرۆش و هەدیە لە کۆگای سەرەکی دادەبەزن.`}
-          confirmText="بەڵێ، ئامادەکرا و بارکرا"
+          title="قبوڵکردن و تۆمارکردنی تەڵەبیە لە حیسابات"
+          message={`ئایا دڵنیایت لە قبوڵکردنی تەڵەبیەی مارکێتی (${fulfillingOrder.marketName})؟ کاڵاکان لە کۆگا دادەبەزن و ڕاستەوخۆ دەچێتە بەشەکانی حیسابات.`}
+          confirmText="بەڵێ، قبوڵکردن و تۆمار لە حیسابات"
           cancelText="پاشگەزبوونەوە"
           onConfirm={() => handleFulfillRepOrder(fulfillingOrder)}
           onClose={() => setFulfillingOrder(null)}
