@@ -284,8 +284,26 @@ export async function deductWarehouseStock(itemsToDeduct: StockAdjustmentItem[])
         return dName === cleanReqName;
       });
 
-      // Sort by creation date (FIFO)
-      matchingDocs.sort((a, b) => (a.data.createdAt || 0) - (b.data.createdAt || 0));
+      if (matchingDocs.length === 0) {
+        console.warn('deductWarehouseStock: No matching warehouse item found for', reqItem.name, reqItem.itemId);
+        continue;
+      }
+
+      // Prioritize batches that actually have available stock for the requested unit
+      matchingDocs.sort((a, b) => {
+        const aTotal = a.data.quantity || 0;
+        const bTotal = b.data.quantity || 0;
+        const aBatchQty = unit === 'packet'
+          ? (a.data.packetQuantity !== undefined ? a.data.packetQuantity : aTotal)
+          : (a.data.cartonQuantity !== undefined ? a.data.cartonQuantity : aTotal);
+        const bBatchQty = unit === 'packet'
+          ? (b.data.packetQuantity !== undefined ? b.data.packetQuantity : bTotal)
+          : (b.data.cartonQuantity !== undefined ? b.data.cartonQuantity : bTotal);
+
+        if (aBatchQty > 0 && bBatchQty <= 0) return -1;
+        if (bBatchQty > 0 && aBatchQty <= 0) return 1;
+        return (a.data.createdAt || 0) - (b.data.createdAt || 0);
+      });
 
       for (const mDoc of matchingDocs) {
         if (remainingNeeded <= 0) break;
@@ -295,22 +313,25 @@ export async function deductWarehouseStock(itemsToDeduct: StockAdjustmentItem[])
         const curPacketQty = curData.packetQuantity !== undefined ? curData.packetQuantity : curTotalQty;
 
         const availableInBatch = unit === 'packet' ? curPacketQty : curCartonQty;
-        const deductAmount = Math.min(remainingNeeded, Math.max(0, availableInBatch));
+        if (availableInBatch <= 0) {
+          continue; // skip batches with zero stock so they do not swallow remainingNeeded
+        }
 
-        const actualDeduct = deductAmount > 0 ? deductAmount : remainingNeeded;
+        const deductAmount = Math.min(remainingNeeded, availableInBatch);
+        if (deductAmount <= 0) continue;
 
-        const newTotalQty = Math.max(0, curTotalQty - actualDeduct);
+        const newTotalQty = Math.max(0, curTotalQty - deductAmount);
         const updates: any = { quantity: newTotalQty };
 
         if (unit === 'carton') {
-          updates.cartonQuantity = Math.max(0, curCartonQty - actualDeduct);
+          updates.cartonQuantity = Math.max(0, curCartonQty - deductAmount);
           if (curData.cartonPurchasedQuantity !== undefined) {
-            updates.cartonPurchasedQuantity = Math.max(0, curData.cartonPurchasedQuantity - actualDeduct);
+            updates.cartonPurchasedQuantity = Math.max(0, curData.cartonPurchasedQuantity - deductAmount);
           }
         } else if (unit === 'packet') {
-          updates.packetQuantity = Math.max(0, curPacketQty - actualDeduct);
+          updates.packetQuantity = Math.max(0, curPacketQty - deductAmount);
           if (curData.packetPurchasedQuantity !== undefined) {
-            updates.packetPurchasedQuantity = Math.max(0, curData.packetPurchasedQuantity - actualDeduct);
+            updates.packetPurchasedQuantity = Math.max(0, curData.packetPurchasedQuantity - deductAmount);
           }
         }
 
@@ -321,7 +342,37 @@ export async function deductWarehouseStock(itemsToDeduct: StockAdjustmentItem[])
         if (updates.cartonPurchasedQuantity !== undefined) mDoc.data.cartonPurchasedQuantity = updates.cartonPurchasedQuantity;
         if (updates.packetPurchasedQuantity !== undefined) mDoc.data.packetPurchasedQuantity = updates.packetPurchasedQuantity;
 
-        remainingNeeded -= actualDeduct;
+        remainingNeeded -= deductAmount;
+      }
+
+      // If stock was lower than requested or all batches were 0, deduct whatever is left from the first batch
+      if (remainingNeeded > 0 && matchingDocs.length > 0) {
+        const primaryDoc = matchingDocs[0];
+        const curData = primaryDoc.data;
+        const curTotalQty = curData.quantity || 0;
+        const curCartonQty = curData.cartonQuantity !== undefined ? curData.cartonQuantity : curTotalQty;
+        const curPacketQty = curData.packetQuantity !== undefined ? curData.packetQuantity : curTotalQty;
+
+        const updates: any = { quantity: Math.max(0, curTotalQty - remainingNeeded) };
+        if (unit === 'carton') {
+          updates.cartonQuantity = Math.max(0, curCartonQty - remainingNeeded);
+          if (curData.cartonPurchasedQuantity !== undefined) {
+            updates.cartonPurchasedQuantity = Math.max(0, curData.cartonPurchasedQuantity - remainingNeeded);
+          }
+        } else if (unit === 'packet') {
+          updates.packetQuantity = Math.max(0, curPacketQty - remainingNeeded);
+          if (curData.packetPurchasedQuantity !== undefined) {
+            updates.packetPurchasedQuantity = Math.max(0, curData.packetPurchasedQuantity - remainingNeeded);
+          }
+        }
+
+        await updateDoc(primaryDoc.ref, updates);
+        primaryDoc.data.quantity = updates.quantity;
+        if (updates.cartonQuantity !== undefined) primaryDoc.data.cartonQuantity = updates.cartonQuantity;
+        if (updates.packetQuantity !== undefined) primaryDoc.data.packetQuantity = updates.packetQuantity;
+        if (updates.cartonPurchasedQuantity !== undefined) primaryDoc.data.cartonPurchasedQuantity = updates.cartonPurchasedQuantity;
+        if (updates.packetPurchasedQuantity !== undefined) primaryDoc.data.packetPurchasedQuantity = updates.packetPurchasedQuantity;
+        remainingNeeded = 0;
       }
     }
   } catch (error) {

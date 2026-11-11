@@ -1667,6 +1667,10 @@ export default function AdminCashvanView() {
       `;
     }).join('');
 
+    const totalCartonCount = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && !i.isGift && (i.price > 0 || !i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
+    const totalCartonGifts = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && (i.isGift || i.price === 0 || i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
+    const totalPacketCount = (sale.items || []).filter((i: any) => i.unit === 'packet' && !i.isGift && i.price > 0).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
+
     const newTotalDebt = oldDebt + sale.totalAmount;
 
     const html = `
@@ -1841,10 +1845,6 @@ export default function AdminCashvanView() {
                 isThermal: true
               })}
 
-              <div class="invoice-badge-box">
-                پسوڵەی فرۆشتن (کاشڤان)
-              </div>
-
               <div class="info-grid">
                 <div class="info-row">
                   <span class="label">ژمارەی وەسڵ:</span>
@@ -1890,6 +1890,15 @@ export default function AdminCashvanView() {
                   <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
                 </div>
+
+                <div style="text-align: center; margin: 6px 0; padding: 4px 6px; border: 1.5px solid #000; border-radius: 4px; background: #fff;">
+                  <div style="font-size: 13.5px; font-weight: 900; color: #000;">
+                    ژمارەی کارتۆن: <span dir="ltr" style="font-size: 15px; font-weight: 900; font-family: monospace;">${totalCartonCount} کارتۆن</span>
+                    ${totalCartonGifts > 0 ? `<span style="font-size: 11.5px; font-weight: 800;"> (+ ${totalCartonGifts} هەدیە)</span>` : ''}
+                    ${totalPacketCount > 0 ? `<span style="font-size: 11.5px; font-weight: 800;"> (+ ${totalPacketCount} پاکەت)</span>` : ''}
+                  </div>
+                </div>
+
                 ${sale.paymentType === 'debt' ? `
                   ${oldDebt > 0 ? `
                     <div class="summary-row" style="margin-top: 4px; font-weight: bold; color: #000;">
@@ -1907,17 +1916,6 @@ export default function AdminCashvanView() {
                     <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
                   </div>
                 `}
-              </div>
-
-              <div class="signatures">
-                <div>
-                  <div>واژووی کاشڤان</div>
-                  <div class="sig-line"></div>
-                </div>
-                <div>
-                  <div>واژووی مارکێت</div>
-                  <div class="sig-line"></div>
-                </div>
               </div>
 
               <div class="footer-note">

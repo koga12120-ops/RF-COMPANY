@@ -11,7 +11,7 @@ export interface CompanySettings {
 export const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
   name: 'کۆمپانیای RF',
   brand: 'بریکاری فەرمی TAM TAM',
-  phone: '07506144894',
+  phone: '07506144894 - 07783890464',
   address: 'هەولێر - عێراق'
 };
 
@@ -23,7 +23,7 @@ const getInitialName = () => {
 
 const getInitialPhone = () => {
   const stored = localStorage.getItem('company_phone');
-  if (!stored || stored === '0750 456 7890') return DEFAULT_COMPANY_SETTINGS.phone;
+  if (!stored || stored === '0750 456 7890' || stored === '07506144894') return DEFAULT_COMPANY_SETTINGS.phone;
   return stored;
 };
 

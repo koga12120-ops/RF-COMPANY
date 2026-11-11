@@ -34,7 +34,10 @@ export interface ReceiptHeaderOptions {
 export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string {
   const settings = getCompanySettings();
   const cName = options?.companyName || settings.name || 'کۆمپانیای RF';
-  const cPhone = options?.companyPhone || settings.phone || '07506144894';
+  let cPhone = options?.companyPhone || settings.phone || '07506144894';
+  if (!cPhone.includes('07783890464')) {
+    cPhone = cPhone ? `${cPhone} - 07783890464` : '07506144894 - 07783890464';
+  }
   const isSale = options?.isSale === true;
   const isThermal = options?.isThermal === true;
 

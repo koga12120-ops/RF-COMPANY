@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { format, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
-import { deductWarehouseStock } from '../../lib/invoiceSync';
+import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
 import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
 
 export default function WarehouseOrdersView() {
@@ -2672,6 +2672,9 @@ export default function WarehouseOrdersView() {
           cancelText="پاشگەزبوونەوە"
           onConfirm={async () => {
             try {
+              if (deletingRequisition.items && (deletingRequisition as any).stockDeducted) {
+                await restoreWarehouseStock(deletingRequisition.items);
+              }
               await deleteDoc(doc(db, 'cashvan_requisitions', deletingRequisition.id));
               setDeletingRequisition(null);
               alert('تەڵەبیەکە بە سەرکەوتوویی سڕایەوە');

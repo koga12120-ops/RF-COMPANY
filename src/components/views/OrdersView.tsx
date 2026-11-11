@@ -1951,10 +1951,6 @@ export default function OrdersView({
                 isThermal: true
               })}
 
-              <div class="invoice-badge-box">
-                پسوڵەی فرۆشتن (کاشڤان)
-              </div>
-
               <div class="info-grid">
                 <div class="info-row">
                   <span class="label">ژمارەی وەسڵ:</span>
@@ -1996,16 +1992,19 @@ export default function OrdersView({
               </table>
 
               <div class="summary">
-                <div class="summary-row" style="font-size: 11.5px; font-weight: 900; color: #000; margin-bottom: 4px; padding: 2px 0;">
-                  <span>ژمارەی کارتۆن:</span>
-                  <span dir="ltr" style="font-family: monospace; font-size: 12px; font-weight: 900;">
-                    ${totalCartonCount} کارتۆن ${totalCartonGifts > 0 ? `(+ ${totalCartonGifts} هەدیە)` : ''} ${totalPacketCount > 0 ? ` + ${totalPacketCount} پاکەت` : ''}
-                  </span>
-                </div>
                 <div class="summary-row main">
                   <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
                   <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
                 </div>
+
+                <div style="text-align: center; margin: 6px 0; padding: 4px 6px; border: 1.5px solid #000; border-radius: 4px; background: #fff;">
+                  <div style="font-size: 13.5px; font-weight: 900; color: #000;">
+                    ژمارەی کارتۆن: <span dir="ltr" style="font-size: 15px; font-weight: 900; font-family: monospace;">${totalCartonCount} کارتۆن</span>
+                    ${totalCartonGifts > 0 ? `<span style="font-size: 11.5px; font-weight: 800;"> (+ ${totalCartonGifts} هەدیە)</span>` : ''}
+                    ${totalPacketCount > 0 ? `<span style="font-size: 11.5px; font-weight: 800;"> (+ ${totalPacketCount} پاکەت)</span>` : ''}
+                  </div>
+                </div>
+
                 ${sale.paymentType === 'debt' ? `
                   ${oldDebt > 0 ? `
                     <div class="summary-row" style="margin-top: 4px; font-weight: bold; color: #000;">
@@ -2023,17 +2022,6 @@ export default function OrdersView({
                     <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
                   </div>
                 `}
-              </div>
-
-              <div class="signatures">
-                <div>
-                  <div>واژووی کاشڤان</div>
-                  <div class="sig-line"></div>
-                </div>
-                <div>
-                  <div>واژووی مارکێت</div>
-                  <div class="sig-line"></div>
-                </div>
               </div>
 
               <div class="footer-note">
