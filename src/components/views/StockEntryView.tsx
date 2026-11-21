@@ -222,13 +222,15 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
           costPricePerPiece: primaryCost,
           totalCostAmount: totalCostVal,
           bonusQuantityAdded: totalBonusQty,
+          syncFinancials: true,
         });
         setSavedSuccessMessage(`کاڵای «${name.trim()}» بە سەرکەوتوویی نوێکرایەوە`);
       } else {
         // Fresh new invoice entry (وەسڵێکی نوێ و سەربەخۆ - بێ تێکەڵبوونی حساباتی ڕابردوو)
-        await addDoc(collection(db, 'items'), {
+        const now = Date.now();
+        const newItemRef = await addDoc(collection(db, 'items'), {
           ...itemData,
-          createdAt: Date.now()
+          createdAt: now
         });
 
         if (totalQty > 0) {
@@ -238,6 +240,7 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
           const giftNote = giftDetails.length > 0 ? ` (+ ${giftDetails.join(' و ')} بە بێ تێچوو)` : '';
 
           await addDoc(collection(db, 'stock_history'), {
+            itemId: newItemRef.id,
             itemName: name.trim(),
             quantityAdded: totalQty,
             purchasedQuantity: totalPurchasedQty,
@@ -245,7 +248,7 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
             cartonBonus: cBonus,
             packetBonus: pBonus,
             unit: hasCarton && hasPacket ? 'both' : (hasCarton ? 'carton' : 'packet'),
-            date: Date.now(),
+            date: now,
             invoiceNo: cleanInvoice || '',
             supplier: supplier.trim() || '',
             notes: giftDetails.length > 0 ? `دیاری: ${giftDetails.join(' و ')} (تێچوو سفر - تەواو قازانج)` : ''
@@ -261,9 +264,10 @@ export default function StockEntryView({ role, onNavigateToInventory }: StockEnt
             : (cleanInvoice ? `قەرزی کڕین (وەسڵی #${cleanInvoice}) - ${name.trim()} (${unitLabel}${giftNote})` : `قەرزی کڕینی کاڵای ${name.trim()}${giftNote}`);
 
           await addDoc(collection(db, 'transactions'), {
+            itemId: newItemRef.id,
             type: paymentType === 'cash' ? 'company_cash' : 'company_debt',
             amount: totalCostVal,
-            date: Date.now(),
+            date: now,
             description: transactionDesc,
             relatedEntityId: supplier.trim() || name.trim() || 'کۆگا',
             invoiceNo: cleanInvoice || ''

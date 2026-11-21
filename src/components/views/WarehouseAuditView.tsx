@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, doc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { Item, Role } from '../../types';
+import { Item, Role, Transaction } from '../../types';
 import { 
   Boxes, Search, Package, Printer, ChevronDown, ChevronUp, 
   Building2, Calendar, PackagePlus, Edit2, Trash2, ArrowRight,
@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
-import { updateItemAndSyncEverywhere } from '../../lib/invoiceSync';
+import WarehouseItemEditModal from '../common/WarehouseItemEditModal';
 import { printWarehouseStockSummaryPopup } from '../../lib/statementPrinter';
 import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
@@ -50,33 +50,18 @@ export default function WarehouseAuditView({
 }: WarehouseAuditViewProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [companies, setCompanies] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<Array<Transaction & { id: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSupplier, setFilterSupplier] = useState('');
   const [expandedAggregated, setExpandedAggregated] = useState<Record<string, boolean>>({});
+  const [saveToast, setSaveToast] = useState<string | null>(null);
 
   // Deleting item modal state
   const [deletingItem, setDeletingItem] = useState<Item | null>(null);
 
   // Edit item modal state
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editSupplier, setEditSupplier] = useState('');
-  const [editInvoiceNo, setEditInvoiceNo] = useState('');
-  const [editHasCarton, setEditHasCarton] = useState(true);
-  const [editHasPacket, setEditHasPacket] = useState(false);
-  const [editCartonQuantity, setEditCartonQuantity] = useState('');
-  const [editCartonBonus, setEditCartonBonus] = useState('');
-  const [editCartonCost, setEditCartonCost] = useState('');
-  const [editCartonPrice, setEditCartonPrice] = useState('');
-  const [editCartonWholesale, setEditCartonWholesale] = useState('');
-  const [editPacketQuantity, setEditPacketQuantity] = useState('');
-  const [editPacketBonus, setEditPacketBonus] = useState('');
-  const [editPacketCost, setEditPacketCost] = useState('');
-  const [editPacketPrice, setEditPacketPrice] = useState('');
-  const [editPacketWholesale, setEditPacketWholesale] = useState('');
-  const [editPaymentType, setEditPaymentType] = useState<'cash' | 'debt'>('cash');
-  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'items'));
@@ -107,122 +92,27 @@ export default function WarehouseAuditView({
       }
     );
 
+    const unsubTrans = onSnapshot(
+      collection(db, 'transactions'),
+      (snapshot) => {
+        const trans: Array<Transaction & { id: string }> = [];
+        snapshot.forEach((doc) => trans.push({ id: doc.id, ...(doc.data() as Omit<Transaction, 'id'>) }));
+        setTransactions(trans);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'transactions');
+      }
+    );
+
     return () => {
       unsubscribe();
       unsubComp();
+      unsubTrans();
     };
   }, []);
 
   const handleEditClick = (item: Item) => {
     setEditingItem(item);
-    setEditName(item.name);
-    setEditSupplier(item.supplier || '');
-    setEditInvoiceNo(item.invoiceNo || '');
-
-    const hasC = !!item.cartonCostPrice || !!item.cartonSellingPrice || (item.cartonQuantity !== undefined && item.cartonQuantity > 0) || item.unitType === 'carton';
-    const hasP = !!item.packetCostPrice || !!item.packetSellingPrice || (item.packetQuantity !== undefined && item.packetQuantity > 0) || item.unitType === 'packet';
-    setEditHasCarton(hasC || (!hasC && !hasP));
-    setEditHasPacket(hasP);
-
-    setEditCartonCost(item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice ? (item.cartonCostPrice || item.cartonPurchaseCost || item.costPrice)!.toString() : '');
-    setEditCartonPrice(item.cartonSellingPrice || item.sellingPrice ? (item.cartonSellingPrice || item.sellingPrice)!.toString() : '');
-    setEditCartonWholesale(item.cartonWholesalePrice || item.wholesalePrice ? (item.cartonWholesalePrice || item.wholesalePrice)!.toString() : '');
-    
-    const totalCartonsVal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.unitType === 'carton' ? (item.quantity || 0) : 0);
-    const bonusCartonsVal = item.cartonBonusQuantity || (item.unitType === 'carton' ? (item.bonusQuantity || 0) : 0) || 0;
-    setEditCartonQuantity((Math.max(0, totalCartonsVal - bonusCartonsVal)).toString());
-    setEditCartonBonus(bonusCartonsVal > 0 ? bonusCartonsVal.toString() : '');
-
-    setEditPacketCost(item.packetCostPrice || item.packetPurchaseCost ? (item.packetCostPrice || item.packetPurchaseCost)!.toString() : '');
-    setEditPacketPrice(item.packetSellingPrice ? item.packetSellingPrice.toString() : '');
-    setEditPacketWholesale(item.packetWholesalePrice ? item.packetWholesalePrice.toString() : '');
-    
-    const totalPacketsVal = item.packetQuantity !== undefined ? item.packetQuantity : 0;
-    const bonusPacketsVal = item.packetBonusQuantity || 0;
-    setEditPacketQuantity((Math.max(0, totalPacketsVal - bonusPacketsVal)).toString());
-    setEditPacketBonus(bonusPacketsVal > 0 ? bonusPacketsVal.toString() : '');
-
-    setEditPaymentType('cash');
-  };
-
-  const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingItem || !editName.trim()) return;
-
-    setIsSavingEdit(true);
-    try {
-      const cPurchased = editHasCarton ? (Number(editCartonQuantity) || 0) : 0;
-      const cBonus = editHasCarton ? (Number(editCartonBonus) || 0) : 0;
-      const cTotal = cPurchased + cBonus;
-
-      const pPurchased = editHasPacket ? (Number(editPacketQuantity) || 0) : 0;
-      const pBonus = editHasPacket ? (Number(editPacketBonus) || 0) : 0;
-      const pTotal = pPurchased + pBonus;
-
-      const cCost = editHasCarton ? (Number(editCartonCost) || 0) : 0;
-      const cPrice = editHasCarton ? (Number(editCartonPrice) || 0) : 0;
-      const cWholesale = editHasCarton ? (Number(editCartonWholesale) || 0) : 0;
-
-      const pCost = editHasPacket ? (Number(editPacketCost) || 0) : 0;
-      const pPrice = editHasPacket ? (Number(editPacketPrice) || 0) : 0;
-      const pWholesale = editHasPacket ? (Number(editPacketWholesale) || 0) : 0;
-
-      const totalQty = cTotal + pTotal;
-      const totalCostVal = (cPurchased * cCost) + (pPurchased * pCost);
-      const totalBonusQty = cBonus + pBonus;
-
-      const primaryCost = cCost || pCost;
-      const primaryPrice = cPrice || pPrice;
-      const cleanInvoice = editInvoiceNo.trim();
-
-      const itemData: any = {
-        name: editName.trim(),
-        supplier: editSupplier.trim(),
-        invoiceNo: cleanInvoice,
-        quantity: totalQty,
-        unitType: editHasCarton && editHasPacket ? 'both' : (editHasCarton ? 'carton' : 'packet'),
-        costPrice: primaryCost,
-        sellingPrice: primaryPrice,
-        wholesalePrice: cWholesale || pWholesale || 0,
-        
-        cartonQuantity: editHasCarton ? cTotal : 0,
-        cartonPurchasedQuantity: editHasCarton ? cPurchased : 0,
-        cartonBonusQuantity: cBonus,
-        cartonPurchaseCost: cCost,
-        cartonCostPrice: cCost,
-        cartonSellingPrice: cPrice,
-        cartonWholesalePrice: cWholesale,
-
-        packetQuantity: editHasPacket ? pTotal : 0,
-        packetPurchasedQuantity: editHasPacket ? pPurchased : 0,
-        packetBonusQuantity: pBonus,
-        packetPurchaseCost: pCost,
-        packetCostPrice: pCost,
-        packetSellingPrice: pPrice,
-        packetWholesalePrice: pWholesale,
-      };
-
-      const oldTotal = editingItem.quantity || 0;
-      const quantityAdded = totalQty > oldTotal ? totalQty - oldTotal : 0;
-
-      await updateItemAndSyncEverywhere({
-        itemId: editingItem.id,
-        oldItem: editingItem,
-        itemData,
-        quantityAdded,
-        paymentType: editPaymentType,
-        costPricePerPiece: primaryCost,
-        totalCostAmount: totalCostVal,
-        bonusQuantityAdded: totalBonusQty,
-      });
-
-      setEditingItem(null);
-    } catch (error) {
-      console.error("Error updating item: ", error);
-      alert('هەڵەیەک ڕوویدا لە کاتی پاشەکەوتکردندا');
-    } finally {
-      setIsSavingEdit(false);
-    }
   };
 
   const confirmDeleteItem = async () => {
@@ -457,6 +347,16 @@ export default function WarehouseAuditView({
           )}
         </div>
       </div>
+
+      {saveToast && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl flex items-center justify-between gap-3 text-xs sm:text-sm font-bold shadow-xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+            <span>{saveToast}</span>
+          </div>
+          <button type="button" onClick={() => setSaveToast(null)} className="text-emerald-600 hover:text-emerald-800 px-2">✕</button>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -693,19 +593,36 @@ export default function WarehouseAuditView({
                           </span>
                         </td>
 
-                        {/* Actions / Expand */}
+                        {/* Actions / Edit & Expand */}
                         <td className="py-4 px-4 text-left">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleAggregatedExpand(ag.key);
-                            }}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-700 transition"
-                          >
-                            <span>{isExpanded ? 'داخستن' : 'وەسڵەکان'}</span>
-                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
+                          <div className="inline-flex items-center gap-1.5">
+                            {(role === 'admin' || role === 'warehouse') && ag.items.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const newestBatch = [...ag.items].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+                                  handleEditClick(newestBatch);
+                                }}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition cursor-pointer"
+                                title="دەستکاریکردنی کاڵا و بینینی وەسڵە پەیوەندیدارەکان"
+                              >
+                                <Edit2 size={13} />
+                                <span>دەستکاری</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleAggregatedExpand(ag.key);
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-700 transition cursor-pointer"
+                            >
+                              <span>{isExpanded ? 'داخستن' : 'وەسڵەکان'}</span>
+                              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            </button>
+                          </div>
                         </td>
                       </tr>
 
@@ -802,197 +719,17 @@ export default function WarehouseAuditView({
       </div>
 
       {/* Edit Modal */}
-      {editingItem && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto" dir="rtl">
-            <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="font-black text-slate-900 text-lg">دەستکاریکردنی کاڵا لە کۆگا</h3>
-                <p className="text-xs text-slate-500">دەستکاری بڕ و نرخەکانی ئەم وەسڵە</p>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => setEditingItem(null)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveEdit} className="space-y-4 text-xs sm:text-sm">
-              <div>
-                <label className="block text-slate-700 font-bold mb-1">ناوی کاڵا</label>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">کۆمپانیا / دابینکەر</label>
-                  <input
-                    type="text"
-                    value={editSupplier}
-                    onChange={(e) => setEditSupplier(e.target.value)}
-                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">ژمارەی وەسڵ</label>
-                  <input
-                    type="text"
-                    value={editInvoiceNo}
-                    onChange={(e) => setEditInvoiceNo(e.target.value)}
-                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
-                  />
-                </div>
-              </div>
-
-              {/* Units checkboxes */}
-              <div className="p-3 bg-slate-50 rounded-2xl flex items-center gap-4">
-                <span className="font-bold text-slate-700">یەکە:</span>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={editHasCarton}
-                    onChange={(e) => setEditHasCarton(e.target.checked)}
-                    className="w-4 h-4 text-indigo-600 rounded"
-                  />
-                  <span className="font-bold text-slate-800">کارتۆن</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={editHasPacket}
-                    onChange={(e) => setEditHasPacket(e.target.checked)}
-                    className="w-4 h-4 text-indigo-600 rounded"
-                  />
-                  <span className="font-bold text-slate-800">پاکەت</span>
-                </label>
-              </div>
-
-              {/* Carton details */}
-              {editHasCarton && (
-                <div className="p-3.5 bg-indigo-50/50 rounded-2xl border border-indigo-100 space-y-3">
-                  <div className="font-bold text-indigo-900 text-xs">زانیاری کارتۆن:</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">بڕی کڕدراو</label>
-                      <input
-                        type="number"
-                        value={editCartonQuantity}
-                        onChange={(e) => setEditCartonQuantity(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold"
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">دیاری (بۆنەس)</label>
-                      <input
-                        type="number"
-                        value={editCartonBonus}
-                        onChange={(e) => setEditCartonBonus(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold text-emerald-600"
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">تێچوو (کڕین)</label>
-                      <input
-                        type="number"
-                        value={editCartonCost}
-                        onChange={(e) => setEditCartonCost(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold"
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">نرخی فرۆشتن</label>
-                      <input
-                        type="number"
-                        value={editCartonPrice}
-                        onChange={(e) => setEditCartonPrice(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold"
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Packet details */}
-              {editHasPacket && (
-                <div className="p-3.5 bg-emerald-50/40 rounded-2xl border border-emerald-100 space-y-3">
-                  <div className="font-bold text-emerald-900 text-xs">زانیاری پاکەت:</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">بڕی کڕدراو</label>
-                      <input
-                        type="number"
-                        value={editPacketQuantity}
-                        onChange={(e) => setEditPacketQuantity(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold"
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">دیاری (بۆنەس)</label>
-                      <input
-                        type="number"
-                        value={editPacketBonus}
-                        onChange={(e) => setEditPacketBonus(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold text-emerald-600"
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">تێچوو (کڕین)</label>
-                      <input
-                        type="number"
-                        value={editPacketCost}
-                        onChange={(e) => setEditPacketCost(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold"
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-1">نرخی فرۆشتن</label>
-                      <input
-                        type="number"
-                        value={editPacketPrice}
-                        onChange={(e) => setEditPacketPrice(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-center font-bold"
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="pt-3 flex items-center justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setEditingItem(null)}
-                  className="px-4 py-2.5 text-slate-600 hover:bg-slate-100 rounded-xl font-bold transition"
-                >
-                  پاشگەزبوونەوە
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingEdit}
-                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition shadow-xs disabled:opacity-50"
-                >
-                  {isSavingEdit ? 'خەریکی پاشەکەوتکردنە...' : 'پاشەکەوتکردنی گۆڕانکاری'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <WarehouseItemEditModal
+        item={editingItem}
+        allItems={items}
+        companies={companies}
+        transactions={transactions}
+        onClose={() => setEditingItem(null)}
+        onSaved={(msg) => {
+          setSaveToast(msg);
+          setTimeout(() => setSaveToast(null), 6000);
+        }}
+      />
 
       {/* Delete Confirm Modal */}
       {deletingItem && (

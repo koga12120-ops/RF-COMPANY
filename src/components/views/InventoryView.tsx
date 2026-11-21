@@ -2,11 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, doc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
-import { Item, Role } from '../../types';
-import { Plus, Search, Edit2, Trash2, Package, Printer, ChevronDown, ChevronUp, FileText, List, Building2, Calendar, Layers, PackagePlus, ArrowRight, Boxes } from 'lucide-react';
+import { Item, Role, Transaction } from '../../types';
+import { Search, Package, Printer, ChevronDown, ChevronUp, FileText, Building2, Calendar, Layers, PackagePlus, Boxes, CheckCircle2 } from 'lucide-react';
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
-import { updateItemAndSyncEverywhere } from '../../lib/invoiceSync';
+import WarehouseItemEditModal from '../common/WarehouseItemEditModal';
 import { printWarehouseInvoicePopup, printWarehouseStockSummaryPopup } from '../../lib/statementPrinter';
 import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
@@ -54,10 +54,12 @@ interface AggregatedStockItem {
 export default function InventoryView({ role, onNavigateToEntry, onNavigateToAudit }: InventoryViewProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [companies, setCompanies] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<Array<Transaction & { id: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSupplier, setFilterSupplier] = useState('');
   const [sortDate, setSortDate] = useState<'desc' | 'asc'>('desc');
+  const [saveToast, setSaveToast] = useState<string | null>(null);
   
   // Three viewing modes: 'total_stock' (کۆی کاڵاکان بە کارتۆن), 'invoice' (بەپێی وەسڵ), 'item' (ئایتم ئایتم)
   const [viewMode, setViewMode] = useState<'total_stock' | 'invoice' | 'item'>('total_stock');
@@ -69,23 +71,6 @@ export default function InventoryView({ role, onNavigateToEntry, onNavigateToAud
 
   // Edit item modal state
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editSupplier, setEditSupplier] = useState('');
-  const [editInvoiceNo, setEditInvoiceNo] = useState('');
-  const [editHasCarton, setEditHasCarton] = useState(true);
-  const [editHasPacket, setEditHasPacket] = useState(false);
-  const [editCartonQuantity, setEditCartonQuantity] = useState('');
-  const [editCartonBonus, setEditCartonBonus] = useState('');
-  const [editCartonCost, setEditCartonCost] = useState('');
-  const [editCartonPrice, setEditCartonPrice] = useState('');
-  const [editCartonWholesale, setEditCartonWholesale] = useState('');
-  const [editPacketQuantity, setEditPacketQuantity] = useState('');
-  const [editPacketBonus, setEditPacketBonus] = useState('');
-  const [editPacketCost, setEditPacketCost] = useState('');
-  const [editPacketPrice, setEditPacketPrice] = useState('');
-  const [editPacketWholesale, setEditPacketWholesale] = useState('');
-  const [editPaymentType, setEditPaymentType] = useState<'cash' | 'debt'>('cash');
-  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'items'));
@@ -119,9 +104,24 @@ export default function InventoryView({ role, onNavigateToEntry, onNavigateToAud
       }
     );
 
+    const unsubTrans = onSnapshot(
+      collection(db, 'transactions'),
+      (snapshot) => {
+        const trans: Array<Transaction & { id: string }> = [];
+        snapshot.forEach((doc) => {
+          trans.push({ id: doc.id, ...(doc.data() as Omit<Transaction, 'id'>) });
+        });
+        setTransactions(trans);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'transactions');
+      }
+    );
+
     return () => {
       unsubscribe();
       unsubComp();
+      unsubTrans();
     };
   }, []);
 
@@ -169,123 +169,6 @@ export default function InventoryView({ role, onNavigateToEntry, onNavigateToAud
 
   const openEditModal = (item: Item) => {
     setEditingItem(item);
-    setEditName(item.name || '');
-    setEditSupplier(item.supplier || '');
-    setEditInvoiceNo(item.invoiceNo || '');
-
-    const isCarton = !!item.cartonCostPrice || !!item.cartonSellingPrice || (item.cartonQuantity !== undefined && item.cartonQuantity > 0) || (!item.packetCostPrice && !item.packetSellingPrice);
-    const isPacket = !!item.packetCostPrice || !!item.packetSellingPrice || (item.packetQuantity !== undefined && item.packetQuantity > 0);
-
-    setEditHasCarton(isCarton);
-    setEditHasPacket(isPacket);
-
-    const initialCartonCost = item.cartonPurchaseCost !== undefined
-      ? item.cartonPurchaseCost.toString()
-      : (item.cartonCostPrice ? item.cartonCostPrice.toString() : (item.costPrice ? item.costPrice.toString() : ''));
-
-    setEditCartonCost(initialCartonCost);
-    setEditCartonPrice(item.cartonSellingPrice ? item.cartonSellingPrice.toString() : (item.sellingPrice ? item.sellingPrice.toString() : ''));
-    setEditCartonWholesale(item.cartonWholesalePrice ? item.cartonWholesalePrice.toString() : (item.wholesalePrice ? item.wholesalePrice.toString() : ''));
-    
-    const totalCartonsVal = item.cartonQuantity !== undefined ? item.cartonQuantity : (item.quantity || 0);
-    const bonusCartonsVal = item.cartonBonusQuantity || 0;
-    setEditCartonQuantity((Math.max(0, totalCartonsVal - bonusCartonsVal)).toString());
-    setEditCartonBonus(bonusCartonsVal > 0 ? bonusCartonsVal.toString() : '');
-
-    const initialPacketCost = item.packetPurchaseCost !== undefined
-      ? item.packetPurchaseCost.toString()
-      : (item.packetCostPrice ? item.packetCostPrice.toString() : '');
-
-    setEditPacketCost(initialPacketCost);
-    setEditPacketPrice(item.packetSellingPrice ? item.packetSellingPrice.toString() : '');
-    setEditPacketWholesale(item.packetWholesalePrice ? item.packetWholesalePrice.toString() : '');
-    
-    const totalPacketsVal = item.packetQuantity !== undefined ? item.packetQuantity : 0;
-    const bonusPacketsVal = item.packetBonusQuantity || 0;
-    setEditPacketQuantity((Math.max(0, totalPacketsVal - bonusPacketsVal)).toString());
-    setEditPacketBonus(bonusPacketsVal > 0 ? bonusPacketsVal.toString() : '');
-
-    setEditPaymentType('cash');
-  };
-
-  const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingItem || !editName.trim()) return;
-
-    setIsSavingEdit(true);
-    try {
-      const cPurchased = editHasCarton ? (Number(editCartonQuantity) || 0) : 0;
-      const cBonus = editHasCarton ? (Number(editCartonBonus) || 0) : 0;
-      const cTotal = cPurchased + cBonus;
-
-      const pPurchased = editHasPacket ? (Number(editPacketQuantity) || 0) : 0;
-      const pBonus = editHasPacket ? (Number(editPacketBonus) || 0) : 0;
-      const pTotal = pPurchased + pBonus;
-
-      const cCost = editHasCarton ? (Number(editCartonCost) || 0) : 0;
-      const cPrice = editHasCarton ? (Number(editCartonPrice) || 0) : 0;
-      const cWholesale = editHasCarton ? (Number(editCartonWholesale) || 0) : 0;
-
-      const pCost = editHasPacket ? (Number(editPacketCost) || 0) : 0;
-      const pPrice = editHasPacket ? (Number(editPacketPrice) || 0) : 0;
-      const pWholesale = editHasPacket ? (Number(editPacketWholesale) || 0) : 0;
-
-      const totalQty = cTotal + pTotal;
-      const totalCostVal = (cPurchased * cCost) + (pPurchased * pCost);
-      const totalBonusQty = cBonus + pBonus;
-
-      const primaryCost = cCost || pCost;
-      const primaryPrice = cPrice || pPrice;
-      const cleanInvoice = editInvoiceNo.trim();
-
-      const itemData: any = {
-        name: editName.trim(),
-        supplier: editSupplier.trim(),
-        invoiceNo: cleanInvoice,
-        quantity: totalQty,
-        unitType: editHasCarton && editHasPacket ? 'both' : (editHasCarton ? 'carton' : 'packet'),
-        costPrice: primaryCost,
-        sellingPrice: primaryPrice,
-        wholesalePrice: cWholesale || pWholesale || 0,
-        
-        cartonQuantity: editHasCarton ? cTotal : 0,
-        cartonPurchasedQuantity: editHasCarton ? cPurchased : 0,
-        cartonBonusQuantity: cBonus,
-        cartonPurchaseCost: cCost,
-        cartonCostPrice: cCost,
-        cartonSellingPrice: cPrice,
-        cartonWholesalePrice: cWholesale,
-
-        packetQuantity: editHasPacket ? pTotal : 0,
-        packetPurchasedQuantity: editHasPacket ? pPurchased : 0,
-        packetBonusQuantity: pBonus,
-        packetPurchaseCost: pCost,
-        packetCostPrice: pCost,
-        packetSellingPrice: pPrice,
-        packetWholesalePrice: pWholesale,
-      };
-
-      const oldTotal = editingItem.quantity || 0;
-      const quantityAdded = totalQty > oldTotal ? totalQty - oldTotal : 0;
-
-      await updateItemAndSyncEverywhere({
-        itemId: editingItem.id,
-        oldItem: editingItem,
-        itemData,
-        quantityAdded,
-        paymentType: editPaymentType,
-        costPricePerPiece: primaryCost,
-        totalCostAmount: totalCostVal,
-        bonusQuantityAdded: totalBonusQty,
-      });
-
-      setEditingItem(null);
-    } catch (error) {
-      console.error("Error updating item: ", error);
-      alert('هەڵەیەک ڕوویدا لە کاتی پاشەکەوتکردندا');
-    } finally {
-      setIsSavingEdit(false);
-    }
   };
 
   const confirmDeleteItem = async () => {
@@ -599,6 +482,14 @@ export default function InventoryView({ role, onNavigateToEntry, onNavigateToAud
         </div>
       </div>
 
+      {/* Save Toast Notification */}
+      {saveToast && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl shadow-xs flex items-center gap-2.5 text-xs font-bold">
+          <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+          <span>{saveToast}</span>
+        </div>
+      )}
+
       {/* View Switcher & Filters */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
@@ -865,204 +756,17 @@ export default function InventoryView({ role, onNavigateToEntry, onNavigateToAud
       </section>
 
       {/* Edit Item Modal */}
-      {editingItem && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden my-6">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <div className="flex items-center gap-2">
-                <Edit2 size={18} className="text-indigo-600" />
-                <h3 className="font-bold text-slate-800 text-sm">
-                  دەستکاریکردنی کاڵا: {editingItem.name}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingItem(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 rounded-xl transition cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveEdit} className="p-5 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="sm:col-span-1">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">ناوی کاڵا *</label>
-                  <input
-                    type="text"
-                    required
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">کۆمپانیا</label>
-                  <input
-                    type="text"
-                    list="edit-companies-list"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500"
-                    value={editSupplier}
-                    onChange={(e) => setEditSupplier(e.target.value)}
-                  />
-                  <datalist id="edit-companies-list">
-                    {companies.map(c => <option key={c.id} value={c.name} />)}
-                  </datalist>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-indigo-900 mb-1">ژمارەی وەسڵ (ڕەقەم وەسڵ)</label>
-                  <input
-                    type="text"
-                    className="w-full px-3 py-2 border border-indigo-200 bg-indigo-50/40 rounded-xl text-xs font-mono font-bold outline-none focus:ring-2 focus:ring-indigo-500"
-                    value={editInvoiceNo}
-                    onChange={(e) => setEditInvoiceNo(e.target.value)}
-                    dir="ltr"
-                  />
-                </div>
-              </div>
-
-              {/* Units toggles */}
-              <div className="flex items-center gap-4 py-2 border-y border-slate-100 text-xs font-bold">
-                <span>یەکەکان:</span>
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={editHasCarton}
-                    onChange={(e) => setEditHasCarton(e.target.checked)}
-                    className="rounded text-indigo-600 cursor-pointer"
-                  />
-                  <span>کارتۆن</span>
-                </label>
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={editHasPacket}
-                    onChange={(e) => setEditHasPacket(e.target.checked)}
-                    className="rounded text-indigo-600 cursor-pointer"
-                  />
-                  <span>پاکەت</span>
-                </label>
-              </div>
-
-              {/* Carton details */}
-              {editHasCarton && (
-                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-2">
-                  <span className="text-xs font-bold text-indigo-900">زانیارییەکانی کارتۆن</span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">بڕی کارتۆن</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
-                        value={editCartonQuantity}
-                        onChange={(e) => setEditCartonQuantity(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-amber-700 mb-0.5">🎁 دیاری</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-amber-300 bg-amber-50 rounded-lg text-xs font-bold"
-                        value={editCartonBonus}
-                        onChange={(e) => setEditCartonBonus(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">تێچوو</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
-                        value={editCartonCost}
-                        onChange={(e) => setEditCartonCost(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">نرخی فرۆشتن</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
-                        value={editCartonPrice}
-                        onChange={(e) => setEditCartonPrice(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Packet details */}
-              {editHasPacket && (
-                <div className="p-3 bg-emerald-50/40 rounded-xl border border-emerald-100 space-y-2">
-                  <span className="text-xs font-bold text-emerald-900">زانیارییەکانی پاکەت</span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">بڕی پاکەت</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
-                        value={editPacketQuantity}
-                        onChange={(e) => setEditPacketQuantity(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-amber-700 mb-0.5">🎁 دیاری</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-amber-300 bg-amber-50 rounded-lg text-xs font-bold"
-                        value={editPacketBonus}
-                        onChange={(e) => setEditPacketBonus(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">تێچوو</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
-                        value={editPacketCost}
-                        onChange={(e) => setEditPacketCost(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-600 mb-0.5">نرخی فرۆشتن</label>
-                      <input
-                        type="number"
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white"
-                        value={editPacketPrice}
-                        onChange={(e) => setEditPacketPrice(e.target.value)}
-                        dir="ltr"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setEditingItem(null)}
-                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 transition font-bold text-xs cursor-pointer"
-                >
-                  پاشگەزبوونەوە
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingEdit}
-                  className="px-5 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <Edit2 size={14} />
-                  <span>{isSavingEdit ? 'خەریکی پاشەکەوتکردنە...' : 'پاشەکەوتکردنی گۆڕانکاری'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <WarehouseItemEditModal
+        item={editingItem}
+        allItems={items}
+        companies={companies}
+        transactions={transactions}
+        onClose={() => setEditingItem(null)}
+        onSaved={(msg) => {
+          setSaveToast(msg);
+          setTimeout(() => setSaveToast(null), 6000);
+        }}
+      />
 
       {/* Delete Item Confirmation Modal */}
       <ConfirmModal

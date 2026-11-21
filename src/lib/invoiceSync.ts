@@ -1,4 +1,4 @@
-import { collection, doc, getDocs, query, where, writeBatch, addDoc, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, query, where, writeBatch, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { handleFirestoreError, OperationType } from './firestoreErrors';
 import { Item, StockHistory, Transaction } from '../types';
@@ -9,15 +9,105 @@ export interface SyncItemParams {
   oldItem: Item;
   itemData: Partial<Item> & Record<string, any>;
   quantityAdded: number;
-  paymentType: 'cash' | 'debt';
+  paymentType?: 'cash' | 'debt';
   costPricePerPiece: number;
   totalCostAmount?: number;
   bonusQuantityAdded?: number;
+  syncFinancials?: boolean;
+  invoiceDate?: number;
 }
 
 /**
- * Updates an item and propagates any changes to invoiceNo, name, and supplier
- * across all stock_history and transactions in Firestore.
+ * Finds the matching company purchase transaction (company_cash or company_debt) for a warehouse item batch.
+ */
+export function findMatchingCompanyTransaction(
+  item: Item,
+  transactions: Array<Transaction & { id: string }>
+): (Transaction & { id: string }) | undefined {
+  const companyTxs = transactions.filter(
+    (t) => t.type === 'company_cash' || t.type === 'company_debt'
+  );
+
+  // 1. Exact itemId match
+  const byId = companyTxs.find((t) => t.itemId && t.itemId === item.id);
+  if (byId) return byId;
+
+  // 2. Fallback match by normalized name + invoiceNo + supplier + closest timestamp
+  const cleanInv = (item.invoiceNo || '').trim();
+  const cleanSupp = (item.supplier || '').trim();
+  const normName = normalizeKurdishArabicText((item.name || '').trim()).toLowerCase();
+  if (!normName) return undefined;
+
+  const candidates = companyTxs.filter((t) => {
+    const tInv = (t.invoiceNo || '').trim();
+    const tDesc = t.description || '';
+    const normDesc = normalizeKurdishArabicText(tDesc).toLowerCase();
+    const tEnt = (t.relatedEntityId || '').trim();
+
+    const nameMatch = normDesc.includes(normName);
+    if (!nameMatch) return false;
+
+    const invMatch = cleanInv
+      ? tInv === cleanInv || tDesc.includes(`#${cleanInv}`)
+      : !tInv;
+    if (!invMatch) return false;
+
+    const suppMatch =
+      !cleanSupp ||
+      !tEnt ||
+      tEnt === cleanSupp ||
+      tEnt === 'کۆگا' ||
+      tEnt === 'نەزانراو' ||
+      tEnt === (item.name || '').trim();
+
+    return suppMatch;
+  });
+
+  if (candidates.length === 0) return undefined;
+
+  const itemTime = item.createdAt || 0;
+  candidates.sort((a, b) => Math.abs((a.date || 0) - itemTime) - Math.abs((b.date || 0) - itemTime));
+  return candidates[0];
+}
+
+/**
+ * Finds the matching stock_history record for a warehouse item batch.
+ */
+export function findMatchingStockHistoryDoc(
+  item: Item,
+  histories: Array<StockHistory & { id: string }>
+): (StockHistory & { id: string }) | undefined {
+  const byId = histories.find((h) => h.itemId && h.itemId === item.id);
+  if (byId) return byId;
+
+  const cleanInv = (item.invoiceNo || '').trim();
+  const cleanSupp = (item.supplier || '').trim();
+  const normName = normalizeKurdishArabicText((item.name || '').trim()).toLowerCase();
+  if (!normName) return undefined;
+
+  const candidates = histories.filter((h) => {
+    const hName = normalizeKurdishArabicText((h.itemName || '').trim()).toLowerCase();
+    if (hName !== normName) return false;
+
+    const hInv = (h.invoiceNo || '').trim();
+    const invMatch = cleanInv ? hInv === cleanInv : !hInv;
+    if (!invMatch) return false;
+
+    const hSupp = (h.supplier || '').trim();
+    return !cleanSupp || !hSupp || hSupp === cleanSupp;
+  });
+
+  if (candidates.length === 0) return undefined;
+
+  const itemTime = item.createdAt || 0;
+  candidates.sort((a, b) => Math.abs((a.date || 0) - itemTime) - Math.abs((b.date || 0) - itemTime));
+  return candidates[0];
+}
+
+/**
+ * Updates an item and propagates changes cleanly across stock_history and transactions in Firestore.
+ * When syncFinancials is true (full warehouse item edit), updates the existing stock_history and
+ * company_cash/company_debt transaction in place (preventing duplicates and preserving debt/cash status).
  */
 export async function updateItemAndSyncEverywhere({
   itemId,
@@ -28,23 +118,174 @@ export async function updateItemAndSyncEverywhere({
   costPricePerPiece,
   totalCostAmount,
   bonusQuantityAdded = 0,
+  syncFinancials = false,
+  invoiceDate,
 }: SyncItemParams) {
   try {
-    const cleanNewInvoice = (itemData.invoiceNo || '').trim();
+    const cleanNewInvoice = (itemData.invoiceNo !== undefined ? itemData.invoiceNo : oldItem.invoiceNo || '').trim();
     const cleanOldInvoice = (oldItem.invoiceNo || '').trim();
     const oldName = (oldItem.name || '').trim();
     const newName = (itemData.name || oldItem.name || '').trim();
     const oldSupplier = (oldItem.supplier || '').trim();
-    const newSupplier = (itemData.supplier || oldItem.supplier || '').trim();
+    const newSupplier = (itemData.supplier !== undefined ? itemData.supplier : oldItem.supplier || '').trim();
 
     const invoiceChanged = cleanNewInvoice !== cleanOldInvoice;
     const nameChanged = oldName !== newName;
     const supplierChanged = oldSupplier !== newSupplier;
 
-    // 1. Update the item document
-    await updateDoc(doc(db, 'items', itemId), itemData);
+    const itemPayload: Record<string, any> = { ...itemData };
+    if (invoiceDate !== undefined && invoiceDate > 0) {
+      itemPayload.createdAt = invoiceDate;
+    }
 
-    // 2. If new stock was added in this edit turn, record history and transaction
+    // 1. Update the item document
+    await updateDoc(doc(db, 'items', itemId), itemPayload);
+
+    if (syncFinancials) {
+      // Load stock_history and transactions to update the matching batch record cleanly in place
+      const [historySnap, transSnap] = await Promise.all([
+        getDocs(collection(db, 'stock_history')),
+        getDocs(collection(db, 'transactions')),
+      ]);
+
+      const allHistories: Array<StockHistory & { id: string }> = [];
+      historySnap.forEach((d) => allHistories.push({ id: d.id, ...(d.data() as Omit<StockHistory, 'id'>) }));
+
+      const allTransactions: Array<Transaction & { id: string }> = [];
+      transSnap.forEach((d) => allTransactions.push({ id: d.id, ...(d.data() as Omit<Transaction, 'id'>) }));
+
+      const matchedHistory = findMatchingStockHistoryDoc({ ...oldItem, id: itemId }, allHistories);
+      const matchedTx = findMatchingCompanyTransaction({ ...oldItem, id: itemId }, allTransactions);
+
+      // Compute old batch quantities & cost to detect if partial sales had occurred before this edit
+      const oldCTotal = oldItem.cartonQuantity !== undefined ? oldItem.cartonQuantity : (oldItem.unitType === 'carton' ? (oldItem.quantity || 0) : 0);
+      const oldCBonus = oldItem.cartonBonusQuantity || (oldItem.unitType === 'carton' ? (oldItem.bonusQuantity || 0) : 0) || 0;
+      const oldCPurchased = oldItem.cartonPurchasedQuantity !== undefined ? oldItem.cartonPurchasedQuantity : Math.max(0, oldCTotal - oldCBonus);
+
+      const oldPTotal = oldItem.packetQuantity !== undefined ? oldItem.packetQuantity : (oldItem.unitType === 'packet' ? (oldItem.quantity || 0) : 0);
+      const oldPBonus = oldItem.packetBonusQuantity || (oldItem.unitType === 'packet' ? (oldItem.bonusQuantity || 0) : 0) || 0;
+      const oldPPurchased = oldItem.packetPurchasedQuantity !== undefined ? oldItem.packetPurchasedQuantity : Math.max(0, oldPTotal - oldPBonus);
+
+      const oldPurchasedTotal = oldCPurchased + oldPPurchased;
+      const oldCCost = oldItem.cartonCostPrice || oldItem.cartonPurchaseCost || oldItem.costPrice || 0;
+      const oldPCost = oldItem.packetCostPrice || oldItem.packetPurchaseCost || 0;
+      const oldCostTotal = (oldCPurchased * oldCCost) + (oldPPurchased * oldPCost);
+
+      const newCPurchased = Number(itemData.cartonPurchasedQuantity ?? 0);
+      const newCBonus = Number(itemData.cartonBonusQuantity ?? 0);
+      const newPPurchased = Number(itemData.packetPurchasedQuantity ?? 0);
+      const newPBonus = Number(itemData.packetBonusQuantity ?? 0);
+      const newCCost = Number(itemData.cartonCostPrice ?? itemData.cartonPurchaseCost ?? 0);
+      const newPCost = Number(itemData.packetCostPrice ?? itemData.packetPurchaseCost ?? 0);
+
+      let alreadySoldCartons = 0;
+      let alreadySoldPackets = 0;
+      if (matchedTx && matchedHistory && (matchedTx.amount || 0) > oldCostTotal + 1) {
+        const histPurchased = matchedHistory.purchasedQuantity ?? matchedHistory.quantityAdded ?? 0;
+        const extraSold = Math.max(0, histPurchased - oldPurchasedTotal);
+        if (extraSold > 0) {
+          if (oldItem.unitType === 'packet' && newCPurchased === 0) {
+            alreadySoldPackets = extraSold;
+          } else {
+            alreadySoldCartons = extraSold;
+          }
+        }
+      }
+
+      const effectiveCartonPurchased = newCPurchased + alreadySoldCartons;
+      const effectivePacketPurchased = newPPurchased + alreadySoldPackets;
+      const effectiveTotalPurchased = effectiveCartonPurchased + effectivePacketPurchased;
+      const effectiveTotalBonus = newCBonus + newPBonus;
+      const effectiveTotalQty = effectiveTotalPurchased + effectiveTotalBonus;
+      const effectiveTotalCost = (effectiveCartonPurchased * newCCost) + (effectivePacketPurchased * newPCost);
+
+      const giftDetails: string[] = [];
+      if (newCBonus > 0) giftDetails.push(`${newCBonus} کارتۆن دیاری`);
+      if (newPBonus > 0) giftDetails.push(`${newPBonus} پاکەت دیاری`);
+      const giftNote = giftDetails.length > 0 ? ` (+ ${giftDetails.join(' و ')} بە بێ تێچوو)` : '';
+
+      const effectiveDate = invoiceDate || matchedTx?.date || matchedHistory?.date || oldItem.createdAt || Date.now();
+
+      // Update or add stock_history
+      const historyPayload: Record<string, any> = {
+        itemId,
+        itemName: newName,
+        quantityAdded: effectiveTotalQty,
+        purchasedQuantity: effectiveTotalPurchased,
+        bonusQuantity: effectiveTotalBonus,
+        cartonBonus: newCBonus,
+        packetBonus: newPBonus,
+        unit: itemData.unitType || oldItem.unitType || 'carton',
+        date: effectiveDate,
+        invoiceNo: cleanNewInvoice,
+        supplier: newSupplier,
+        notes: giftDetails.length > 0 ? `دیاری: ${giftDetails.join(' و ')} (تێچوو سفر - تەواو قازانج)` : '',
+      };
+
+      if (matchedHistory) {
+        await updateDoc(doc(db, 'stock_history', matchedHistory.id), historyPayload);
+      } else if (effectiveTotalQty > 0) {
+        await addDoc(collection(db, 'stock_history'), historyPayload);
+      }
+
+      // Remove any duplicate stock_history docs explicitly tagged with the same itemId
+      for (const h of allHistories) {
+        if (h.itemId === itemId && matchedHistory && h.id !== matchedHistory.id) {
+          await deleteDoc(doc(db, 'stock_history', h.id));
+        }
+      }
+
+      // Resolve payment type: explicit choice > existing tx type > 'cash'
+      const resolvedPaymentType: 'cash' | 'debt' =
+        paymentType || (matchedTx?.type === 'company_debt' ? 'debt' : 'cash');
+      const transType = resolvedPaymentType === 'cash' ? 'company_cash' : 'company_debt';
+
+      const unitParts: string[] = [];
+      if (effectiveCartonPurchased > 0) unitParts.push(`${effectiveCartonPurchased} کارتۆن`);
+      if (effectivePacketPurchased > 0) unitParts.push(`${effectivePacketPurchased} پاکەت`);
+      const unitLabel = unitParts.join(' و ') || ((itemData.unitType || oldItem.unitType) === 'packet' ? 'پاکەت' : 'کارتۆن');
+
+      const transactionDesc =
+        resolvedPaymentType === 'cash'
+          ? cleanNewInvoice
+            ? `نەقدی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName} (${unitLabel}${giftNote})`
+            : `نەقدی کڕینی کاڵای ${newName}${giftNote}`
+          : cleanNewInvoice
+            ? `قەرزی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName} (${unitLabel}${giftNote})`
+            : `قەرزی کڕینی کاڵای ${newName}${giftNote}`;
+
+      const txPayload: Record<string, any> = {
+        itemId,
+        type: transType,
+        amount: effectiveTotalCost,
+        date: effectiveDate,
+        description: transactionDesc,
+        relatedEntityId: newSupplier || newName || 'کۆگا',
+        invoiceNo: cleanNewInvoice,
+      };
+
+      if (matchedTx) {
+        await updateDoc(doc(db, 'transactions', matchedTx.id), txPayload);
+      } else if (effectiveTotalCost > 0 || effectiveTotalQty > 0) {
+        await addDoc(collection(db, 'transactions'), txPayload);
+      }
+
+      // Clean up any duplicate company transactions explicitly tagged with the same itemId
+      for (const t of allTransactions) {
+        if (
+          t.itemId === itemId &&
+          (t.type === 'company_cash' || t.type === 'company_debt') &&
+          matchedTx &&
+          t.id !== matchedTx.id
+        ) {
+          await deleteDoc(doc(db, 'transactions', t.id));
+        }
+      }
+
+      return;
+    }
+
+    // Legacy / metadata-only propagation (e.g. changing invoiceNo from CompaniesView)
     if (quantityAdded > 0) {
       await addDoc(collection(db, 'stock_history'), {
         itemId,
@@ -55,23 +296,24 @@ export async function updateItemAndSyncEverywhere({
         date: Date.now(),
         invoiceNo: cleanNewInvoice || '',
         supplier: newSupplier || '',
-        notes: bonusQuantityAdded > 0 ? `دیاری: ${bonusQuantityAdded} بە بێ تێچوو` : ''
+        notes: bonusQuantityAdded > 0 ? `دیاری: ${bonusQuantityAdded} بە بێ تێچوو` : '',
       });
 
       const actualCost = totalCostAmount !== undefined ? totalCostAmount : costPricePerPiece * Math.max(0, quantityAdded - bonusQuantityAdded);
-
       const giftSuffix = bonusQuantityAdded > 0 ? ` (+ ${bonusQuantityAdded} دیاری بە بێ تێچوو)` : '';
+      const resolvedPay = paymentType || 'cash';
       const transactionDesc =
-        paymentType === 'cash'
+        resolvedPay === 'cash'
           ? cleanNewInvoice
             ? `نەقدی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName}${giftSuffix}`
             : `نەقدی زیادکردنی کاڵای ${newName}${giftSuffix}`
           : cleanNewInvoice
-          ? `قەرزی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName}${giftSuffix}`
-          : `قەرزی زیادکردنی کاڵای ${newName}${giftSuffix}`;
+            ? `قەرزی کڕین (وەسڵی #${cleanNewInvoice}) - ${newName}${giftSuffix}`
+            : `قەرزی زیادکردنی کاڵای ${newName}${giftSuffix}`;
 
       await addDoc(collection(db, 'transactions'), {
-        type: paymentType === 'cash' ? 'company_cash' : 'company_debt',
+        itemId,
+        type: resolvedPay === 'cash' ? 'company_cash' : 'company_debt',
         amount: actualCost,
         date: Date.now(),
         description: transactionDesc,
@@ -80,91 +322,43 @@ export async function updateItemAndSyncEverywhere({
       });
     }
 
-    // 3. If invoiceNo, name, or supplier changed, propagate globally
     if (invoiceChanged || nameChanged || supplierChanged) {
-      // A. Update matching stock_history
-      const historySnap = await getDocs(collection(db, 'stock_history'));
-      const historyBatch = writeBatch(db);
-      let historyUpdatesCount = 0;
+      const [historySnap, transSnap] = await Promise.all([
+        getDocs(collection(db, 'stock_history')),
+        getDocs(collection(db, 'transactions')),
+      ]);
 
-      historySnap.forEach((d) => {
-        const hData = d.data() as StockHistory;
-        const isExactItem = hData.itemId === itemId;
-        const isMatchingNameAndOldInvoice =
-          hData.itemName === oldName &&
-          (!cleanOldInvoice || hData.invoiceNo === cleanOldInvoice);
+      const allHistories: Array<StockHistory & { id: string }> = [];
+      historySnap.forEach((d) => allHistories.push({ id: d.id, ...(d.data() as Omit<StockHistory, 'id'>) }));
+      const matchedHistory = findMatchingStockHistoryDoc({ ...oldItem, id: itemId }, allHistories);
 
-        if (isExactItem || isMatchingNameAndOldInvoice) {
-          const updates: any = {};
-          if (invoiceChanged) updates.invoiceNo = cleanNewInvoice;
-          if (nameChanged) updates.itemName = newName;
-          if (supplierChanged) updates.supplier = newSupplier;
-
-          if (Object.keys(updates).length > 0) {
-            historyBatch.update(doc(db, 'stock_history', d.id), updates);
-            historyUpdatesCount++;
-          }
-        }
-      });
-
-      if (historyUpdatesCount > 0) {
-        await historyBatch.commit();
+      if (matchedHistory) {
+        const updates: any = { itemId };
+        if (invoiceChanged) updates.invoiceNo = cleanNewInvoice;
+        if (nameChanged) updates.itemName = newName;
+        if (supplierChanged) updates.supplier = newSupplier;
+        await updateDoc(doc(db, 'stock_history', matchedHistory.id), updates);
       }
 
-      // B. Update matching transactions
-      const transSnap = await getDocs(collection(db, 'transactions'));
-      const transBatch = writeBatch(db);
-      let transUpdatesCount = 0;
+      const allTransactions: Array<Transaction & { id: string }> = [];
+      transSnap.forEach((d) => allTransactions.push({ id: d.id, ...(d.data() as Omit<Transaction, 'id'>) }));
+      const matchedTx = findMatchingCompanyTransaction({ ...oldItem, id: itemId }, allTransactions);
 
-      transSnap.forEach((d) => {
-        const tData = d.data() as Transaction;
-        const tDesc = tData.description || '';
-        const tInvoice = (tData.invoiceNo || '').trim();
-        const tEntity = (tData.relatedEntityId || '').trim();
-
-        const matchInvoice = cleanOldInvoice && tInvoice === cleanOldInvoice;
-        const matchEntity =
-          (oldSupplier && tEntity === oldSupplier) || (newSupplier && tEntity === newSupplier);
-        const matchNameInDesc = oldName && tDesc.includes(oldName);
-        const matchOldInvoiceInDesc =
-          cleanOldInvoice && tDesc.includes(`وەسڵی #${cleanOldInvoice}`);
-
-        // If this transaction belongs to this item or this invoice
-        if ((matchInvoice && (matchEntity || matchNameInDesc)) || matchNameInDesc || matchOldInvoiceInDesc) {
-          const updates: any = {};
-          if (invoiceChanged) {
-            updates.invoiceNo = cleanNewInvoice;
-          }
-          if (supplierChanged && (!tEntity || tEntity === oldSupplier)) {
-            updates.relatedEntityId = newSupplier;
-          }
-
-          // Update description if name or invoice changed
-          let updatedDesc = tDesc;
-          if (cleanOldInvoice && cleanNewInvoice && tDesc.includes(`وەسڵی #${cleanOldInvoice}`)) {
-            updatedDesc = updatedDesc.replace(`وەسڵی #${cleanOldInvoice}`, `وەسڵی #${cleanNewInvoice}`);
-          } else if (cleanNewInvoice && !tDesc.includes(`وەسڵی #`)) {
-            if (tDesc.includes('نەقدی کڕین') || tDesc.includes('قەرزی کڕین') || tDesc.includes('زیادکردنی')) {
-              updatedDesc = `${updatedDesc} (وەسڵی #${cleanNewInvoice})`;
-            }
-          }
-          if (nameChanged && oldName && updatedDesc.includes(oldName)) {
-            updatedDesc = updatedDesc.replaceAll(oldName, newName);
-          }
-
-          if (updatedDesc !== tDesc) {
-            updates.description = updatedDesc;
-          }
-
-          if (Object.keys(updates).length > 0) {
-            transBatch.update(doc(db, 'transactions', d.id), updates);
-            transUpdatesCount++;
-          }
+      if (matchedTx) {
+        const updates: any = { itemId };
+        if (invoiceChanged) updates.invoiceNo = cleanNewInvoice;
+        if (supplierChanged) updates.relatedEntityId = newSupplier || 'کۆگا';
+        let updatedDesc = matchedTx.description || '';
+        if (cleanOldInvoice && cleanNewInvoice && updatedDesc.includes(`وەسڵی #${cleanOldInvoice}`)) {
+          updatedDesc = updatedDesc.replace(`وەسڵی #${cleanOldInvoice}`, `وەسڵی #${cleanNewInvoice}`);
+        } else if (cleanNewInvoice && !updatedDesc.includes(`وەسڵی #`)) {
+          updatedDesc = `${updatedDesc} (وەسڵی #${cleanNewInvoice})`;
         }
-      });
-
-      if (transUpdatesCount > 0) {
-        await transBatch.commit();
+        if (nameChanged && oldName && updatedDesc.includes(oldName)) {
+          updatedDesc = updatedDesc.replaceAll(oldName, newName);
+        }
+        if (updatedDesc !== matchedTx.description) updates.description = updatedDesc;
+        await updateDoc(doc(db, 'transactions', matchedTx.id), updates);
       }
     }
   } catch (error) {
@@ -225,11 +419,12 @@ export async function syncHistoryInvoice({
       const tDesc = tData.description || '';
       const tInvoice = (tData.invoiceNo || '').trim();
 
+      const matchById = itemId && tData.itemId === itemId;
       const matchOldInvoice = cleanOldInvoice && tInvoice === cleanOldInvoice;
       const matchName = itemName && tDesc.includes(itemName);
       const matchInvoiceInDesc = cleanOldInvoice && tDesc.includes(`وەسڵی #${cleanOldInvoice}`);
 
-      if (matchOldInvoice || (matchName && (!tInvoice || matchInvoiceInDesc))) {
+      if (matchById || matchOldInvoice || (matchName && (!tInvoice || matchInvoiceInDesc))) {
         const updates: any = { invoiceNo: cleanNewInvoice };
         let updatedDesc = tDesc;
         if (cleanOldInvoice && tDesc.includes(`وەسڵی #${cleanOldInvoice}`)) {

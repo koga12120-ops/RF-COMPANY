@@ -85,6 +85,7 @@ export interface Transaction {
   repName?: string;
   cashvanName?: string;
   receivedBy?: string;
+  itemId?: string;
 }
 
 export interface SalesRep {
