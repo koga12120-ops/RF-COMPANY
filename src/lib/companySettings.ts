@@ -15,23 +15,39 @@ export const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
   address: 'هەولێر - عێراق'
 };
 
+const safeGetItem = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeSetItem = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage access errors in restricted iframes
+  }
+};
+
 const getInitialName = () => {
-  const stored = localStorage.getItem('company_name');
+  const stored = safeGetItem('company_name');
   if (!stored || stored.includes('TAM TAM')) return DEFAULT_COMPANY_SETTINGS.name;
   return stored;
 };
 
 const getInitialPhone = () => {
-  const stored = localStorage.getItem('company_phone');
+  const stored = safeGetItem('company_phone');
   if (!stored || stored === '0750 456 7890' || stored === '07506144894') return DEFAULT_COMPANY_SETTINGS.phone;
   return stored;
 };
 
 let cachedSettings: CompanySettings = {
   name: getInitialName(),
-  brand: localStorage.getItem('company_brand') || DEFAULT_COMPANY_SETTINGS.brand,
+  brand: safeGetItem('company_brand') || DEFAULT_COMPANY_SETTINGS.brand,
   phone: getInitialPhone(),
-  address: localStorage.getItem('company_address') || DEFAULT_COMPANY_SETTINGS.address
+  address: safeGetItem('company_address') || DEFAULT_COMPANY_SETTINGS.address
 };
 
 export function getCompanySettings(): CompanySettings {
@@ -50,10 +66,10 @@ export async function fetchCompanySettings(): Promise<CompanySettings> {
         phone: data.phone || cachedSettings.phone,
         address: data.address || cachedSettings.address
       };
-      localStorage.setItem('company_name', cachedSettings.name);
-      localStorage.setItem('company_brand', cachedSettings.brand);
-      localStorage.setItem('company_phone', cachedSettings.phone);
-      localStorage.setItem('company_address', cachedSettings.address);
+      safeSetItem('company_name', cachedSettings.name);
+      safeSetItem('company_brand', cachedSettings.brand);
+      safeSetItem('company_phone', cachedSettings.phone);
+      safeSetItem('company_address', cachedSettings.address);
     }
   } catch (e) {
     console.warn('Could not load company settings from firestore:', e);
@@ -66,10 +82,10 @@ export async function saveCompanySettings(newSettings: Partial<CompanySettings>)
     ...cachedSettings,
     ...newSettings
   };
-  localStorage.setItem('company_name', cachedSettings.name);
-  localStorage.setItem('company_brand', cachedSettings.brand);
-  localStorage.setItem('company_phone', cachedSettings.phone);
-  localStorage.setItem('company_address', cachedSettings.address);
+  safeSetItem('company_name', cachedSettings.name);
+  safeSetItem('company_brand', cachedSettings.brand);
+  safeSetItem('company_phone', cachedSettings.phone);
+  safeSetItem('company_address', cachedSettings.address);
 
   try {
     const docRef = doc(db, 'system_settings', 'company_profile');

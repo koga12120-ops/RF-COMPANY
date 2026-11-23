@@ -11,7 +11,7 @@ import {
   ChevronDown, ChevronUp, Layers, Boxes
 } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
-import { printStatementPopup, renderReceiptHeaderHtml, printExpenseVoucherPopup, printExpensesListReportPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml, printExpenseVoucherPopup, printExpensesListReportPopup, printHtml } from '../../lib/statementPrinter';
 import { getCompanySettings } from '../../lib/companySettings';
 import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
@@ -693,25 +693,24 @@ export default function LedgerView() {
       return;
     }
 
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
     const isCompany = d.entityType === 'company' || (d.type && d.type.includes('کۆمپانیا'));
 
     const html = `
-      <html dir="rtl">
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ckb">
         <head>
+          <meta charset="utf-8" />
           <title>پسوڵەی دەفتەر حسابات - ${d.invoiceNumber}</title>
           <style>
-            body { font-family: Tahoma, Arial, sans-serif; padding: 20px; color: #333; }
-            .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-            .title { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
-            .subtitle { color: #666; font-size: 14px; }
-            .details { margin-bottom: 30px; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 5px 0; border-bottom: 1px dashed #eee; }
-            .label { font-weight: bold; }
-            .amount { font-size: 20px; font-weight: bold; text-align: center; margin: 30px 0; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-            .footer { text-align: center; margin-top: 50px; font-size: 12px; color: #888; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 16px; color: #000; font-weight: 700; }
+            .details { margin-bottom: 24px; border: 2px solid #1e3a8a; border-radius: 10px; padding: 14px 18px; background: #fff; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 6px 0; border-bottom: 1.5px dashed #1e3a8a; font-size: 14px; color: #000; font-weight: 800; }
+            .row:last-child { border-bottom: none; margin-bottom: 0; }
+            .label { font-weight: 900; color: #1e3a8a; }
+            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 24px 0; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #000; font-weight: 800; border-top: 1.5px solid #1e3a8a; padding-top: 10px; }
             @media print {
               body { padding: 0; }
               button { display: none; }
@@ -744,7 +743,7 @@ export default function LedgerView() {
             </div>
             <div class="row">
               <span class="label">ژمارەی فاتیرە:</span>
-              <span dir="ltr">${d.invoiceNumber}</span>
+              <span dir="ltr" style="color: #1e3a8a; font-weight: 900;">${d.invoiceNumber}</span>
             </div>
           </div>
           
@@ -752,14 +751,14 @@ export default function LedgerView() {
             ${(d.amount || 0).toLocaleString()} د.ع
           </div>
           
-          <div style="display: flex; justify-content: space-between; margin-top: 50px;">
+          <div style="display: flex; justify-content: space-between; margin-top: 50px; font-weight: 900; color: #000;">
             <div style="text-align: center;">
               <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی پێدەر'}</div>
-              <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
+              <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
               <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
-              <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
+              <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
           </div>
           
@@ -772,8 +771,7 @@ export default function LedgerView() {
         </body>
       </html>
     `;
-    printWindow.document.write(html);
-    printWindow.document.close();
+    printHtml(html, { isThermal: false });
   };
 
   const printInvoiceGroup = (group: any) => {
@@ -782,35 +780,34 @@ export default function LedgerView() {
       return;
     }
 
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
     const isCompany = group.entityType === 'company' || (group.type && group.type.includes('کۆمپانیا'));
 
     const itemsRows = group.items.map((item: any, idx: number) => `
-      <tr style="border-bottom: 1px solid #eee;">
-        <td style="padding: 10px 8px; text-align: center; color: #888;">${idx + 1}</td>
-        <td style="padding: 10px 8px; font-weight: bold; color: #1e293b;">${item.rawItem?.description || item.entityName || item.type}</td>
-        <td style="padding: 10px 8px; text-align: center;"><span style="background: #f1f5f9; padding: 3px 8px; border-radius: 6px; font-size: 11px;">${item.type}</span></td>
-        <td style="padding: 10px 8px; text-align: left; font-family: monospace; font-weight: bold; color: #0f172a;" dir="ltr">${(item.amount || 0).toLocaleString()} د.ع</td>
+      <tr>
+        <td style="padding: 10px 8px; text-align: center; color: #000; font-weight: 800; border: 1.5px solid #1e3a8a;">${idx + 1}</td>
+        <td style="padding: 10px 8px; font-weight: 900; color: #000; border: 1.5px solid #1e3a8a;">${item.rawItem?.description || item.entityName || item.type}</td>
+        <td style="padding: 10px 8px; text-align: center; font-weight: 900; color: #1e3a8a; border: 1.5px solid #1e3a8a;">${item.type}</td>
+        <td style="padding: 10px 8px; text-align: left; font-family: monospace; font-weight: 900; color: #000; border: 1.5px solid #1e3a8a;" dir="ltr">${(item.amount || 0).toLocaleString()} د.ع</td>
       </tr>
     `).join('');
 
     const html = `
-      <html dir="rtl">
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ckb">
         <head>
+          <meta charset="utf-8" />
           <title>وەسڵی کۆکراوە - ${group.invoiceNumber}</title>
           <style>
-            body { font-family: Tahoma, Arial, sans-serif; padding: 25px; color: #1e293b; }
-            .header { text-align: center; margin-bottom: 25px; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
-            .title { font-size: 22px; font-weight: bold; margin-bottom: 5px; color: #0f172a; }
-            .details { margin-bottom: 25px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
-            .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
-            .label { font-weight: bold; color: #64748b; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 16px; color: #000; font-weight: 700; }
+            .details { margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: #fff; padding: 14px 16px; border-radius: 10px; border: 2px solid #1e3a8a; }
+            .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13.5px; font-weight: 800; color: #000; }
+            .label { font-weight: 900; color: #1e3a8a; }
             table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
-            th { background: #f1f5f9; padding: 10px 8px; border-bottom: 2px solid #cbd5e1; font-weight: bold; color: #334155; }
-            .amount-box { font-size: 22px; font-weight: bold; text-align: center; margin: 30px 0; padding: 16px; border: 2px solid #0f172a; border-radius: 12px; background: #fafafa; }
-            .footer { text-align: center; margin-top: 45px; font-size: 12px; color: #94a3b8; }
+            th { background: #1e3a8a; color: #fff; padding: 10px 8px; border: 1.5px solid #1e3a8a; font-weight: 900; }
+            .amount-box { font-size: 20px; font-weight: 900; text-align: center; margin: 24px 0; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #000; font-weight: 800; border-top: 1.5px solid #1e3a8a; padding-top: 10px; }
             @media print {
               body { padding: 0; }
               button { display: none; }
@@ -827,7 +824,7 @@ export default function LedgerView() {
           <div class="details">
             <div class="row">
               <span class="label">ناوی لایەن:</span>
-              <span style="font-weight: bold; color: #0f172a;">${group.entityName}</span>
+              <span style="font-weight: 900; color: #000;">${group.entityName}</span>
             </div>
             <div class="row">
               <span class="label">تۆمارکار / کەس:</span>
@@ -839,7 +836,7 @@ export default function LedgerView() {
             </div>
             <div class="row">
               <span class="label">ژمارەی وەسڵ:</span>
-              <span dir="ltr" style="font-weight: bold; color: #4338ca;">${group.invoiceNumber}</span>
+              <span dir="ltr" style="font-weight: 900; color: #1e3a8a;">${group.invoiceNumber}</span>
             </div>
           </div>
 
@@ -848,8 +845,8 @@ export default function LedgerView() {
               <tr>
                 <th style="width: 35px;">#</th>
                 <th style="text-align: right;">بڕگە / ناوی کاڵا</th>
-                <th style="width: 100px; text-align: center;">جۆری مامەڵە</th>
-                <th style="width: 130px; text-align: left;">بڕی پارە</th>
+                <th style="width: 110px; text-align: center;">جۆری مامەڵە</th>
+                <th style="width: 140px; text-align: left;">بڕی پارە</th>
               </tr>
             </thead>
             <tbody>
@@ -861,14 +858,14 @@ export default function LedgerView() {
             کۆی گشتی ئەم وەسڵە: ${(group.totalAmount || 0).toLocaleString()} د.ع
           </div>
           
-          <div style="display: flex; justify-content: space-between; margin-top: 50px;">
+          <div style="display: flex; justify-content: space-between; margin-top: 50px; font-weight: 900; color: #000;">
             <div style="text-align: center;">
               <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی پێدەر'}</div>
-              <div style="margin-top: 35px; border-top: 1px solid #333; width: 150px;"></div>
+              <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
               <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
-              <div style="margin-top: 35px; border-top: 1px solid #333; width: 150px;"></div>
+              <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
           </div>
           
@@ -881,8 +878,7 @@ export default function LedgerView() {
         </body>
       </html>
     `;
-    printWindow.document.write(html);
-    printWindow.document.close();
+    printHtml(html, { isThermal: false });
   };
   return (
     <div className="space-y-6">

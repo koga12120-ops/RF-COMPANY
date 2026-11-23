@@ -7,7 +7,7 @@ import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, end
 import { Plus, Check, Trash2, Printer, FileText, X, Calendar, Search, CreditCard, CheckCircle2, TrendingDown, Clock, ArrowDownLeft, DollarSign, ChevronDown, ChevronUp, Layers, List, Package } from 'lucide-react';
 import ConfirmModal from '../common/ConfirmModal';
 import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
-import { printStatementPopup, renderReceiptHeaderHtml, printCompanyInvoiceDebtPopup } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml, printCompanyInvoiceDebtPopup, printHtml } from '../../lib/statementPrinter';
 
 export interface ProcessedDebtItem {
   id: string;
@@ -292,9 +292,6 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
 
 
   const printTransaction = (transaction: Transaction) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
     const isCompany = transaction.type.includes('company');
     const roleTitle = isCompany ? 'کۆمپانیا' : 'مارکێت';
     
@@ -304,19 +301,21 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
     if (transaction.type === 'cash' || transaction.type === 'company_cash') typeLabel = 'نەقد';
 
     const html = `
-      <html dir="rtl">
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ckb">
         <head>
+          <meta charset="utf-8" />
           <title>پسوڵەی پارە - ${transaction.relatedEntityId}</title>
           <style>
-            body { font-family: Tahoma, Arial, sans-serif; padding: 20px; color: #333; }
-            .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-            .title { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
-            .subtitle { color: #666; font-size: 14px; }
-            .details { margin-bottom: 30px; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 5px 0; border-bottom: 1px dashed #eee; }
-            .label { font-weight: bold; }
-            .amount { font-size: 20px; font-weight: bold; text-align: center; margin: 30px 0; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-            .footer { text-align: center; margin-top: 50px; font-size: 12px; color: #888; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 16px; color: #000; font-weight: 700; }
+            .details { margin-bottom: 24px; border: 2px solid #1e3a8a; border-radius: 10px; padding: 14px 18px; background: #fff; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 6px 0; border-bottom: 1.5px dashed #1e3a8a; font-size: 14px; font-weight: 800; color: #000; }
+            .row:last-child { border-bottom: none; margin-bottom: 0; }
+            .label { font-weight: 900; color: #1e3a8a; }
+            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 24px 0; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #000; font-weight: 800; border-top: 1.5px solid #1e3a8a; padding-top: 10px; }
             @media print {
               body { padding: 0; }
               button { display: none; }
@@ -342,7 +341,7 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
             ${transaction.invoiceNo ? `
             <div class="row">
               <span class="label">ژمارەی سەر وەسڵ:</span>
-              <span dir="ltr">#${transaction.invoiceNo}</span>
+              <span dir="ltr" style="color: #1e3a8a; font-weight: 900;">#${transaction.invoiceNo}</span>
             </div>` : ''}
             <div class="row">
               <span class="label">بەروار:</span>
@@ -358,14 +357,14 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
             ${(transaction.amount || 0).toLocaleString()} د.ع
           </div>
           
-          <div style="display: flex; justify-content: space-between; margin-top: 50px;">
+          <div style="display: flex; justify-content: space-between; margin-top: 50px; font-weight: 900; color: #000;">
             <div style="text-align: center;">
               <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی نوێنەر / کاشڤان'}</div>
-              <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
+              <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
               <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
-              <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
+              <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
           </div>
           
@@ -378,8 +377,7 @@ export default function DebtsView({ type = 'debt', targetName = 'مارکێت' }
         </body>
       </html>
     `;
-    printWindow.document.write(html);
-    printWindow.document.close();
+    printHtml(html, { isThermal: false });
   };
 
   const printStatement = async (entityName: string) => {

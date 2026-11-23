@@ -24,7 +24,7 @@ import {
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
-import { printStatementPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml, printHtml } from '../../lib/statementPrinter';
 
 export default function MarketsView() {
   const [markets, setMarkets] = useState<Market[]>([]);
@@ -255,30 +255,27 @@ export default function MarketsView() {
   };
 
   const printSingleInvoice = (title: string, entityName: string, amount: number, date: number, personName: string, items?: any[], invoiceNo?: string) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
     let itemsHtml = '';
     if (items && items.length > 0) {
       itemsHtml = `
         <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
           <thead>
-            <tr style="background-color: #f1f5f9;">
-              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 40px; text-align: center;">#</th>
-              <th style="padding: 8px; border: 1px solid #cbd5e1; text-align: right;">کاڵا</th>
-              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 80px; text-align: center;">دانە</th>
-              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 120px; text-align: left;">نرخ</th>
-              <th style="padding: 8px; border: 1px solid #cbd5e1; width: 140px; text-align: left;">کۆ</th>
+            <tr style="background-color: #1e3a8a;">
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 40px; text-align: center; color: #fff; font-weight: 900;">#</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; text-align: right; color: #fff; font-weight: 900;">کاڵا</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 80px; text-align: center; color: #fff; font-weight: 900;">دانە</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 120px; text-align: left; color: #fff; font-weight: 900;">نرخ</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 140px; text-align: left; color: #fff; font-weight: 900;">کۆ</th>
             </tr>
           </thead>
           <tbody>
             ${items.map((it, idx) => `
               <tr>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-weight: bold;">${it.name}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;" dir="ltr">${it.quantity}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: left;" dir="ltr">${(it.price || 0).toLocaleString()} د.ع</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: left; font-weight: bold;" dir="ltr">${((it.quantity || 0) * (it.price || 0)).toLocaleString()} د.ع</td>
+                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: center; color: #000; font-weight: 800;">${idx + 1}</td>
+                <td style="padding: 8px; border: 1.5px solid #1e3a8a; font-weight: 900; color: #000;">${it.name}</td>
+                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: center; color: #000; font-weight: 900;" dir="ltr">${it.quantity}</td>
+                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: left; color: #1e3a8a; font-weight: 900; font-family: monospace;" dir="ltr">${(it.price || 0).toLocaleString()} د.ع</td>
+                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: left; font-weight: 900; color: #000; font-family: monospace;" dir="ltr">${((it.quantity || 0) * (it.price || 0)).toLocaleString()} د.ع</td>
               </tr>
             `).join('')}
           </tbody>
@@ -286,17 +283,20 @@ export default function MarketsView() {
       `;
     }
 
-    const invText = invoiceNo ? `<div style="font-size: 14px; font-weight: bold; margin-top: 5px;">ژمارەی وەسڵ: #${invoiceNo}</div>` : '';
-
     const html = `
-      <html dir="rtl">
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ckb">
         <head>
+          <meta charset="utf-8" />
           <title>${title} - ${entityName} ${invoiceNo ? `#${invoiceNo}` : ''}</title>
           <style>
-            body { font-family: Tahoma, Arial, sans-serif; padding: 25px; color: #333; direction: rtl; }
-            .header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 15px; margin-bottom: 20px; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-            .amount { font-size: 22px; font-weight: bold; text-align: center; margin: 20px 0; padding: 12px; border: 2px solid #1e293b; border-radius: 8px; background-color: #f8fafc; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 16px; color: #000; direction: rtl; font-weight: 700; }
+            .info-card { border: 2px solid #1e3a8a; border-radius: 10px; padding: 12px 16px; margin-bottom: 18px; background: #fff; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #000; font-weight: 800; border-bottom: 1.5px dashed #1e3a8a; padding-bottom: 4px; }
+            .row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 20px 0; padding: 14px; border: 2px solid #1e3a8a; border-radius: 10px; background-color: #1e3a8a; color: #fff; }
             @media print { body { padding: 0; } }
           </style>
         </head>
@@ -306,24 +306,25 @@ export default function MarketsView() {
             invoiceNo: invoiceNo,
             date: date
           })}
-          <div class="row"><span>ناوی مارکێت:</span> <strong>${entityName}</strong></div>
-          <div class="row"><span>ئەنجامدەر:</span> <strong>${personName}</strong></div>
-          <div class="row"><span>بەروار:</span> <span dir="ltr">${format(date, 'yyyy-MM-dd HH:mm')}</span></div>
+          <div class="info-card">
+            <div class="row"><span style="color: #1e3a8a; font-weight: 900;">ناوی مارکێت:</span> <strong>${entityName}</strong></div>
+            <div class="row"><span style="color: #1e3a8a; font-weight: 900;">ئەنجامدەر:</span> <strong>${personName}</strong></div>
+            <div class="row"><span style="color: #1e3a8a; font-weight: 900;">بەروار:</span> <span dir="ltr" style="font-weight: 900;">${format(date, 'yyyy-MM-dd HH:mm')}</span></div>
+          </div>
           
           ${itemsHtml}
 
           <div class="amount" dir="ltr">${amount.toLocaleString()} د.ع</div>
 
-          <div style="display: flex; justify-content: space-between; margin-top: 40px;">
-            <div style="text-align: center;">واژووی مەندووب / کاشڤان<div style="margin-top: 30px; border-top: 1px solid #333; width: 120px;"></div></div>
-            <div style="text-align: center;">واژووی مارکێت<div style="margin-top: 30px; border-top: 1px solid #333; width: 120px;"></div></div>
+          <div style="display: flex; justify-content: space-between; margin-top: 40px; font-weight: 900; color: #000;">
+            <div style="text-align: center;">واژووی مەندووب / کاشڤان<div style="margin-top: 35px; border-top: 1.5px solid #000; width: 140px;"></div></div>
+            <div style="text-align: center;">واژووی مارکێت<div style="margin-top: 35px; border-top: 1.5px solid #000; width: 140px;"></div></div>
           </div>
           <script>window.onload = () => window.print();</script>
         </body>
       </html>
     `;
-    printWindow.document.write(html);
-    printWindow.document.close();
+    printHtml(html, { isThermal: false });
   };
 
   return (

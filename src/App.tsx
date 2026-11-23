@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Component, useState, useEffect } from 'react';
 import { db, auth } from './lib/firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { signInAnonymously } from 'firebase/auth';
@@ -6,6 +6,64 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import { Role } from './types';
 import { getStoredSession, clearUserSession, saveUserSession, UserSession } from './lib/authService';
+import PrintPreviewModal from './components/common/PrintPreviewModal';
+
+class AppErrorBoundary extends Component<
+  { children: React.ReactNode; onReset: () => void },
+  { hasError: boolean; errorMsg: string }
+> {
+  declare props: { children: React.ReactNode; onReset: () => void };
+  declare state: { hasError: boolean; errorMsg: string };
+  declare setState: (s: { hasError: boolean; errorMsg: string }) => void;
+
+  constructor(props: { children: React.ReactNode; onReset: () => void }) {
+    super(props);
+    this.state = { hasError: false, errorMsg: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, errorMsg: error?.message || 'هەڵەیەکی نادیار ڕوویدا' };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('AppErrorBoundary caught error:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4" dir="rtl">
+          <div className="bg-white rounded-2xl shadow-xl border border-red-200 max-w-md w-full p-6 text-center space-y-4">
+            <h2 className="text-lg font-bold text-red-700">کێشەیەک لە بارکردنی شاشەکەدا ڕوویدا</h2>
+            <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-200 break-words" dir="ltr">
+              {this.state.errorMsg}
+            </p>
+            <div className="flex gap-2 justify-center">
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold"
+              >
+                نوێکردنەوەی پەڕە
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  this.setState({ hasError: false, errorMsg: '' });
+                  this.props.onReset();
+                }}
+                className="px-4 py-2 bg-slate-200 text-slate-800 rounded-xl text-sm font-bold"
+              >
+                چوونەدەرەوە
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [session, setSession] = useState<UserSession | null>(null);
@@ -14,11 +72,15 @@ export default function App() {
   const [notice, setNotice] = useState<string>('');
 
   useEffect(() => {
-    // Initialize theme
-    const savedTheme = localStorage.getItem('app-theme') || 'light';
-    const root = document.documentElement;
-    root.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
-    root.classList.add(`theme-${savedTheme}`);
+    // Initialize theme safely
+    try {
+      const savedTheme = localStorage.getItem('app-theme') || 'light';
+      const root = document.documentElement;
+      root.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
+      root.classList.add(`theme-${savedTheme}`);
+    } catch {
+      document.documentElement.classList.add('theme-light');
+    }
 
     // Try background anonymous auth for Firebase if needed
     try {
@@ -137,16 +199,23 @@ export default function App() {
 
   if (!role || !session) {
     return (
-      <div>
-        {notice && (
-          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-md w-[90%] bg-amber-500 text-white px-4 py-3 rounded-2xl shadow-xl font-bold text-xs text-center animate-bounce">
-            {notice}
-          </div>
-        )}
-        <Login onSuccess={handleLoginSuccess} />
-      </div>
+      <AppErrorBoundary onReset={() => handleLogout()}>
+        <div>
+          {notice && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-md w-[90%] bg-amber-500 text-white px-4 py-3 rounded-2xl shadow-xl font-bold text-xs text-center animate-bounce">
+              {notice}
+            </div>
+          )}
+          <Login onSuccess={handleLoginSuccess} />
+        </div>
+      </AppErrorBoundary>
     );
   }
 
-  return <Dashboard role={role} onLogout={() => handleLogout()} session={session} />;
+  return (
+    <AppErrorBoundary onReset={() => handleLogout()}>
+      <Dashboard role={role} onLogout={() => handleLogout()} session={session} />
+      <PrintPreviewModal />
+    </AppErrorBoundary>
+  );
 }

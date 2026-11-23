@@ -60,10 +60,18 @@ export default function Dashboard({ role, onLogout, session }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<string>('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'sepia'>(() => {
-    return (localStorage.getItem('app-theme') as any) || 'light';
+    try {
+      return (localStorage.getItem('app-theme') as any) || 'light';
+    } catch {
+      return 'light';
+    }
   });
   const [isAdminLocked, setIsAdminLocked] = useState<boolean>(() => {
-    return sessionStorage.getItem('admin_system_locked') === 'true';
+    try {
+      return sessionStorage.getItem('admin_system_locked') === 'true';
+    } catch {
+      return false;
+    }
   });
   const [unlockCode, setUnlockCode] = useState('');
   const [lockError, setLockError] = useState('');
@@ -94,7 +102,11 @@ export default function Dashboard({ role, onLogout, session }: DashboardProps) {
     const root = document.documentElement;
     root.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
     root.classList.add(`theme-${theme}`);
-    localStorage.setItem('app-theme', theme);
+    try {
+      localStorage.setItem('app-theme', theme);
+    } catch {
+      // Ignore storage errors
+    }
   }, [theme]);
   const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
   const prevCountRef = useRef(0);

@@ -552,7 +552,7 @@ export default function WarehouseOrdersView() {
     }
   };
 
-  // Print Rep Order Slip
+  // Print Rep Order Slip (A4 Portrait)
   const printRepOrderSlip = (order: Order) => {
     let totalUnits = 0;
     let totalGifts = 0;
@@ -566,13 +566,13 @@ export default function WarehouseOrdersView() {
 
       return `
         <tr>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${qty}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; color: #b45309; font-weight: bold;">${giftQty > 0 ? giftQty + ' 🎁' : '-'}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-family: monospace;" dir="ltr">${(item.price || 0).toLocaleString()} IQD</td>
-          <td style="text-align: left; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-family: monospace;" dir="ltr">${(item.totalPrice || 0).toLocaleString()} IQD</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
+          <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #92400e; font-weight: 900;">${giftQty > 0 ? giftQty + ' 🎁' : '-'}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${(item.price || 0).toLocaleString()} IQD</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${(item.totalPrice || 0).toLocaleString()} IQD</td>
         </tr>
       `;
     }).join('');
@@ -582,22 +582,20 @@ export default function WarehouseOrdersView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title></title>
+          <title>وەسڵی تەڵەبیە #${order.invoiceNo || order.id}</title>
           <style>
-            @page { size: A4; margin: 15mm; }
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
-            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; font-size: 24px; color: #0f172a; }
-            .header h2 { margin: 5px 0; font-size: 18px; color: #4338ca; }
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #000; padding: 16px; line-height: 1.5; font-weight: 700; }
+            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #fff; padding: 12px 16px; border-radius: 8px; border: 2px solid #1e3a8a; color: #000; }
             .meta-item { display: flex; justify-content: space-between; }
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 8px; text-align: right; }
-            th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
-            .total-box { margin-top: 15px; padding: 16px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 10px; font-size: 15px; }
+            th, td { border: 1.5px solid #1e3a8a; padding: 10px 8px; text-align: right; color: #000; font-weight: 800; }
+            th { background-color: #1e3a8a; color: #fff; font-weight: 900; }
+            .total-box { margin-top: 15px; padding: 16px; background: #fff; border: 2px solid #1e3a8a; border-radius: 10px; font-size: 15px; color: #000; }
             .total-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; }
-            .sig-line { border-top: 1px dashed #94a3b8; margin-top: 40px; padding-top: 8px; font-weight: bold; }
+            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; font-weight: 900; color: #000; }
+            .sig-line { border-top: 1.5px solid #000; margin-top: 40px; padding-top: 8px; font-weight: 900; }
             @media print {
               body { padding: 0; }
               .no-print { display: none; }
@@ -617,9 +615,9 @@ export default function WarehouseOrdersView() {
           })}
 
           <div class="meta-grid">
-            <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(order.timestamp, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span>جۆری پارەدان:</span> <strong>${order.paymentType === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}</strong></div>
-            <div class="meta-item" style="grid-column: span 2;"><span>دۆخی داواکاری:</span> <strong>${order.status === 'completed' ? 'ئامادەکراو / تەواوکراو ✅' : 'چاوەڕوانکراو ⏳'}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(order.timestamp, 'yyyy/MM/dd - HH:mm')}</span></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">جۆری پارەدان:</span> <strong>${order.paymentType === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}</strong></div>
+            <div class="meta-item" style="grid-column: span 2;"><span style="color:#1e3a8a;font-weight:900;">دۆخی داواکاری:</span> <strong>${order.status === 'completed' ? 'ئامادەکراو / تەواوکراو ✅' : 'چاوەڕوانکراو ⏳'}</strong></div>
           </div>
 
           <table>
@@ -641,23 +639,23 @@ export default function WarehouseOrdersView() {
 
           <div class="total-box">
             <div class="total-row">
-              <span style="font-weight: bold; color: #334155;">کۆی گشتی عەدەدی کاڵاکان:</span>
-              <span dir="ltr" style="font-size: 16px; font-weight: bold;">${totalUnits} دانە ${totalGifts > 0 ? ` (+ ${totalGifts} هەدیە)` : ''}</span>
+              <span style="font-weight: 900; color: #000;">کۆی گشتی عەدەدی کاڵاکان:</span>
+              <span dir="ltr" style="font-size: 16px; font-weight: 900;">${totalUnits} دانە ${totalGifts > 0 ? ` (+ ${totalGifts} هەدیە)` : ''}</span>
             </div>
-            <div class="total-row" style="border-top: 1px solid #cbd5e1; padding-top: 8px; margin-top: 8px;">
-              <span style="font-weight: bold; color: #0f172a; font-size: 16px;">کۆی گشتی بڕی پارەی وەسڵ:</span>
-              <span dir="ltr" style="color: #4338ca; font-size: 20px; font-weight: bold;">${(order.totalAmount || 0).toLocaleString()} IQD</span>
+            <div class="total-row" style="border-top: 2px solid #1e3a8a; padding-top: 8px; margin-top: 8px;">
+              <span style="font-weight: 900; color: #000; font-size: 16px;">کۆی گشتی بڕی پارەی وەسڵ:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 20px; font-weight: 900;">${(order.totalAmount || 0).toLocaleString()} IQD</span>
             </div>
           </div>
 
           <div class="signatures">
             <div>
-              <div>واژۆی بەرپرسی کۆگا (ئامادەکار)</div>
+              <div>واژووی وەرگر</div>
               <div class="sig-line">ناو و واژۆ</div>
             </div>
             <div>
-              <div>واژووی مارکێت</div>
-              <div class="sig-line">واژوو یان مۆری مارکێت</div>
+              <div>واژووی شوفێر</div>
+              <div class="sig-line">ناو و واژۆ</div>
             </div>
           </div>
 
@@ -771,7 +769,7 @@ export default function WarehouseOrdersView() {
     }
   };
 
-  // Print Cashvan Requisition Slip
+  // Print Cashvan Requisition Slip (A4 Portrait)
   const printRequisitionReceipt = (req: CashvanRequisition) => {
     let totalUnits = 0;
     const itemsHtml = req.items.map((item, idx) => {
@@ -781,10 +779,10 @@ export default function WarehouseOrdersView() {
 
       return `
         <tr>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${qty}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
+          <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
         </tr>
       `;
     }).join('');
@@ -794,22 +792,20 @@ export default function WarehouseOrdersView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title></title>
+          <title>وەسڵی داواکاری پێشوەختە #${req.id}</title>
           <style>
-            @page { size: A4; margin: 15mm; }
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
-            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; font-size: 24px; color: #0f172a; }
-            .header h2 { margin: 5px 0; font-size: 18px; color: #4338ca; }
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #000; padding: 16px; line-height: 1.5; font-weight: 700; }
+            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #fff; padding: 12px 16px; border-radius: 8px; border: 2px solid #1e3a8a; color: #000; }
             .meta-item { display: flex; justify-content: space-between; }
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 8px; text-align: right; }
-            th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
-            .total-box { margin-top: 15px; padding: 16px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 10px; font-size: 15px; }
+            th, td { border: 1.5px solid #1e3a8a; padding: 10px 8px; text-align: right; color: #000; font-weight: 800; }
+            th { background-color: #1e3a8a; color: #fff; font-weight: 900; }
+            .total-box { margin-top: 15px; padding: 16px; background: #fff; border: 2px solid #1e3a8a; border-radius: 10px; font-size: 15px; color: #000; }
             .total-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; }
-            .sig-line { border-top: 1px dashed #94a3b8; margin-top: 40px; padding-top: 8px; font-weight: bold; }
+            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; font-weight: 900; color: #000; }
+            .sig-line { border-top: 1.5px solid #000; margin-top: 40px; padding-top: 8px; font-weight: 900; }
             @media print {
               body { padding: 0; }
               .no-print { display: none; }
@@ -827,10 +823,10 @@ export default function WarehouseOrdersView() {
           })}
 
           <div class="meta-grid">
-            <div class="meta-item"><span>ناوی کاشڤان:</span> <strong>${req.cashvanName}</strong></div>
-            <div class="meta-item"><span>کۆدی داواکاری:</span> <strong dir="ltr">${req.id}</strong></div>
-            <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(req.createdAt, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span>دۆخی داواکاری:</span> <strong>${req.status === 'completed' ? 'بارکراوە بۆ ڤان ✅' : req.status === 'preparing' ? 'خەریکی ئامادەکردنە ⏳' : 'چاوەڕوانکراوە ⏱️'}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ناوی کاشڤان:</span> <strong>${req.cashvanName}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">کۆدی داواکاری:</span> <strong dir="ltr">${req.id}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(req.createdAt, 'yyyy/MM/dd - HH:mm')}</span></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">دۆخی داواکاری:</span> <strong>${req.status === 'completed' ? 'بارکراوە بۆ ڤان ✅' : req.status === 'preparing' ? 'خەریکی ئامادەکردنە ⏳' : 'چاوەڕوانکراوە ⏱️'}</strong></div>
           </div>
 
           <table>
@@ -849,8 +845,8 @@ export default function WarehouseOrdersView() {
 
           <div class="total-box">
             <div class="total-row">
-              <span style="font-weight: bold; color: #334155;">کۆی گشتی ژمارەی کاڵاکانی داواکاری:</span>
-              <span dir="ltr" style="color: #4338ca; font-size: 17px; font-weight: bold;">${totalUnits} دانە</span>
+              <span style="font-weight: 900; color: #000;">کۆی گشتی ژمارەی کاڵاکانی داواکاری:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 17px; font-weight: 900;">${totalUnits} دانە</span>
             </div>
           </div>
 
@@ -926,10 +922,10 @@ export default function WarehouseOrdersView() {
 
       return `
         <tr>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${qty}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
+          <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
         </tr>
       `;
     }).join('');
@@ -939,22 +935,20 @@ export default function WarehouseOrdersView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title></title>
+          <title>پسوڵەی بارکردن #${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</title>
           <style>
-            @page { size: A4; margin: 15mm; }
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
-            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; font-size: 24px; color: #0f172a; }
-            .header h2 { margin: 5px 0; font-size: 18px; color: #4338ca; }
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #000; padding: 16px; line-height: 1.5; font-weight: 700; }
+            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #fff; padding: 12px 16px; border-radius: 8px; border: 2px solid #1e3a8a; color: #000; }
             .meta-item { display: flex; justify-content: space-between; }
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 8px; text-align: right; }
-            th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
-            .total-box { margin-top: 15px; padding: 16px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 10px; font-size: 15px; }
+            th, td { border: 1.5px solid #1e3a8a; padding: 10px 8px; text-align: right; color: #000; font-weight: 800; }
+            th { background-color: #1e3a8a; color: #fff; font-weight: 900; }
+            .total-box { margin-top: 15px; padding: 16px; background: #fff; border: 2px solid #1e3a8a; border-radius: 10px; font-size: 15px; color: #000; }
             .total-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; }
-            .sig-line { border-top: 1px dashed #94a3b8; margin-top: 40px; padding-top: 8px; font-weight: bold; }
+            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; font-weight: 900; color: #000; }
+            .sig-line { border-top: 1.5px solid #000; margin-top: 40px; padding-top: 8px; font-weight: 900; }
             @media print {
               body { padding: 0; }
               .no-print { display: none; }
@@ -972,10 +966,10 @@ export default function WarehouseOrdersView() {
           })}
 
           <div class="meta-grid">
-            <div class="meta-item"><span>ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
-            <div class="meta-item"><span>ژمارەی پسوڵە:</span> <strong dir="ltr">${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</strong></div>
-            <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(transfer.date, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span>کۆی جۆری کاڵاکان:</span> <strong>${transfer.items.length} جۆر</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ژمارەی پسوڵە:</span> <strong dir="ltr">${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(transfer.date, 'yyyy/MM/dd - HH:mm')}</span></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">کۆی جۆری کاڵاکان:</span> <strong>${transfer.items.length} جۆر</strong></div>
           </div>
 
           <table>
@@ -994,8 +988,8 @@ export default function WarehouseOrdersView() {
 
           <div class="total-box">
             <div class="total-row">
-              <span style="font-weight: bold; color: #334155;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
-              <span dir="ltr" style="color: #4338ca; font-size: 17px; font-weight: bold;">${totalUnits} دانە / کارتۆن</span>
+              <span style="font-weight: 900; color: #000;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 17px; font-weight: 900;">${totalUnits} دانە / کارتۆن</span>
             </div>
           </div>
 

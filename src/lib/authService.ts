@@ -42,34 +42,42 @@ export const getStoredSession = (): UserSession | null => {
 };
 
 export const saveUserSession = (session: UserSession, remember: boolean = true) => {
-  const json = JSON.stringify(session);
-  if (remember) {
-    localStorage.setItem(SESSION_KEY, json);
-  }
-  sessionStorage.setItem(SESSION_KEY, json);
-  
-  // Also keep backward-compatible keys for views relying on them
-  if (session.accessCode) {
-    sessionStorage.setItem('active_session_pin', session.accessCode);
-  }
-  if (session.repId) {
-    sessionStorage.setItem('active_rep_id', session.repId);
-  }
-  if (session.name && session.role === 'sales_rep') {
-    sessionStorage.setItem('active_rep_name', session.name);
-  }
-  if (session.cashvanName && session.role === 'cashvan') {
-    sessionStorage.setItem('active_cashvan_name', session.cashvanName);
+  try {
+    const json = JSON.stringify(session);
+    if (remember) {
+      localStorage.setItem(SESSION_KEY, json);
+    }
+    sessionStorage.setItem(SESSION_KEY, json);
+    
+    // Also keep backward-compatible keys for views relying on them
+    if (session.accessCode) {
+      sessionStorage.setItem('active_session_pin', session.accessCode);
+    }
+    if (session.repId) {
+      sessionStorage.setItem('active_rep_id', session.repId);
+    }
+    if (session.name && session.role === 'sales_rep') {
+      sessionStorage.setItem('active_rep_name', session.name);
+    }
+    if (session.cashvanName && session.role === 'cashvan') {
+      sessionStorage.setItem('active_cashvan_name', session.cashvanName);
+    }
+  } catch {
+    // Ignore storage errors
   }
 };
 
 export const clearUserSession = () => {
-  localStorage.removeItem(SESSION_KEY);
-  sessionStorage.removeItem(SESSION_KEY);
-  sessionStorage.removeItem('active_session_pin');
-  sessionStorage.removeItem('active_rep_id');
-  sessionStorage.removeItem('active_rep_name');
-  sessionStorage.removeItem('active_cashvan_name');
+  try {
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem('active_session_pin');
+    sessionStorage.removeItem('active_rep_id');
+    sessionStorage.removeItem('active_rep_name');
+    sessionStorage.removeItem('active_cashvan_name');
+  } catch {
+    // Ignore storage errors
+  }
 };
 
 export async function loginWithCredentials(

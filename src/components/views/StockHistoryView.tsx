@@ -7,7 +7,7 @@ import { Package, Search, Calendar, Trash2, Edit2, Printer, FileText, X, Check, 
 import { format, startOfDay, endOfDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import { syncHistoryInvoice } from '../../lib/invoiceSync';
-import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { renderReceiptHeaderHtml, printHtml } from '../../lib/statementPrinter';
 
 export default function StockHistoryView() {
   const [history, setHistory] = useState<StockHistory[]>([]);
@@ -229,12 +229,13 @@ export default function StockHistoryView() {
         <head>
           <title>هەموو هاتنەکانی کاڵا - ${itemName}</title>
           <style>
-            body { font-family: Tahoma, Arial, sans-serif; padding: 20px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; text-align: right; }
-            th, td { border: 1px solid #ddd; padding: 12px; }
-            th { background-color: #f8f9fa; }
-            .header { text-align: center; margin-bottom: 20px; }
-            .summary { margin-top: 20px; padding: 15px; border: 2px solid #333; border-radius: 8px; font-weight: bold; font-size: 18px; }
+            @page { size: A4 portrait; margin: 12mm; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            body { font-family: Tahoma, Arial, sans-serif; padding: 14px; color: #000000; background: #fff; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; margin-top: 18px; text-align: right; }
+            th, td { border: 1.5px solid #000000; padding: 10px 12px; font-weight: 800; color: #000000; }
+            th { background-color: #1e3a8a; color: #ffffff; font-weight: 900; }
+            .summary { margin-top: 20px; padding: 15px; border: 2.5px solid #1e3a8a; border-radius: 8px; font-weight: 900; font-size: 18px; color: #172554; background: #ffffff; }
             @media print { body { padding: 0; } }
           </style>
         </head>
@@ -254,29 +255,24 @@ export default function StockHistoryView() {
         </body>
       </html>
     `;
-    const win = window.open('', '_blank');
-    win?.document.write(html);
-    win?.document.close();
+    printHtml(html, { isThermal: false });
   };
 
   const printHistory = (history: StockHistory) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-
     const html = `
       <html dir="rtl">
         <head>
           <title>پسوڵەی هاتنی کاڵا - ${history.itemName}</title>
           <style>
-            body { font-family: Tahoma, Arial, sans-serif; padding: 20px; color: #333; }
-            .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-            .title { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
-            .subtitle { color: #666; font-size: 14px; }
-            .details { margin-bottom: 30px; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 5px 0; border-bottom: 1px dashed #eee; }
-            .label { font-weight: bold; }
-            .amount { font-size: 20px; font-weight: bold; text-align: center; margin: 30px 0; padding: 15px; border: 2px solid #333; border-radius: 8px; }
-            .footer { text-align: center; margin-top: 50px; font-size: 12px; color: #888; }
+            @page { size: A4 portrait; margin: 12mm; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            body { font-family: Tahoma, Arial, sans-serif; padding: 16px; color: #000000; background: #fff; font-weight: 700; }
+            .details { margin-bottom: 24px; border: 2px solid #1e3a8a; border-radius: 10px; padding: 14px 18px; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 6px 0; border-bottom: 1.5px dashed #1e3a8a; font-size: 15px; font-weight: 800; color: #000000; }
+            .row:last-child { border-bottom: none; margin-bottom: 0; }
+            .label { font-weight: 900; color: #172554; }
+            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 26px 0; padding: 16px; border: 2.5px solid #1e3a8a; border-radius: 10px; color: #1e3a8a; background: #ffffff; }
+            .footer { text-align: center; margin-top: 40px; font-size: 13px; color: #000000; font-weight: 800; }
             @media print {
               body { padding: 0; }
               button { display: none; }
@@ -298,7 +294,7 @@ export default function StockHistoryView() {
             ${history.invoiceNo ? `
             <div class="row">
               <span class="label">ژمارەی سەر وەسڵ:</span>
-              <span dir="ltr">#${history.invoiceNo}</span>
+              <span dir="ltr" style="color: #1e3a8a; font-weight: 900;">#${history.invoiceNo}</span>
             </div>` : ''}
             <div class="row">
               <span class="label">بەروار:</span>
@@ -310,10 +306,10 @@ export default function StockHistoryView() {
             بڕی هاتوو: ${history.quantityAdded}
           </div>
           
-          <div style="display: flex; justify-content: space-between; margin-top: 50px;">
+          <div style="display: flex; justify-content: space-between; margin-top: 50px; font-weight: 900; color: #000000;">
             <div style="text-align: center;">
               <div>واژووی کۆگا</div>
-              <div style="margin-top: 30px; border-top: 1px solid #333; width: 150px;"></div>
+              <div style="margin-top: 30px; border-top: 2px solid #000000; width: 160px;"></div>
             </div>
           </div>
           
@@ -326,8 +322,7 @@ export default function StockHistoryView() {
         </body>
       </html>
     `;
-    printWindow.document.write(html);
-    printWindow.document.close();
+    printHtml(html, { isThermal: false });
   };
 
   const filteredHistory = history.filter(h => 

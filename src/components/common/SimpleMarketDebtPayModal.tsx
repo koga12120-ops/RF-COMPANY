@@ -285,7 +285,8 @@ export default function SimpleMarketDebtPayModal({
           receiptNo: cleanReceipt || undefined,
           notes: cleanNotes || undefined,
           previousDebt: computedDebt,
-          remainingDebt: remainingDebt
+          remainingDebt: remainingDebt,
+          isA4: storedSession?.role === 'admin' || storedSession?.role === 'warehouse'
         });
       }
 

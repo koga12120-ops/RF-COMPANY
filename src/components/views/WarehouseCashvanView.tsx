@@ -5,7 +5,7 @@ import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, CashvanTransfer, CashvanRequisition } from '../../types';
 import { Plus, Search, Check, Send, Printer, Truck, ClipboardList, CheckCircle2, Clock, Eye, X, Package, Edit2, Trash2, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
-import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { renderReceiptHeaderHtml, printHtml } from '../../lib/statementPrinter';
 import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
 
 export default function WarehouseCashvanView() {
@@ -197,10 +197,10 @@ export default function WarehouseCashvanView() {
 
       return `
         <tr>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${qty}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
+          <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
         </tr>
       `;
     }).join('');
@@ -210,22 +210,20 @@ export default function WarehouseCashvanView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title></title>
+          <title>پسوڵەی بارکردن #${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</title>
           <style>
-            @page { size: A4; margin: 15mm; }
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
-            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; font-size: 24px; color: #0f172a; }
-            .header h2 { margin: 5px 0; font-size: 18px; color: #4338ca; }
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #000; padding: 16px; line-height: 1.5; font-weight: 700; }
+            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #fff; padding: 12px 16px; border-radius: 8px; border: 2px solid #1e3a8a; color: #000; }
             .meta-item { display: flex; justify-content: space-between; }
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 8px; text-align: right; }
-            th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
-            .total-box { margin-top: 15px; padding: 16px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 10px; font-size: 15px; }
+            th, td { border: 1.5px solid #1e3a8a; padding: 10px 8px; text-align: right; color: #000; font-weight: 800; }
+            th { background-color: #1e3a8a; color: #fff; font-weight: 900; }
+            .total-box { margin-top: 15px; padding: 16px; background: #fff; border: 2px solid #1e3a8a; border-radius: 10px; font-size: 15px; color: #000; }
             .total-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; }
-            .sig-line { border-top: 1px dashed #94a3b8; margin-top: 40px; padding-top: 8px; font-weight: bold; }
+            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; font-weight: 900; color: #000; }
+            .sig-line { border-top: 1.5px solid #000; margin-top: 40px; padding-top: 8px; font-weight: 900; }
             @media print {
               body { padding: 0; }
               .no-print { display: none; }
@@ -243,10 +241,10 @@ export default function WarehouseCashvanView() {
           })}
 
           <div class="meta-grid">
-            <div class="meta-item"><span>ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
-            <div class="meta-item"><span>ژمارەی پسوڵە:</span> <strong dir="ltr">${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</strong></div>
-            <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(transfer.date, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span>کۆی جۆری کاڵاکان:</span> <strong>${transfer.items.length} جۆر</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ژمارەی پسوڵە:</span> <strong dir="ltr">${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(transfer.date, 'yyyy/MM/dd - HH:mm')}</span></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">کۆی جۆری کاڵاکان:</span> <strong>${transfer.items.length} جۆر</strong></div>
           </div>
 
           <table>
@@ -265,8 +263,8 @@ export default function WarehouseCashvanView() {
 
           <div class="total-box">
             <div class="total-row">
-              <span style="font-weight: bold; color: #334155;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
-              <span dir="ltr" style="color: #4338ca; font-size: 17px; font-weight: bold;">${totalUnits} دانە / کارتۆن</span>
+              <span style="font-weight: 900; color: #000;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 17px; font-weight: 900;">${totalUnits} دانە / کارتۆن</span>
             </div>
           </div>
 
@@ -290,11 +288,7 @@ export default function WarehouseCashvanView() {
       </html>
     `;
 
-    const win = window.open('', '_blank');
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-    }
+    printHtml(html, { isThermal: false });
   };
 
   const handleTransfer = async () => {
@@ -735,10 +729,10 @@ export default function WarehouseCashvanView() {
       totalUnits += qty;
       return `
         <tr>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.name}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px; font-weight: bold; font-size: 14px;">${qty}</td>
-          <td style="text-align: center; border: 1px solid #cbd5e1; padding: 8px;">${unitLabel}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
+          <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
         </tr>
       `;
     }).join('');
@@ -750,21 +744,19 @@ export default function WarehouseCashvanView() {
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title></title>
+          <title>وەسڵی داواکاری پێشوەختە #${req.requisitionNo || ('REQ-' + req.id.slice(-6))}</title>
           <style>
-            @page { size: A4; margin: 15mm; }
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #1e293b; padding: 20px; line-height: 1.5; }
-            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 20px; }
-            .header h1 { margin: 0; font-size: 24px; color: #0f172a; }
-            .header h2 { margin: 5px 0; font-size: 18px; color: #4338ca; }
-            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            @page { size: A4 portrait; margin: 12mm; }
+            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #000; padding: 16px; line-height: 1.5; font-weight: 700; }
+            .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 14px; background: #fff; padding: 12px 16px; border-radius: 8px; border: 2px solid #1e3a8a; color: #000; }
             .meta-item { display: flex; justify-content: space-between; }
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 8px; text-align: right; }
-            th { background-color: #f1f5f9; color: #334155; font-weight: bold; }
-            .notes-box { margin-top: 15px; padding: 12px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; font-size: 13px; color: #92400e; }
-            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; }
-            .sig-line { border-top: 1px dashed #94a3b8; margin-top: 40px; padding-top: 8px; font-weight: bold; }
+            th, td { border: 1.5px solid #1e3a8a; padding: 10px 8px; text-align: right; color: #000; font-weight: 800; }
+            th { background-color: #1e3a8a; color: #fff; font-weight: 900; }
+            .notes-box { margin-top: 15px; padding: 12px; background: #fff; border: 2px solid #92400e; border-radius: 8px; font-size: 13px; color: #000; font-weight: 800; }
+            .signatures { margin-top: 50px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; text-align: center; font-weight: 900; color: #000; }
+            .sig-line { border-top: 1.5px solid #000; margin-top: 40px; padding-top: 8px; font-weight: 900; }
             @media print {
               body { padding: 0; }
               .no-print { display: none; }
@@ -782,10 +774,10 @@ export default function WarehouseCashvanView() {
           })}
 
           <div class="meta-grid">
-            <div class="meta-item"><span>ناوی کاشڤان / مەندووب:</span> <strong>${req.cashvanName}</strong></div>
-            <div class="meta-item"><span>ژمارەی داواکاری:</span> <strong dir="ltr">${req.requisitionNo || ('REQ-' + req.id.slice(-6))}</strong></div>
-            <div class="meta-item"><span>بەروار و کات:</span> <span dir="ltr">${format(req.createdAt, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span>دۆخی داواکاری:</span> <strong>${statusText}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ناوی کاشڤان / مەندووب:</span> <strong>${req.cashvanName}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ژمارەی داواکاری:</span> <strong dir="ltr">${req.requisitionNo || ('REQ-' + req.id.slice(-6))}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(req.createdAt, 'yyyy/MM/dd - HH:mm')}</span></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">دۆخی داواکاری:</span> <strong>${statusText}</strong></div>
           </div>
 
           <table>
@@ -802,9 +794,9 @@ export default function WarehouseCashvanView() {
             </tbody>
           </table>
 
-          <div style="padding: 14px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; display: flex; justify-content: space-between; font-size: 15px; font-weight: bold;">
+          <div style="padding: 14px; background: #fff; border: 2px solid #1e3a8a; border-radius: 8px; display: flex; justify-content: space-between; font-size: 15px; font-weight: 900; color: #000;">
             <span>کۆی گشتی ژمارەی کاڵا داواکراوەکان:</span>
-            <span dir="ltr" style="color: #4338ca;">${totalUnits} دانە / کارتۆن (${req.items.length} جۆر کاڵا)</span>
+            <span dir="ltr" style="color: #1e3a8a;">${totalUnits} دانە / کارتۆن (${req.items.length} جۆر کاڵا)</span>
           </div>
 
           ${req.notes ? `
@@ -833,11 +825,7 @@ export default function WarehouseCashvanView() {
       </html>
     `;
 
-    const win = window.open('', '_blank');
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-    }
+    printHtml(html, { isThermal: false });
   };
 
   // Requisition Edit Handlers
