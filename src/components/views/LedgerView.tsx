@@ -694,6 +694,16 @@ export default function LedgerView() {
     }
 
     const isCompany = d.entityType === 'company' || (d.type && d.type.includes('کۆمپانیا'));
+    let marketDebt = 0;
+    if (!isCompany && d.entityName) {
+      const entityKey = (d.entityName || '').trim().toLowerCase();
+      transactions.forEach(t => {
+        if ((t.relatedEntityId || '').trim().toLowerCase() !== entityKey) return;
+        if (t.type === 'debt' || t.type === 'market_debt') marketDebt += t.amount || 0;
+        else if (t.type === 'paid_debt' || t.type === 'market_paid_debt') marketDebt -= t.amount || 0;
+      });
+      marketDebt = Math.max(0, marketDebt);
+    }
 
     const html = `
       <!DOCTYPE html>
@@ -709,7 +719,8 @@ export default function LedgerView() {
             .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 6px 0; border-bottom: 1.5px dashed #1e3a8a; font-size: 14px; color: #000; font-weight: 800; }
             .row:last-child { border-bottom: none; margin-bottom: 0; }
             .label { font-weight: 900; color: #1e3a8a; }
-            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 24px 0; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 24px 0 10px; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .total-debt { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; padding: 12px 16px; border: 2px dashed #1e3a8a; border-radius: 10px; color: #9f1239; background: #fff; margin-bottom: 16px; }
             .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #000; font-weight: 800; border-top: 1.5px solid #1e3a8a; padding-top: 10px; }
             @media print {
               body { padding: 0; }
@@ -719,7 +730,9 @@ export default function LedgerView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: 'پسوڵەی دەفتەر حسابات',
+            isSale: !isCompany,
+            customerName: d.entityName,
+            repName: d.personName,
             invoiceNo: d.invoiceNumber,
             date: d.date
           })}
@@ -750,14 +763,20 @@ export default function LedgerView() {
           <div class="amount" dir="ltr">
             ${(d.amount || 0).toLocaleString()} د.ع
           </div>
+
+          ${!isCompany ? `
+          <div class="total-debt">
+            <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+            <span dir="ltr" style="font-family: monospace;">${marketDebt.toLocaleString()} د.ع</span>
+          </div>` : ''}
           
           <div style="display: flex; justify-content: space-between; margin-top: 50px; font-weight: 900; color: #000;">
             <div style="text-align: center;">
-              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی پێدەر'}</div>
+              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی شوفێر'}</div>
               <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
-              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
+              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت/کۆگا'}</div>
               <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
           </div>
@@ -781,6 +800,16 @@ export default function LedgerView() {
     }
 
     const isCompany = group.entityType === 'company' || (group.type && group.type.includes('کۆمپانیا'));
+    let marketDebt = 0;
+    if (!isCompany && group.entityName) {
+      const entityKey = (group.entityName || '').trim().toLowerCase();
+      transactions.forEach(t => {
+        if ((t.relatedEntityId || '').trim().toLowerCase() !== entityKey) return;
+        if (t.type === 'debt' || t.type === 'market_debt') marketDebt += t.amount || 0;
+        else if (t.type === 'paid_debt' || t.type === 'market_paid_debt') marketDebt -= t.amount || 0;
+      });
+      marketDebt = Math.max(0, marketDebt);
+    }
 
     const itemsRows = group.items.map((item: any, idx: number) => `
       <tr>
@@ -806,7 +835,8 @@ export default function LedgerView() {
             .label { font-weight: 900; color: #1e3a8a; }
             table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
             th { background: #1e3a8a; color: #fff; padding: 10px 8px; border: 1.5px solid #1e3a8a; font-weight: 900; }
-            .amount-box { font-size: 20px; font-weight: 900; text-align: center; margin: 24px 0; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .amount-box { font-size: 20px; font-weight: 900; text-align: center; margin: 24px 0 10px; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .total-debt { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; padding: 12px 16px; border: 2px dashed #1e3a8a; border-radius: 10px; color: #9f1239; background: #fff; margin-bottom: 16px; }
             .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #000; font-weight: 800; border-top: 1.5px solid #1e3a8a; padding-top: 10px; }
             @media print {
               body { padding: 0; }
@@ -816,7 +846,9 @@ export default function LedgerView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: `پسوڵەی وەسڵی کۆکراوە (${group.itemsCount} کاڵا)`,
+            isSale: !isCompany,
+            customerName: group.entityName,
+            repName: group.personName,
             invoiceNo: group.invoiceNumber,
             date: group.date
           })}
@@ -857,14 +889,20 @@ export default function LedgerView() {
           <div class="amount-box" dir="ltr">
             کۆی گشتی ئەم وەسڵە: ${(group.totalAmount || 0).toLocaleString()} د.ع
           </div>
+
+          ${!isCompany ? `
+          <div class="total-debt">
+            <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+            <span dir="ltr" style="font-family: monospace;">${marketDebt.toLocaleString()} د.ع</span>
+          </div>` : ''}
           
           <div style="display: flex; justify-content: space-between; margin-top: 50px; font-weight: 900; color: #000;">
             <div style="text-align: center;">
-              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی پێدەر'}</div>
+              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی شوفێر'}</div>
               <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
-              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
+              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت/کۆگا'}</div>
               <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
           </div>

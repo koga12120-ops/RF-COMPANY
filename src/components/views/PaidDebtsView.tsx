@@ -184,6 +184,21 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
     if (transaction.type.includes('paid')) typeLabel = 'واسڵکراو';
     if (transaction.type === 'cash' || transaction.type === 'company_cash') typeLabel = 'نەقد';
 
+    let marketDebt = 0;
+    if (!isCompany && transaction.relatedEntityId) {
+      try {
+        const snap = await getDocs(query(collection(db, 'transactions'), where('relatedEntityId', '==', transaction.relatedEntityId)));
+        snap.forEach(d => {
+          const data = d.data();
+          if (data.type === 'debt' || data.type === 'market_debt') marketDebt += data.amount || 0;
+          else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') marketDebt -= data.amount || 0;
+        });
+        marketDebt = Math.max(0, marketDebt);
+      } catch (e) {
+        console.error('Error computing market debt', e);
+      }
+    }
+
     const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ckb">
@@ -198,7 +213,8 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
             .row { display: flex; justify-content: space-between; margin-bottom: 10px; padding: 6px 0; border-bottom: 1.5px dashed #1e3a8a; font-size: 14px; font-weight: 800; color: #000; }
             .row:last-child { border-bottom: none; margin-bottom: 0; }
             .label { font-weight: 900; color: #1e3a8a; }
-            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 24px 0; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 24px 0 10px; padding: 16px; border: 2px solid #1e3a8a; border-radius: 10px; background: #1e3a8a; color: #fff; }
+            .total-debt { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; padding: 12px 16px; border: 2px dashed #1e3a8a; border-radius: 10px; color: #9f1239; background: #fff; margin-bottom: 16px; }
             .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #000; font-weight: 800; border-top: 1.5px solid #1e3a8a; padding-top: 10px; }
             @media print {
               body { padding: 0; }
@@ -208,7 +224,8 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: 'پسوڵەی وەرگرتن / پێدان',
+            isSale: !isCompany,
+            customerName: transaction.relatedEntityId,
             invoiceNo: transaction.invoiceNo,
             date: transaction.date
           })}
@@ -240,14 +257,20 @@ export default function PaidDebtsView({ type = 'paid_debt' }: { type?: 'paid_deb
           <div class="amount" dir="ltr">
             ${(transaction.amount || 0).toLocaleString()} د.ع
           </div>
+
+          ${!isCompany ? `
+          <div class="total-debt">
+            <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+            <span dir="ltr" style="font-family: monospace;">${marketDebt.toLocaleString()} د.ع</span>
+          </div>` : ''}
           
           <div style="display: flex; justify-content: space-between; margin-top: 50px; font-weight: 900; color: #000;">
             <div style="text-align: center;">
-              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی نوێنەر / کاشڤان'}</div>
+              <div>${isCompany ? 'واژووی نوێنەری کۆمپانیا' : 'واژووی شوفێر'}</div>
               <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
             <div style="text-align: center;">
-              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت'}</div>
+              <div>${isCompany ? 'واژووی وەرگر / ژمێریار' : 'واژووی مارکێت/کۆگا'}</div>
               <div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div>
             </div>
           </div>

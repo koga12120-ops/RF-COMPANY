@@ -24,7 +24,7 @@ import {
 import { format } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import PayCompanyDebtModal from '../common/PayCompanyDebtModal';
-import { printStatementPopup, renderReceiptHeaderHtml, printHtml } from '../../lib/statementPrinter';
+import { printStatementPopup, renderReceiptHeaderHtml, printHtml, mergeReceiptItemsWithGifts } from '../../lib/statementPrinter';
 
 export default function MarketsView() {
   const [markets, setMarkets] = useState<Market[]>([]);
@@ -255,29 +255,51 @@ export default function MarketsView() {
   };
 
   const printSingleInvoice = (title: string, entityName: string, amount: number, date: number, personName: string, items?: any[], invoiceNo?: string) => {
+    const cleanEntity = (entityName || '').trim().toLowerCase();
+    const marketObj = markets.find(m => (m.name || '').trim().toLowerCase() === cleanEntity);
+    let marketDebt = 0;
+    transactions.forEach(t => {
+      if ((t.relatedEntityId || '').trim().toLowerCase() !== cleanEntity) return;
+      if (t.type === 'debt' || t.type === 'market_debt') {
+        marketDebt += t.amount || 0;
+      } else if (t.type === 'paid_debt' || t.type === 'market_paid_debt') {
+        marketDebt -= t.amount || 0;
+      }
+    });
+    if (marketDebt <= 0 && marketObj?.totalDebt) {
+      marketDebt = marketObj.totalDebt;
+    }
+    marketDebt = Math.max(0, marketDebt);
+
     let itemsHtml = '';
     if (items && items.length > 0) {
+      const mergedItems = mergeReceiptItemsWithGifts(items);
       itemsHtml = `
         <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
           <thead>
             <tr style="background-color: #1e3a8a;">
               <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 40px; text-align: center; color: #fff; font-weight: 900;">#</th>
               <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; text-align: right; color: #fff; font-weight: 900;">کاڵا</th>
-              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 80px; text-align: center; color: #fff; font-weight: 900;">دانە</th>
-              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 120px; text-align: left; color: #fff; font-weight: 900;">نرخ</th>
-              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 140px; text-align: left; color: #fff; font-weight: 900;">کۆ</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 95px; text-align: center; color: #fff; font-weight: 900;">بڕ</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 85px; text-align: center; color: #fff; font-weight: 900;">هەدیە 🎁</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 115px; text-align: left; color: #fff; font-weight: 900;">نرخ</th>
+              <th style="padding: 10px 8px; border: 1.5px solid #1e3a8a; width: 135px; text-align: left; color: #fff; font-weight: 900;">کۆی گشتی</th>
             </tr>
           </thead>
           <tbody>
-            ${items.map((it, idx) => `
-              <tr>
-                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: center; color: #000; font-weight: 800;">${idx + 1}</td>
-                <td style="padding: 8px; border: 1.5px solid #1e3a8a; font-weight: 900; color: #000;">${it.name}</td>
-                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: center; color: #000; font-weight: 900;" dir="ltr">${it.quantity}</td>
-                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: left; color: #1e3a8a; font-weight: 900; font-family: monospace;" dir="ltr">${(it.price || 0).toLocaleString()} د.ع</td>
-                <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: left; font-weight: 900; color: #000; font-family: monospace;" dir="ltr">${((it.quantity || 0) * (it.price || 0)).toLocaleString()} د.ع</td>
-              </tr>
-            `).join('')}
+            ${mergedItems.map((it, idx) => {
+              const unitLabel = it.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
+              return `
+                <tr>
+                  <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: center; color: #000; font-weight: 800;">${idx + 1}</td>
+                  <td style="padding: 8px; border: 1.5px solid #1e3a8a; font-weight: 900; color: #000;">${it.name}</td>
+                  <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: center; color: #000; font-weight: 900;">${it.soldQuantity} ${unitLabel}</td>
+                  <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: center; color: #92400e; font-weight: 900;">${it.giftQuantity > 0 ? it.giftQuantity + ' ' + unitLabel + ' 🎁' : '-'}</td>
+                  <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: left; color: #1e3a8a; font-weight: 900; font-family: monospace;" dir="ltr">${it.soldQuantity > 0 ? it.price.toLocaleString() : '0'} د.ع</td>
+                  <td style="padding: 8px; border: 1.5px solid #1e3a8a; text-align: left; font-weight: 900; color: #000; font-family: monospace;" dir="ltr">${it.lineTotal.toLocaleString()} د.ع</td>
+                </tr>
+              `;
+            }).join('')}
           </tbody>
         </table>
       `;
@@ -296,18 +318,21 @@ export default function MarketsView() {
             .info-card { border: 2px solid #1e3a8a; border-radius: 10px; padding: 12px 16px; margin-bottom: 18px; background: #fff; }
             .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #000; font-weight: 800; border-bottom: 1.5px dashed #1e3a8a; padding-bottom: 4px; }
             .row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 20px 0; padding: 14px; border: 2px solid #1e3a8a; border-radius: 10px; background-color: #1e3a8a; color: #fff; }
+            .amount { font-size: 22px; font-weight: 900; text-align: center; margin: 20px 0 10px; padding: 14px; border: 2px solid #1e3a8a; border-radius: 10px; background-color: #1e3a8a; color: #fff; }
+            .total-debt-box { font-size: 16px; font-weight: 900; display: flex; justify-content: space-between; padding: 12px 16px; border: 2px dashed #1e3a8a; border-radius: 10px; color: #9f1239; background: #fff; margin-bottom: 16px; }
             @media print { body { padding: 0; } }
           </style>
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: title,
+            isSale: true,
+            repName: personName,
+            customerName: entityName,
             invoiceNo: invoiceNo,
             date: date
           })}
           <div class="info-card">
-            <div class="row"><span style="color: #1e3a8a; font-weight: 900;">ناوی مارکێت:</span> <strong>${entityName}</strong></div>
+            <div class="row"><span style="color: #1e3a8a; font-weight: 900;">ناوی مارکێت / کۆگا:</span> <strong>${entityName}</strong></div>
             <div class="row"><span style="color: #1e3a8a; font-weight: 900;">ئەنجامدەر:</span> <strong>${personName}</strong></div>
             <div class="row"><span style="color: #1e3a8a; font-weight: 900;">بەروار:</span> <span dir="ltr" style="font-weight: 900;">${format(date, 'yyyy-MM-dd HH:mm')}</span></div>
           </div>
@@ -315,10 +340,14 @@ export default function MarketsView() {
           ${itemsHtml}
 
           <div class="amount" dir="ltr">${amount.toLocaleString()} د.ع</div>
+          <div class="total-debt-box">
+            <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+            <span dir="ltr" style="font-family: monospace;">${marketDebt.toLocaleString()} د.ع</span>
+          </div>
 
           <div style="display: flex; justify-content: space-between; margin-top: 40px; font-weight: 900; color: #000;">
-            <div style="text-align: center;">واژووی مەندووب / کاشڤان<div style="margin-top: 35px; border-top: 1.5px solid #000; width: 140px;"></div></div>
-            <div style="text-align: center;">واژووی مارکێت<div style="margin-top: 35px; border-top: 1.5px solid #000; width: 140px;"></div></div>
+            <div style="text-align: center;">واژووی مارکێت/کۆگا<div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div></div>
+            <div style="text-align: center;">واژووی شوفێر<div style="margin-top: 35px; border-top: 1.5px solid #000; width: 150px;"></div></div>
           </div>
           <script>window.onload = () => window.print();</script>
         </body>

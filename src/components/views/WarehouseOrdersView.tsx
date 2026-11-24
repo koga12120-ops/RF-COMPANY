@@ -34,7 +34,7 @@ import {
 import { format, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
-import { renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { renderReceiptHeaderHtml, printHtml, mergeReceiptItemsWithGifts } from '../../lib/statementPrinter';
 
 export default function WarehouseOrdersView() {
   const [items, setItems] = useState<Item[]>([]);
@@ -362,16 +362,17 @@ export default function WarehouseOrdersView() {
     setEditOrderMarketName(order.marketName || '');
     setEditOrderRepName(order.repName || '');
     setEditOrderPaymentType(order.paymentStatus || order.paymentType || 'debt');
+    const merged = mergeReceiptItemsWithGifts(order.items || [], items);
     setEditOrderItems(
-      (order.items || []).map((it) => ({
+      merged.map((it) => ({
         itemId: it.itemId,
         name: it.name,
-        quantity: it.quantity || 0,
-        giftQuantity: it.giftQuantity || 0,
-        unit: it.unit || 'carton',
-        price: it.price || 0,
-        totalPrice: it.totalPrice || ((it.quantity || 0) * (it.price || 0)),
-        isGift: !!it.isGift
+        quantity: it.soldQuantity,
+        giftQuantity: it.giftQuantity,
+        unit: it.unit,
+        price: it.price,
+        totalPrice: it.lineTotal,
+        isGift: it.soldQuantity <= 0 && it.giftQuantity > 0
       }))
     );
     setEditOrderSearchTerm('');
@@ -482,10 +483,11 @@ export default function WarehouseOrdersView() {
     setEditOrderItems((prev) =>
       prev.map((it, idx) => {
         if (idx === index) {
+          const safeGift = Math.max(0, cleanGiftQty);
           return {
             ...it,
-            giftQuantity: Math.max(0, cleanGiftQty),
-            isGift: cleanGiftQty > 0
+            giftQuantity: safeGift,
+            isGift: (it.quantity || 0) <= 0 && safeGift > 0
           };
         }
         return it;
@@ -508,29 +510,73 @@ export default function WarehouseOrdersView() {
 
     setIsProcessing(true);
     try {
-      const calculatedTotal = editOrderItems.reduce((sum, it) => sum + (it.totalPrice || (it.quantity * (it.price || 0))), 0);
-      
-      const payload: any = {
-        items: editOrderItems.map(it => ({
+      let calculatedTotal = 0;
+      let calculatedProfit = 0;
+
+      const orderItems = editOrderItems.map(it => {
+        const itemObj = items.find(i => i.id === it.itemId || i.name === it.name);
+        const itemCost = it.unit === 'packet'
+          ? (itemObj?.packetCostPrice || itemObj?.costPrice || 0)
+          : (itemObj?.cartonCostPrice || itemObj?.costPrice || 0);
+        const qty = Number(it.quantity) || 0;
+        const giftQty = Number(it.giftQuantity) || 0;
+        const price = qty > 0 ? (Number(it.price) || 0) : 0;
+        const lineTotal = qty * price;
+        const lineProfit = lineTotal - ((qty + giftQty) * itemCost);
+
+        calculatedTotal += lineTotal;
+        calculatedProfit += lineProfit;
+
+        return {
           itemId: it.itemId,
           name: it.name,
-          quantity: it.quantity,
-          giftQuantity: it.giftQuantity || 0,
+          quantity: qty,
+          giftQuantity: giftQty,
           unit: it.unit,
-          price: it.price,
-          totalPrice: it.totalPrice || (it.quantity * (it.price || 0)),
-          isGift: !!it.isGift
-        })),
+          price,
+          totalPrice: lineTotal,
+          isGift: qty <= 0 && giftQty > 0
+        };
+      });
+
+      const wasDeducted = Boolean((editingOrder as any).stockDeducted) || editingOrder.status === 'completed';
+      if (wasDeducted && editingOrder.items && editingOrder.items.length > 0) {
+        await restoreWarehouseStock(editingOrder.items as any);
+        await deductWarehouseStock(orderItems);
+      }
+
+      const payload: any = {
+        items: orderItems,
         totalAmount: calculatedTotal,
+        totalProfit: calculatedProfit,
         paymentStatus: editOrderPaymentType,
         paymentType: editOrderPaymentType,
+        stockDeducted: wasDeducted,
         lastEditedAt: Date.now(),
         lastEditedBy: 'warehouse'
       };
 
       await updateDoc(doc(db, 'orders', editingOrder.id), payload);
+
+      // Keep market transaction in sync if it exists
+      const invKey = editingOrder.invoiceId || (editingOrder as any).invoiceNo || editingOrder.id;
+      const qT = query(collection(db, 'transactions'), where('invoiceNo', '==', invKey));
+      const snapT = await getDocs(qT);
+      if (!snapT.empty) {
+        for (const tDoc of snapT.docs) {
+          await updateDoc(doc(db, 'transactions', tDoc.id), {
+            type: editOrderPaymentType === 'cash' ? 'cash' : 'debt',
+            amount: calculatedTotal,
+            description: editOrderPaymentType === 'cash'
+              ? `نەقدی داواکاری مەندووب (${editingOrder.repName || ''}) بۆ (${editingOrder.marketName || ''})`
+              : `قەرزی داواکاری مەندووب (${editingOrder.repName || ''}) بۆ (${editingOrder.marketName || ''})`,
+            relatedEntityId: editingOrder.marketName || ''
+          });
+        }
+      }
+
       setEditingOrder(null);
-      alert('دەستکاریکردنی تەڵەبیە بە سەرکەوتوویی پاشەکەوت کرا');
+      alert('دەستکاریکردنی تەڵەبیە بە سەرکەوتوویی پاشەکەوت کرا و کۆگا نوێکرایەوە');
     } catch (err) {
       console.error(err);
       alert('هەڵەیەک ڕوویدا لە پاشەکەوتکردنی دەستکارییەکان');
@@ -543,9 +589,21 @@ export default function WarehouseOrdersView() {
   const handleDeleteRepOrder = async () => {
     if (!deletingOrder) return;
     try {
+      const wasDeducted = Boolean((deletingOrder as any).stockDeducted) || deletingOrder.status === 'completed';
+      if (wasDeducted && deletingOrder.items && deletingOrder.items.length > 0) {
+        await restoreWarehouseStock(deletingOrder.items as any);
+      }
       await updateDoc(doc(db, 'orders', deletingOrder.id), { status: 'deleted' });
+
+      const invKey = deletingOrder.invoiceId || (deletingOrder as any).invoiceNo || deletingOrder.id;
+      const qT = query(collection(db, 'transactions'), where('invoiceNo', '==', invKey));
+      const snapT = await getDocs(qT);
+      for (const tDoc of snapT.docs) {
+        await deleteDoc(doc(db, 'transactions', tDoc.id));
+      }
+
       setDeletingOrder(null);
-      alert('تەڵەبیەکە بە سەرکەوتوویی سڕایەوە');
+      alert('تەڵەبیەکە بە سەرکەوتوویی سڕایەوە و کاڵاکان گەڕێندرانەوە بۆ کۆگا');
     } catch (err) {
       console.error(err);
       alert('هەڵەیەک ڕوویدا لە سڕینەوەی تەڵەبیە');
@@ -553,36 +611,91 @@ export default function WarehouseOrdersView() {
   };
 
   // Print Rep Order Slip (A4 Portrait)
-  const printRepOrderSlip = (order: Order) => {
+  const printRepOrderSlip = async (order: Order) => {
+    const invoiceId = (order.invoiceId || (order as any).invoiceNo || order.id).toString();
+    const cleanMarket = (order.marketName || '').trim();
+    const isDebtOrder = order.paymentStatus === 'debt' || (order as any).paymentType === 'debt';
+
+    const mergedItems = mergeReceiptItemsWithGifts(order.items || [], items);
+
     let totalUnits = 0;
     let totalGifts = 0;
+    let computedGrandTotal = 0;
 
-    const itemsHtml = order.items.map((item, idx) => {
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const qty = item.quantity || 0;
-      const giftQty = item.giftQuantity || 0;
-      totalUnits += qty;
-      totalGifts += giftQty;
+      totalUnits += item.soldQuantity;
+      totalGifts += item.giftQuantity;
+      computedGrandTotal += item.lineTotal;
 
       return `
         <tr>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
           <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
-          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
-          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #92400e; font-weight: 900;">${giftQty > 0 ? giftQty + ' 🎁' : '-'}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${item.soldQuantity}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #92400e; font-weight: 900;">${item.giftQuantity > 0 ? item.giftQuantity + ' 🎁' : '-'}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
-          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${(item.price || 0).toLocaleString()} IQD</td>
-          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${(item.totalPrice || 0).toLocaleString()} IQD</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${item.soldQuantity > 0 ? item.price.toLocaleString() : '0'} د.ع</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${item.lineTotal.toLocaleString()} د.ع</td>
         </tr>
       `;
     }).join('');
+
+    const finalOrderTotal = computedGrandTotal > 0 ? computedGrandTotal : (Number(order.totalAmount) || 0);
+
+    let oldDebt = 0;
+    if (cleanMarket) {
+      try {
+        const snap = await getDocs(query(collection(db, 'transactions'), where('relatedEntityId', '==', cleanMarket)));
+        const matchingDocs = snap.docs;
+        if (matchingDocs.length > 0) {
+          matchingDocs.forEach(d => {
+            const data = d.data();
+            const isSameOrder =
+              (data.invoiceNo && (data.invoiceNo === invoiceId || data.invoiceNo === order.invoiceNo || data.invoiceNo === order.invoiceId)) ||
+              (data.orderId && data.orderId === order.id);
+            if (!isSameOrder) {
+              if (data.type === 'debt' || data.type === 'market_debt') {
+                oldDebt += Number(data.amount) || 0;
+              } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
+                oldDebt -= Number(data.amount) || 0;
+              }
+            }
+          });
+        } else {
+          // Fallback case-insensitive / trimmed lookup
+          const allTransSnap = await getDocs(collection(db, 'transactions'));
+          const targetLower = cleanMarket.toLowerCase();
+          allTransSnap.forEach(d => {
+            const data = d.data();
+            if ((data.relatedEntityId || '').trim().toLowerCase() === targetLower) {
+              const isSameOrder =
+                (data.invoiceNo && (data.invoiceNo === invoiceId || data.invoiceNo === order.invoiceNo || data.invoiceNo === order.invoiceId)) ||
+                (data.orderId && data.orderId === order.id);
+              if (!isSameOrder) {
+                if (data.type === 'debt' || data.type === 'market_debt') {
+                  oldDebt += Number(data.amount) || 0;
+                } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
+                  oldDebt -= Number(data.amount) || 0;
+                }
+              }
+            }
+          });
+        }
+        oldDebt = Math.max(0, oldDebt);
+      } catch (e) {
+        console.error('Error fetching market debt:', e);
+      }
+    }
+
+    const totalMarketDebt = isDebtOrder ? (oldDebt + finalOrderTotal) : oldDebt;
 
     const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ckb">
         <head>
           <meta charset="utf-8">
-          <title>وەسڵی تەڵەبیە #${order.invoiceNo || order.id}</title>
+          <title>وەسڵی تەڵەبیە #${invoiceId}</title>
           <style>
             * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
             @page { size: A4 portrait; margin: 12mm; }
@@ -605,18 +718,16 @@ export default function WarehouseOrdersView() {
         <body>
           ${renderReceiptHeaderHtml({
             isSale: true,
-            title: 'وەسڵی تەڵەبیە و ئامادەکردنی بار بۆ مارکێت',
-            subtitle: 'داواکاری مەندووب لە کۆگای سەرەکی بۆ کڕیار',
             customerName: order.marketName,
             repName: order.repName,
             repPhone: (order as any).repPhone,
-            invoiceNo: order.invoiceNo || order.id,
+            invoiceNo: invoiceId,
             date: order.timestamp
           })}
 
           <div class="meta-grid">
             <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(order.timestamp, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">جۆری پارەدان:</span> <strong>${order.paymentType === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">جۆری پارەدان:</span> <strong>${!isDebtOrder ? 'نەقد 💵' : 'قەرز 💳'}</strong></div>
             <div class="meta-item" style="grid-column: span 2;"><span style="color:#1e3a8a;font-weight:900;">دۆخی داواکاری:</span> <strong>${order.status === 'completed' ? 'ئامادەکراو / تەواوکراو ✅' : 'چاوەڕوانکراو ⏳'}</strong></div>
           </div>
 
@@ -625,11 +736,11 @@ export default function WarehouseOrdersView() {
               <tr>
                 <th style="width: 40px; text-align: center;">#</th>
                 <th>ناوی کاڵا</th>
-                <th style="text-align: center; width: 80px;">عەدەدی فرۆش</th>
+                <th style="text-align: center; width: 80px;">بڕی فرۆش</th>
                 <th style="text-align: center; width: 80px;">هەدیە 🎁</th>
                 <th style="text-align: center; width: 80px;">یەکە</th>
-                <th style="text-align: left; width: 100px;">نرخی دانە</th>
-                <th style="text-align: left; width: 110px;">کۆی گشتی</th>
+                <th style="text-align: left; width: 105px;">نرخی دانە</th>
+                <th style="text-align: left; width: 115px;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
@@ -644,35 +755,35 @@ export default function WarehouseOrdersView() {
             </div>
             <div class="total-row" style="border-top: 2px solid #1e3a8a; padding-top: 8px; margin-top: 8px;">
               <span style="font-weight: 900; color: #000; font-size: 16px;">کۆی گشتی بڕی پارەی وەسڵ:</span>
-              <span dir="ltr" style="color: #1e3a8a; font-size: 20px; font-weight: 900;">${(order.totalAmount || 0).toLocaleString()} IQD</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 20px; font-weight: 900;">${finalOrderTotal.toLocaleString()} د.ع</span>
+            </div>
+            ${isDebtOrder && oldDebt > 0 ? `
+              <div class="total-row" style="border-top: 1.5px dashed #1e3a8a; padding-top: 8px; margin-top: 8px;">
+                <span style="font-weight: 900; color: #000;">قەرزی پێشووی مارکێت / کۆگا:</span>
+                <span dir="ltr" style="font-weight: 900; color: #000;">${oldDebt.toLocaleString()} د.ع</span>
+              </div>
+            ` : ''}
+            <div class="total-row" style="border-top: 2px dashed #1e3a8a; padding-top: 8px; margin-top: 8px;">
+              <span style="font-weight: 900; color: #9f1239; font-size: 16px;">کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+              <span dir="ltr" style="color: #9f1239; font-size: 18px; font-weight: 900;">${totalMarketDebt.toLocaleString()} د.ع</span>
             </div>
           </div>
 
           <div class="signatures">
             <div>
-              <div>واژووی وەرگر</div>
-              <div class="sig-line">ناو و واژۆ</div>
+              <div>واژووی مارکێت/کۆگا</div>
+              <div class="sig-line"></div>
             </div>
             <div>
               <div>واژووی شوفێر</div>
-              <div class="sig-line">ناو و واژۆ</div>
+              <div class="sig-line"></div>
             </div>
           </div>
-
-          <script>
-            window.onload = () => {
-              window.print();
-            };
-          </script>
         </body>
       </html>
     `;
 
-    const win = window.open('', '_blank');
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-    }
+    printHtml(html, { isThermal: false });
   };
 
   // --- ACTIONS: CASHVAN REQUISITION ---
@@ -771,11 +882,15 @@ export default function WarehouseOrdersView() {
 
   // Print Cashvan Requisition Slip (A4 Portrait)
   const printRequisitionReceipt = (req: CashvanRequisition) => {
+    const mergedItems = mergeReceiptItemsWithGifts(req.items || [], items);
     let totalUnits = 0;
-    const itemsHtml = req.items.map((item, idx) => {
+    let totalAmount = 0;
+
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const qty = item.quantity || 0;
+      const qty = item.soldQuantity + item.giftQuantity;
       totalUnits += qty;
+      totalAmount += item.lineTotal;
 
       return `
         <tr>
@@ -783,6 +898,8 @@ export default function WarehouseOrdersView() {
           <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${item.price.toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${item.lineTotal.toLocaleString()} د.ع</td>
         </tr>
       `;
     }).join('');
@@ -814,8 +931,6 @@ export default function WarehouseOrdersView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: 'وەسڵی داواکاری پێشوەختەی کاشڤان (تەڵەبیەی ڤان)',
-            subtitle: 'داواکاری پێشوەختەی بارکردن لە کۆگای سەرەکی',
             repName: req.cashvanName,
             repPhone: cashvans.find(c => c.name === req.cashvanName)?.phone,
             invoiceNo: req.id,
@@ -836,6 +951,8 @@ export default function WarehouseOrdersView() {
                 <th>ناوی کاڵا</th>
                 <th style="text-align: center; width: 90px;">بڕی داواکراو</th>
                 <th style="text-align: center; width: 80px;">یەکە</th>
+                <th style="text-align: left; width: 105px;">نرخی دانە</th>
+                <th style="text-align: left; width: 115px;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
@@ -848,33 +965,27 @@ export default function WarehouseOrdersView() {
               <span style="font-weight: 900; color: #000;">کۆی گشتی ژمارەی کاڵاکانی داواکاری:</span>
               <span dir="ltr" style="color: #1e3a8a; font-size: 17px; font-weight: 900;">${totalUnits} دانە</span>
             </div>
+            <div class="total-row" style="border-top: 2px solid #1e3a8a; padding-top: 8px; margin-top: 8px;">
+              <span style="font-weight: 900; color: #000; font-size: 16px;">کۆی گشتی بەهای کاڵاکان:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 19px; font-weight: 900;">${totalAmount.toLocaleString()} د.ع</span>
+            </div>
           </div>
 
           <div class="signatures">
             <div>
-              <div>واژۆی بەرپرسی کۆگا</div>
-              <div class="sig-line">ناو و واژۆ</div>
+              <div>واژۆی مارکێت/کۆگا</div>
+              <div class="sig-line"></div>
             </div>
             <div>
-              <div>واژۆی کاشڤان</div>
-              <div class="sig-line">${req.cashvanName}</div>
+              <div>واژۆی شوفێر</div>
+              <div class="sig-line"></div>
             </div>
           </div>
-
-          <script>
-            window.onload = () => {
-              window.print();
-            };
-          </script>
         </body>
       </html>
     `;
 
-    const win = window.open('', '_blank');
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-    }
+    printHtml(html, { isThermal: false });
   };
 
   // --- ACTIONS: DIRECT VAN LOADING ---
@@ -914,11 +1025,15 @@ export default function WarehouseOrdersView() {
   };
 
   const printTransferReceipt = (transfer: CashvanTransfer) => {
+    const mergedItems = mergeReceiptItemsWithGifts(transfer.items || [], items);
     let totalUnits = 0;
-    const itemsHtml = transfer.items.map((item, idx) => {
+    let totalAmount = 0;
+
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const qty = item.quantity || 0;
+      const qty = item.soldQuantity + item.giftQuantity;
       totalUnits += qty;
+      totalAmount += item.lineTotal;
 
       return `
         <tr>
@@ -926,9 +1041,13 @@ export default function WarehouseOrdersView() {
           <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${item.price.toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${item.lineTotal.toLocaleString()} د.ع</td>
         </tr>
       `;
     }).join('');
+
+    const finalTotalValue = totalAmount > 0 ? totalAmount : (transfer.totalValue || 0);
 
     const html = `
       <!DOCTYPE html>
@@ -957,8 +1076,6 @@ export default function WarehouseOrdersView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: 'پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان',
-            subtitle: 'پسوڵەی فەرمی دەرچوونی کاڵا لە کۆگا بۆ کاشڤان',
             repName: transfer.cashvanName,
             repPhone: cashvans.find(c => c.name === transfer.cashvanName)?.phone,
             invoiceNo: transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6)),
@@ -969,7 +1086,7 @@ export default function WarehouseOrdersView() {
             <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
             <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ژمارەی پسوڵە:</span> <strong dir="ltr">${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</strong></div>
             <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(transfer.date, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">کۆی جۆری کاڵاکان:</span> <strong>${transfer.items.length} جۆر</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">کۆی جۆری کاڵاکان:</span> <strong>${mergedItems.length} جۆر</strong></div>
           </div>
 
           <table>
@@ -979,6 +1096,8 @@ export default function WarehouseOrdersView() {
                 <th>ناوی کاڵا</th>
                 <th style="text-align: center; width: 90px;">بڕی بارکراو</th>
                 <th style="text-align: center; width: 80px;">یەکە</th>
+                <th style="text-align: left; width: 105px;">نرخی دانە</th>
+                <th style="text-align: left; width: 115px;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
@@ -991,33 +1110,27 @@ export default function WarehouseOrdersView() {
               <span style="font-weight: 900; color: #000;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
               <span dir="ltr" style="color: #1e3a8a; font-size: 17px; font-weight: 900;">${totalUnits} دانە / کارتۆن</span>
             </div>
+            <div class="total-row" style="border-top: 2px solid #1e3a8a; padding-top: 8px; margin-top: 8px;">
+              <span style="font-weight: 900; color: #000; font-size: 16px;">کۆی گشتی بەهای بارکراو:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 19px; font-weight: 900;">${finalTotalValue.toLocaleString()} د.ع</span>
+            </div>
           </div>
 
           <div class="signatures">
             <div>
-              <div>واژۆی بەرپرسی کۆگا (ڕادەستکار)</div>
-              <div class="sig-line">ناو و واژۆ</div>
+              <div>واژۆی مارکێت/کۆگا</div>
+              <div class="sig-line"></div>
             </div>
             <div>
-              <div>واژۆی شۆفێری کاشڤان (وەرگر)</div>
-              <div class="sig-line">${transfer.cashvanName}</div>
+              <div>واژۆی شوفێر</div>
+              <div class="sig-line"></div>
             </div>
           </div>
-
-          <script>
-            window.onload = () => {
-              window.print();
-            };
-          </script>
         </body>
       </html>
     `;
 
-    const win = window.open('', '_blank');
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-    }
+    printHtml(html, { isThermal: false });
   };
 
   const handleTransfer = async () => {

@@ -108,6 +108,105 @@ export interface ReceiptHeaderOptions {
   isThermal?: boolean;
 }
 
+export interface MergedReceiptItem {
+  itemId: string;
+  name: string;
+  unit: 'carton' | 'packet';
+  soldQuantity: number;
+  giftQuantity: number;
+  price: number;
+  lineTotal: number;
+}
+
+/**
+ * Merges receipt items by (normalized product name / itemId + unit) so paid quantities
+ * and gift quantities appear on a single row instead of duplicating "(هەدیە)" rows,
+ * and ensures every paid row always calculates its lineTotal (soldQuantity * price).
+ */
+export function mergeReceiptItemsWithGifts(rawItems: any[] = [], fallbackCatalog?: any[]): MergedReceiptItem[] {
+  const mergedMap = new Map<string, MergedReceiptItem>();
+
+  const cleanText = (val: string) =>
+    (val || '')
+      .replace(/\(هەدیە\)/g, '')
+      .replace(/🎁/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const findCatalogPrice = (itemId: string, cleanName: string, unit: 'carton' | 'packet'): number => {
+    if (!fallbackCatalog || fallbackCatalog.length === 0) return 0;
+    const lowerName = cleanName.toLowerCase();
+    const found = fallbackCatalog.find(
+      (c) => (itemId && c.id === itemId) || cleanText(c.name || '').toLowerCase() === lowerName
+    );
+    if (!found) return 0;
+    return unit === 'packet'
+      ? Number(found.packetSellingPrice || found.sellingPrice || found.packetCostPrice || found.costPrice || 0)
+      : Number(found.cartonSellingPrice || found.sellingPrice || found.cartonCostPrice || found.costPrice || 0);
+  };
+
+  for (const raw of rawItems || []) {
+    if (!raw) continue;
+    const rawName = String(raw.name || '');
+    const cName = cleanText(rawName);
+    const unit: 'carton' | 'packet' = raw.unit === 'packet' ? 'packet' : 'carton';
+    const qty = Number(raw.quantity) || 0;
+    const explicitGift = Number(raw.giftQuantity) || 0;
+    const rawPrice = Number(raw.price) || 0;
+    const rawTotal = Number(raw.totalPrice) || 0;
+
+    // Determine effective unit price (recover from totalPrice if price omitted on a paid row)
+    let unitPrice = rawPrice;
+    if (unitPrice <= 0 && rawTotal > 0 && qty > 0) {
+      unitPrice = Math.round(rawTotal / qty);
+    }
+
+    const hasGiftTagInName = rawName.includes('(هەدیە)');
+    // A row is a pure gift row ONLY if it has no positive price (or name explicitly tagged as (هەدیە) with 0 price)
+    const isPureGiftRow =
+      unitPrice <= 0 && (Boolean(raw.isGift) || hasGiftTagInName || explicitGift === 0);
+
+    let rowSoldQty = 0;
+    let rowGiftQty = 0;
+
+    if (isPureGiftRow) {
+      rowSoldQty = 0;
+      rowGiftQty = qty + explicitGift;
+    } else {
+      rowSoldQty = qty;
+      rowGiftQty = explicitGift;
+    }
+
+    if (unitPrice <= 0 && rowSoldQty > 0 && fallbackCatalog) {
+      unitPrice = findCatalogPrice(raw.itemId || '', cName, unit);
+    }
+
+    const key = `${cName.toLowerCase()}__${unit}`;
+    const existing = mergedMap.get(key);
+
+    if (existing) {
+      existing.soldQuantity = Math.round((existing.soldQuantity + rowSoldQty) * 1000) / 1000;
+      existing.giftQuantity = Math.round((existing.giftQuantity + rowGiftQty) * 1000) / 1000;
+      if (unitPrice > 0 && existing.price <= 0) {
+        existing.price = unitPrice;
+      }
+      existing.lineTotal = existing.soldQuantity * existing.price;
+    } else {
+      mergedMap.set(key, {
+        itemId: raw.itemId || '',
+        name: cName || rawName,
+        unit,
+        soldQuantity: Math.round(rowSoldQty * 1000) / 1000,
+        giftQuantity: Math.round(rowGiftQty * 1000) / 1000,
+        price: unitPrice,
+        lineTotal: rowSoldQty * unitPrice
+      });
+    }
+  }
+
+  return Array.from(mergedMap.values());
+}
+
 export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string {
   const settings = getCompanySettings();
   const cName = options?.companyName || settings.name || 'کۆمپانیای RF';
@@ -135,7 +234,10 @@ export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string 
         </div>
         <div style="font-size: 24px; font-weight: 900; letter-spacing: 1px; color: #000; line-height: 1.2;">TAM TAM</div>
         <div style="font-size: 16px; font-weight: 900; color: #000; margin-top: 3px;">${cName}</div>
-        <div style="font-size: 13.5px; font-weight: 900; color: #000; margin-top: 3px;">ژمارەی مۆبایل: <span dir="ltr">${cPhone}</span></div>
+        <div style="font-size: 13.5px; font-weight: 900; color: #000; margin-top: 4px; line-height: 1.4;">
+          <div>ژمارە تەلەفۆن</div>
+          <div dir="ltr">${cPhone}</div>
+        </div>
       </div>
     `;
   }
@@ -154,22 +256,23 @@ export function renderReceiptHeaderHtml(options?: ReceiptHeaderOptions): string 
   return `
     <div style="border-bottom: 3px solid #1e3a8a; padding-bottom: 12px; margin-bottom: 16px; direction: rtl; font-family: system-ui, -apple-system, sans-serif; color: #000;">
       <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-        <!-- لای ڕاست: لۆگۆ و ناوی کۆمپانیا RF و ژمارە مۆبایلی کۆمپانیا -->
+        <!-- لای ڕاست: لۆگۆ و ناوی کۆمپانیا RF و ژمارە تەلەفۆن -->
         <div style="text-align: right; min-width: 175px; max-width: 250px; flex-shrink: 0;">
           <div style="margin-bottom: 4px;">
             <img src="${logoSrc}" alt="Logo" style="height: 58px; max-width: 95px; object-fit: contain; display: block;" onerror="this.style.display='none'" />
           </div>
           <div style="font-size: 19px; font-weight: 900; color: #000; line-height: 1.2;">${cName}</div>
-          <div style="font-size: 12.5px; font-weight: 800; color: #000; margin-top: 3px;">ژمارەی مۆبایلی کۆمپانیا: <span dir="ltr">${cPhone}</span></div>
+          <div style="font-size: 12.5px; font-weight: 900; color: #000; margin-top: 4px; line-height: 1.4;">
+            <div>ژمارە تەلەفۆن</div>
+            <div dir="ltr">${cPhone}</div>
+          </div>
         </div>
 
-        <!-- ناوەڕاست: TAM TAM و سەردێڕی وەسڵ -->
+        <!-- ناوەڕاست: TAM TAM -->
         <div style="flex: 1; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60px;">
           <div style="font-size: 32px; font-weight: 900; letter-spacing: 2px; color: #172554; font-family: system-ui, -apple-system, sans-serif;">
             TAM TAM
           </div>
-          ${options?.title ? `<div style="font-size: 14px; font-weight: 900; color: #1e3a8a; margin-top: 4px;">${options.title}</div>` : ''}
-          ${options?.subtitle ? `<div style="font-size: 12px; font-weight: 800; color: #000; margin-top: 2px;">${options.subtitle}</div>` : ''}
         </div>
 
         <!-- لای چەپ: ناوی مەندووب، ژمارەی مەندووب، ژمارەی وەسل، ناوی کڕیار(مارکێت یان کۆگا) -->
@@ -521,7 +624,7 @@ export function generatePaymentReceiptHtml(data: PaymentReceiptData): string {
 
         <div class="signatures">
           <div class="sig-block">
-            <div>واژووی مارکێت</div>
+            <div>واژووی مارکێت/کۆگا</div>
             <div class="sig-line"></div>
           </div>
           <div class="sig-block">
@@ -1152,7 +1255,7 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
           </div>
           ` : ''}
           <div class="signatures">
-            <div class="sig-block"><div>واژووی مارکێت</div><div class="sig-line"></div></div>
+            <div class="sig-block"><div>واژووی مارکێت/کۆگا</div><div class="sig-line"></div></div>
             <div class="sig-block"><div>واژووی وەرگر (${data.collectorName})</div><div class="sig-line"></div></div>
           </div>
           <script>window.onload = () => window.print();</script>
@@ -1327,7 +1430,7 @@ export function generateMarketDebtReceiptHtml(data: MarketDebtReceiptData): stri
 
           <div class="signatures">
             <div class="sig-block">
-              <div>واژووی مارکێت</div>
+              <div>واژووی مارکێت/کۆگا</div>
               <div class="sig-line"></div>
             </div>
             <div class="sig-block">
@@ -2188,12 +2291,9 @@ export function printWarehouseStockSummaryPopup(data: WarehouseStockSummaryPrint
       </head>
       <body>
         <div class="container">
-          <div class="header">
-            <div style="font-size: 22px; font-weight: 900; letter-spacing: 1px; color: #172554;">TAM TAM</div>
-            <div style="font-size: 15px; font-weight: 900; color: #000000;">${cName}</div>
-            <div class="title">لیستی کۆی گشتی بەردەستی کاڵاکان لە کۆگا (بە کارتۆن)</div>
-            <div class="subtitle">بەرواری دەرکردن: ${dateStr} | مۆبایل: ${cPhone}</div>
-          </div>
+          ${renderReceiptHeaderHtml({
+            date: data.date
+          })}
 
           <div class="meta-grid">
             <div class="meta-item">

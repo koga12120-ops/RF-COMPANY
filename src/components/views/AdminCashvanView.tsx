@@ -16,6 +16,7 @@ import {
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { renameRepOrCashvan, syncAllRepsAndCashvans } from '../../lib/syncHelper';
+import { restoreWarehouseStock } from '../../lib/invoiceSync';
 import { CashvanSale, CashvanTransfer, Order, Transaction, Market, Item, SalesRep } from '../../types';
 import { 
   Plus,
@@ -66,7 +67,7 @@ import {
   subWeeks,
   subMonths 
 } from 'date-fns';
-import { printDailyRepReceiptPopup, printStatementPopup, renderReceiptHeaderHtml, printHtml } from '../../lib/statementPrinter';
+import { printDailyRepReceiptPopup, printStatementPopup, renderReceiptHeaderHtml, printHtml, mergeReceiptItemsWithGifts } from '../../lib/statementPrinter';
 import ConfirmModal from '../common/ConfirmModal';
 import { getCompanySettings } from '../../lib/companySettings';
 
@@ -744,16 +745,27 @@ export default function AdminCashvanView() {
         deletedAt: Date.now()
       });
 
+      if (deletingOrder.items && ((deletingOrder as any).stockDeducted || deletingOrder.status === 'completed')) {
+        await restoreWarehouseStock(deletingOrder.items as any);
+      }
+
       // Also clean up any associated transaction in ledger so debt/sales aren't inflated
-      const invoiceKey = deletingOrder.invoiceId || deletingOrder.id;
-      const qExisting = query(
-        collection(db, 'transactions'),
-        where('invoiceNo', '==', invoiceKey)
-      );
-      const existingSnap = await getDocs(qExisting);
-      existingSnap.forEach(async (tDoc) => {
+      const invoiceKeys = Array.from(new Set([deletingOrder.invoiceId, deletingOrder.invoiceNo, deletingOrder.id].filter(Boolean) as string[]));
+      for (const invKey of invoiceKeys) {
+        const qExisting = query(
+          collection(db, 'transactions'),
+          where('invoiceNo', '==', invKey)
+        );
+        const existingSnap = await getDocs(qExisting);
+        for (const tDoc of existingSnap.docs) {
+          await deleteDoc(doc(db, 'transactions', tDoc.id));
+        }
+      }
+      const qByOrderId = query(collection(db, 'transactions'), where('orderId', '==', deletingOrder.id));
+      const orderIdSnap = await getDocs(qByOrderId);
+      for (const tDoc of orderIdSnap.docs) {
         await deleteDoc(doc(db, 'transactions', tDoc.id));
-      });
+      }
 
       setDeletingOrder(null);
     } catch (error) {
@@ -1289,19 +1301,33 @@ export default function AdminCashvanView() {
     let oldDebt = 0;
     const cleanMarket = (order.marketName || '').trim();
     const invoiceNum = order.invoiceId || order.invoiceNo || (order.id || '0').slice(-6);
+    const excludeKeys = new Set([invoiceNum, order.invoiceNo, order.invoiceId, order.id].filter(Boolean));
     try {
+      const seenIds = new Set<string>();
       const q = query(
         collection(db, 'transactions'), 
         where('relatedEntityId', '==', cleanMarket)
       );
       const snapshot = await getDocs(q);
       snapshot.forEach(docSnap => {
+        seenIds.add(docSnap.id);
         const data = docSnap.data();
-        if (data.invoiceNo !== invoiceNum) {
+        if (data.orderId !== order.id && !excludeKeys.has(data.invoiceNo)) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
             oldDebt -= data.amount || 0;
+          }
+        }
+      });
+      transactions.forEach(t => {
+        if (seenIds.has(t.id)) return;
+        if ((t.relatedEntityId || '').trim().toLowerCase() !== cleanMarket.toLowerCase()) return;
+        if ((t as any).orderId !== order.id && !excludeKeys.has(t.invoiceNo)) {
+          if (t.type === 'debt' || t.type === 'market_debt') {
+            oldDebt += t.amount || 0;
+          } else if (t.type === 'paid_debt' || t.type === 'market_paid_debt') {
+            oldDebt -= t.amount || 0;
           }
         }
       });
@@ -1314,26 +1340,28 @@ export default function AdminCashvanView() {
     const marketPhone = marketObj?.phone || '-';
     const repPhone = reps.find(r => r.name === order.repName)?.phone || (order as any).repPhone || '-';
 
-    const itemsHtml = (order.items || []).map((item, idx) => {
+    const mergedItems = mergeReceiptItemsWithGifts(order.items || [], items);
+    const computedTotal = mergedItems.reduce((sum, it) => sum + it.lineTotal, 0);
+    const finalOrderTotal = computedTotal > 0 ? computedTotal : (order.totalAmount || 0);
+    const isCashOrder = order.paymentStatus === 'cash' || (order as any).paymentType === 'cash';
+    const isDebtOrder = !isCashOrder;
+    const totalMarketDebt = isDebtOrder ? (oldDebt + finalOrderTotal) : oldDebt;
+
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
-      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
-      const itemTotal = (item.price || 0) * (item.quantity || 0);
+      const qtyDisplay = item.soldQuantity > 0 ? `${item.soldQuantity} ${unitLabel}` : `0 ${unitLabel}`;
+      const giftDisplay = item.giftQuantity > 0 ? `${item.giftQuantity} ${unitLabel} 🎁` : '-';
       return `
         <tr>
           <td style="text-align: center; color: #000; font-weight: 800;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: 900; color: #000;">
-            ${cleanName}
-            ${isGift ? '<span style="border: 1.5px solid #1e3a8a; color: #1e3a8a; font-size: 11px; font-weight: 900; padding: 1px 6px; border-radius: 4px; margin-right: 6px;">(هەدیە 🎁)</span>' : ''}
-          </td>
-          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${isGift ? '0' : (item.price || 0).toLocaleString()}</td>
-          <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${isGift ? '0' : itemTotal.toLocaleString()}</td>
+          <td style="text-align: right; font-weight: 900; color: #000;">${item.name}</td>
+          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${qtyDisplay}</td>
+          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #92400e;">${giftDisplay}</td>
+          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${item.soldQuantity > 0 ? item.price.toLocaleString() : '0'}</td>
+          <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${item.lineTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
-
-    const newTotalDebt = oldDebt + order.totalAmount;
 
     const html = `
       <!DOCTYPE html>
@@ -1380,7 +1408,7 @@ export default function AdminCashvanView() {
             <div class="info-row"><span class="label">ژمارەی تەڵەبیە:</span><span class="val" dir="ltr" style="font-family: monospace;">#${invoiceNum}</span></div>
             <div class="info-row"><span class="label">ناوی کڕیار / مارکێت:</span><span class="val">${order.marketName} ${marketPhone !== '-' ? `(${marketPhone})` : ''}</span></div>
             <div class="info-row"><span class="label">مەندووب:</span><span class="val">${order.repName} (${repPhone})</span></div>
-            <div class="info-row"><span class="label">جۆری وەسڵ:</span><span class="val" style="color: ${order.paymentType === 'cash' ? '#14532d' : '#92400e'};">${order.paymentType === 'cash' ? 'نەقد (کاش)' : 'قەرز'}</span></div>
+            <div class="info-row"><span class="label">جۆری وەسڵ:</span><span class="val" style="color: ${isCashOrder ? '#14532d' : '#92400e'};">${isCashOrder ? 'نەقد (کاش)' : 'قەرز'}</span></div>
             <div class="info-row"><span class="label">بەروار و کات:</span><span class="val" dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span></div>
           </div>
 
@@ -1389,9 +1417,10 @@ export default function AdminCashvanView() {
               <tr>
                 <th style="width: 45px; text-align: center;">#</th>
                 <th style="text-align: right;">ناوی کاڵا</th>
-                <th style="width: 120px; text-align: center;">بڕ</th>
-                <th style="width: 120px; text-align: center;">نرخ</th>
-                <th style="width: 140px; text-align: left;">کۆ</th>
+                <th style="width: 110px; text-align: center;">بڕ</th>
+                <th style="width: 90px; text-align: center;">هەدیە 🎁</th>
+                <th style="width: 110px; text-align: center;">نرخ</th>
+                <th style="width: 130px; text-align: left;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>${itemsHtml}</tbody>
@@ -1399,20 +1428,20 @@ export default function AdminCashvanView() {
 
           <div class="summary">
             <div class="summary-row main">
-              <span>کۆی ئەم وەسڵە (${order.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
-              <span dir="ltr">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
+              <span>کۆی ئەم وەسڵە (${isCashOrder ? 'نەقد' : 'قەرز'}):</span>
+              <span dir="ltr">${finalOrderTotal.toLocaleString()} د.ع</span>
             </div>
-            ${order.paymentType === 'debt' ? `
-              ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
-              <div class="summary-row total-debt"><span>کۆی گشتی ماوە (قەرز):</span><span dir="ltr">${newTotalDebt.toLocaleString()} د.ع</span></div>
+            ${isDebtOrder ? `
+              ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت / کۆگا:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
+              <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
             ` : `
-              <div class="summary-row total-debt"><span>قەرزی ماوەی مارکێت (کۆی قەرز):</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>
+              <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
             `}
           </div>
 
           <div class="signatures">
-            <div><div>واژووی مەندووب</div><div class="sig-line"></div></div>
-            <div><div>واژووی مارکێت</div><div class="sig-line"></div></div>
+            <div><div>واژووی مارکێت/کۆگا</div><div class="sig-line"></div></div>
+            <div><div>واژووی شوفێر</div><div class="sig-line"></div></div>
           </div>
 
           <div class="footer-note">سوپاس بۆ مامەڵەکردنتان لەگەڵ کۆمپانیای RF</div>
@@ -1429,19 +1458,33 @@ export default function AdminCashvanView() {
     let oldDebt = 0;
     const cleanMarket = (sale.marketName || '').trim();
     const invoiceNum = sale.invoiceNo || sale.invoiceId || (sale.id || '0').slice(-6);
+    const excludeKeys = new Set([invoiceNum, sale.invoiceNo, sale.invoiceId, sale.id].filter(Boolean));
     try {
+      const seenIds = new Set<string>();
       const q = query(
         collection(db, 'transactions'), 
         where('relatedEntityId', '==', cleanMarket)
       );
       const snapshot = await getDocs(q);
       snapshot.forEach(docSnap => {
+        seenIds.add(docSnap.id);
         const data = docSnap.data();
-        if (data.invoiceNo !== invoiceNum) {
+        if (data.saleId !== sale.id && !excludeKeys.has(data.invoiceNo)) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
             oldDebt -= data.amount || 0;
+          }
+        }
+      });
+      transactions.forEach(t => {
+        if (seenIds.has(t.id)) return;
+        if ((t.relatedEntityId || '').trim().toLowerCase() !== cleanMarket.toLowerCase()) return;
+        if ((t as any).saleId !== sale.id && !excludeKeys.has(t.invoiceNo)) {
+          if (t.type === 'debt' || t.type === 'market_debt') {
+            oldDebt += t.amount || 0;
+          } else if (t.type === 'paid_debt' || t.type === 'market_paid_debt') {
+            oldDebt -= t.amount || 0;
           }
         }
       });
@@ -1454,30 +1497,32 @@ export default function AdminCashvanView() {
     const marketPhone = marketObj?.phone || '-';
     const cashvanPhone = cashvans.find(c => c.name === sale.cashvanName)?.phone || reps.find(r => r.name === sale.cashvanName)?.phone || '-';
 
-    const itemsHtml = (sale.items || []).map((item, idx) => {
+    const mergedItems = mergeReceiptItemsWithGifts(sale.items || [], items);
+    const computedTotal = mergedItems.reduce((sum, it) => sum + it.lineTotal, 0);
+    const finalSaleTotal = computedTotal > 0 ? computedTotal : (sale.totalAmount || 0);
+    const isDebtSale = sale.paymentType === 'debt' || (sale as any).paymentStatus === 'debt';
+    const totalMarketDebt = isDebtSale ? (oldDebt + finalSaleTotal) : oldDebt;
+
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const isGift = item.isGift || (item.name && item.name.includes('(هەدیە)')) || item.price === 0;
-      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
-      const itemTotal = (item.price || 0) * (item.quantity || 0);
+      const qtyDisplay = item.soldQuantity > 0 ? `${item.soldQuantity} ${unitLabel}` : `0 ${unitLabel}`;
+      const giftDisplay = item.giftQuantity > 0 ? `${item.giftQuantity} ${unitLabel} 🎁` : '-';
       return `
         <tr>
           <td style="text-align: center; color: #000; font-weight: 800;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: 900; color: #000;">
-            ${cleanName}
-            ${isGift ? '<span style="border: 1.5px solid #1e3a8a; color: #1e3a8a; font-size: 11px; font-weight: 900; padding: 1px 6px; border-radius: 4px; margin-right: 6px;">(هەدیە 🎁)</span>' : ''}
-          </td>
-          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${isGift ? '0' : (item.price || 0).toLocaleString()}</td>
-          <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${isGift ? '0' : itemTotal.toLocaleString()}</td>
+          <td style="text-align: right; font-weight: 900; color: #000;">${item.name}</td>
+          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${qtyDisplay}</td>
+          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #92400e;">${giftDisplay}</td>
+          <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${item.soldQuantity > 0 ? item.price.toLocaleString() : '0'}</td>
+          <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${item.lineTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
 
-    const totalCartonCount = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && !i.isGift && (i.price > 0 || !i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
-    const totalCartonGifts = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && (i.isGift || i.price === 0 || i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
-    const totalPacketCount = (sale.items || []).filter((i: any) => i.unit === 'packet' && !i.isGift && i.price > 0).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
-
-    const newTotalDebt = oldDebt + sale.totalAmount;
+    const totalCartonCount = mergedItems.filter(i => i.unit === 'carton').reduce((s, i) => s + i.soldQuantity, 0);
+    const totalCartonGifts = mergedItems.filter(i => i.unit === 'carton').reduce((s, i) => s + i.giftQuantity, 0);
+    const totalPacketCount = mergedItems.filter(i => i.unit === 'packet').reduce((s, i) => s + i.soldQuantity, 0);
+    const totalPacketGifts = mergedItems.filter(i => i.unit === 'packet').reduce((s, i) => s + i.giftQuantity, 0);
 
     const html = `
       <!DOCTYPE html>
@@ -1501,6 +1546,8 @@ export default function AdminCashvanView() {
             .summary-row { display: flex; justify-content: space-between; font-size: 14px; font-weight: 900; margin-bottom: 6px; color: #000; }
             .summary-row.main { background: #1e3a8a; color: #fff; padding: 10px 14px; border-radius: 6px; font-size: 16px; font-weight: 900; margin-bottom: 10px; }
             .summary-row.total-debt { border-top: 2px dashed #1e3a8a; padding-top: 8px; margin-top: 6px; font-size: 15px; color: #9f1239; font-weight: 900; }
+            .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding: 0 30px; font-size: 13px; font-weight: 900; text-align: center; color: #000; }
+            .sig-line { margin-top: 38px; border-top: 1.5px solid #000; width: 160px; }
             .footer-note { text-align: center; margin-top: 24px; border-top: 1.5px solid #1e3a8a; padding-top: 8px; font-size: 12px; font-weight: 800; color: #000; }
           </style>
         </head>
@@ -1519,7 +1566,7 @@ export default function AdminCashvanView() {
             <div class="info-row"><span class="label">ژمارەی وەسڵ:</span><span class="val" dir="ltr" style="font-family: monospace;">#${invoiceNum}</span></div>
             <div class="info-row"><span class="label">ناوی کڕیار / مارکێت:</span><span class="val">${sale.marketName} ${marketPhone !== '-' ? `(${marketPhone})` : ''}</span></div>
             <div class="info-row"><span class="label">کاشڤان:</span><span class="val">${sale.cashvanName} (${cashvanPhone})</span></div>
-            <div class="info-row"><span class="label">شێوازی پارەدان:</span><span class="val" style="color: ${sale.paymentType === 'cash' ? '#14532d' : '#92400e'};">${sale.paymentType === 'cash' ? 'نەقد (کاش)' : 'قەرز'}</span></div>
+            <div class="info-row"><span class="label">شێوازی پارەدان:</span><span class="val" style="color: ${!isDebtSale ? '#14532d' : '#92400e'};">${!isDebtSale ? 'نەقد (کاش)' : 'قەرز'}</span></div>
             <div class="info-row"><span class="label">بەروار و کات:</span><span class="val" dir="ltr">${format(sale.date, 'yyyy/MM/dd HH:mm')}</span></div>
           </div>
 
@@ -1528,9 +1575,10 @@ export default function AdminCashvanView() {
               <tr>
                 <th style="width: 45px; text-align: center;">#</th>
                 <th style="text-align: right;">ناوی کاڵا</th>
-                <th style="width: 120px; text-align: center;">بڕ</th>
-                <th style="width: 120px; text-align: center;">نرخ</th>
-                <th style="width: 140px; text-align: left;">کۆ</th>
+                <th style="width: 110px; text-align: center;">بڕ</th>
+                <th style="width: 90px; text-align: center;">هەدیە 🎁</th>
+                <th style="width: 110px; text-align: center;">نرخ</th>
+                <th style="width: 130px; text-align: left;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>${itemsHtml}</tbody>
@@ -1538,8 +1586,8 @@ export default function AdminCashvanView() {
 
           <div class="summary">
             <div class="summary-row main">
-              <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
-              <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
+              <span>کۆی ئەم وەسڵە (${!isDebtSale ? 'نەقد' : 'قەرز'}):</span>
+              <span dir="ltr">${finalSaleTotal.toLocaleString()} د.ع</span>
             </div>
 
             <div style="text-align: center; margin: 10px 0; padding: 8px 12px; border: 2px solid #1e3a8a; border-radius: 6px; background: #fff;">
@@ -1547,15 +1595,21 @@ export default function AdminCashvanView() {
                 ژمارەی کارتۆن: <span dir="ltr" style="font-size: 18px; font-weight: 900; font-family: monospace; color: #1e3a8a;">${totalCartonCount} کارتۆن</span>
                 ${totalCartonGifts > 0 ? `<span style="font-size: 13px; font-weight: 900; color: #000;"> (+ ${totalCartonGifts} هەدیە)</span>` : ''}
                 ${totalPacketCount > 0 ? `<span style="font-size: 13px; font-weight: 900; color: #000;"> (+ ${totalPacketCount} پاکەت)</span>` : ''}
+                ${totalPacketGifts > 0 ? `<span style="font-size: 13px; font-weight: 900; color: #000;"> (+ ${totalPacketGifts} پاکەت هەدیە)</span>` : ''}
               </div>
             </div>
 
-            ${sale.paymentType === 'debt' ? `
-              ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
-              <div class="summary-row total-debt"><span>کۆی گشتی ماوە (قەرز):</span><span dir="ltr">${newTotalDebt.toLocaleString()} د.ع</span></div>
+            ${isDebtSale ? `
+              ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت / کۆگا:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
+              <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
             ` : `
-              <div class="summary-row total-debt"><span>قەرزی ماوەی مارکێت (کۆی قەرز):</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>
+              <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
             `}
+          </div>
+
+          <div class="signatures">
+            <div><div>واژووی مارکێت/کۆگا</div><div class="sig-line"></div></div>
+            <div><div>واژووی شوفێر</div><div class="sig-line"></div></div>
           </div>
 
           <div class="footer-note">سوپاس بۆ مامەڵەکردنتان لەگەڵ کۆمپانیای RF</div>
@@ -1569,25 +1623,25 @@ export default function AdminCashvanView() {
 
   // --- Print Transfer Receipt (Stock to Cashvan - A4 Portrait) ---
   const printTransferReceipt = (transfer: CashvanTransfer) => {
+    const mergedItems = mergeReceiptItemsWithGifts(transfer.items || [], items);
     let totalUnits = 0;
     let totalGrossAmount = 0;
 
-    const itemsHtml = (transfer.items || []).map((item, idx) => {
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const qty = item.quantity || 0;
-      const price = item.price || 0;
-      const rowTotal = qty * price;
+      const qty = item.soldQuantity + item.giftQuantity;
       totalUnits += qty;
-      totalGrossAmount += rowTotal;
+      totalGrossAmount += item.lineTotal;
 
       return `
         <tr>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
           <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
-          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${item.soldQuantity}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 13px; color: #92400e;">${item.giftQuantity > 0 ? item.giftQuantity + ' 🎁' : '-'}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
-          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${price > 0 ? price.toLocaleString() + ' د.ع' : '-'}</td>
-          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${rowTotal > 0 ? rowTotal.toLocaleString() + ' د.ع' : '-'}</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${item.price.toLocaleString()} د.ع</td>
+          <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${item.lineTotal.toLocaleString()} د.ع</td>
         </tr>
       `;
     }).join('');
@@ -1618,16 +1672,17 @@ export default function AdminCashvanView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: 'پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان',
-            subtitle: `بەروار: ${format(transfer.date, 'yyyy-MM-dd HH:mm')}`,
             repName: transfer.cashvanName,
             repPhone: cashvans.find(c => c.name === transfer.cashvanName)?.phone,
             invoiceNo: transfer.transferNo || (transfer.id || '').slice(-6),
+            customerName: transfer.cashvanName,
+            isSale: true,
             date: transfer.date
           })}
           <div class="meta">
             <div><span style="color:#1e3a8a;font-weight:900;">کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
             <div><span style="color:#1e3a8a;font-weight:900;">ژمارەی تۆمار:</span> <strong dir="ltr">#${(transfer.id || '').slice(-6)}</strong></div>
+            <div><span style="color:#1e3a8a;font-weight:900;">بەروار:</span> <strong dir="ltr">${format(transfer.date, 'yyyy-MM-dd HH:mm')}</strong></div>
           </div>
           <table>
             <thead>
@@ -1635,13 +1690,14 @@ export default function AdminCashvanView() {
                 <th style="width: 40px; text-align: center;">#</th>
                 <th>ناوی کاڵا</th>
                 <th style="width: 90px; text-align: center;">بڕی بارکراو</th>
+                <th style="width: 80px; text-align: center;">هەدیە 🎁</th>
                 <th style="width: 80px; text-align: center;">یەکە</th>
                 <th style="width: 110px; text-align: center;">نرخی تاک</th>
-                <th style="width: 130px; text-align: center;">کۆی گشتی بڕی پارە</th>
+                <th style="width: 130px; text-align: center;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
-              ${itemsHtml || '<tr><td colspan="6" style="text-align:center;padding:15px;color:#000;font-weight:900;">کاڵا دیاری نەکراوە</td></tr>'}
+              ${itemsHtml || '<tr><td colspan="7" style="text-align:center;padding:15px;color:#000;font-weight:900;">کاڵا دیاری نەکراوە</td></tr>'}
             </tbody>
           </table>
           <div class="total-box">
@@ -1656,11 +1712,11 @@ export default function AdminCashvanView() {
           </div>
           <div class="signatures">
             <div style="text-align: center;">
-              <span>ڕادەستکار (لێپرسراوی کۆگا)</span>
+              <span>واژووی مارکێت/کۆگا</span>
               <div class="sig-line"></div>
             </div>
             <div style="text-align: center;">
-              <span>وەرگر (کاشڤان)</span>
+              <span>واژووی شوفێر</span>
               <div class="sig-line"></div>
             </div>
           </div>

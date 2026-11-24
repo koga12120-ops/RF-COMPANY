@@ -5,7 +5,7 @@ import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Item, CashvanTransfer, CashvanRequisition } from '../../types';
 import { Plus, Search, Check, Send, Printer, Truck, ClipboardList, CheckCircle2, Clock, Eye, X, Package, Edit2, Trash2, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
-import { renderReceiptHeaderHtml, printHtml } from '../../lib/statementPrinter';
+import { renderReceiptHeaderHtml, printHtml, mergeReceiptItemsWithGifts } from '../../lib/statementPrinter';
 import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
 
 export default function WarehouseCashvanView() {
@@ -188,12 +188,15 @@ export default function WarehouseCashvanView() {
   };
 
   const printTransferReceipt = (transfer: CashvanTransfer) => {
+    const mergedItems = mergeReceiptItemsWithGifts(transfer.items || [], items);
     let totalUnits = 0;
+    let totalAmount = 0;
 
-    const itemsHtml = transfer.items.map((item, idx) => {
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const qty = item.quantity || 0;
+      const qty = item.soldQuantity + item.giftQuantity;
       totalUnits += qty;
+      totalAmount += item.lineTotal;
 
       return `
         <tr>
@@ -201,9 +204,13 @@ export default function WarehouseCashvanView() {
           <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${item.price.toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${item.lineTotal.toLocaleString()} د.ع</td>
         </tr>
       `;
     }).join('');
+
+    const finalTotalValue = totalAmount > 0 ? totalAmount : (transfer.totalValue || 0);
 
     const html = `
       <!DOCTYPE html>
@@ -232,8 +239,6 @@ export default function WarehouseCashvanView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: 'پسوڵەی بارکردن و ڕادەستکردنی کاڵا بە کاشڤان',
-            subtitle: 'پسوڵەی فەرمی دەرچوونی کاڵا لە کۆگا بۆ کاشڤان',
             repName: transfer.cashvanName,
             repPhone: cashvans.find(c => c.name === transfer.cashvanName)?.phone,
             invoiceNo: transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6)),
@@ -244,7 +249,7 @@ export default function WarehouseCashvanView() {
             <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ناوی کاشڤان:</span> <strong>${transfer.cashvanName}</strong></div>
             <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">ژمارەی پسوڵە:</span> <strong dir="ltr">${transfer.transferNo || ('TRF-' + transfer.date.toString().slice(-6))}</strong></div>
             <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">بەروار و کات:</span> <span dir="ltr" style="font-weight:900;">${format(transfer.date, 'yyyy/MM/dd - HH:mm')}</span></div>
-            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">کۆی جۆری کاڵاکان:</span> <strong>${transfer.items.length} جۆر</strong></div>
+            <div class="meta-item"><span style="color:#1e3a8a;font-weight:900;">کۆی جۆری کاڵاکان:</span> <strong>${mergedItems.length} جۆر</strong></div>
           </div>
 
           <table>
@@ -254,6 +259,8 @@ export default function WarehouseCashvanView() {
                 <th>ناوی کاڵا</th>
                 <th style="text-align: center; width: 90px;">بڕی بارکراو</th>
                 <th style="text-align: center; width: 80px;">یەکە</th>
+                <th style="text-align: left; width: 105px;">نرخی دانە</th>
+                <th style="text-align: left; width: 115px;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
@@ -266,24 +273,22 @@ export default function WarehouseCashvanView() {
               <span style="font-weight: 900; color: #000;">کۆی گشتی ژمارەی کاڵا بارکراوەکان:</span>
               <span dir="ltr" style="color: #1e3a8a; font-size: 17px; font-weight: 900;">${totalUnits} دانە / کارتۆن</span>
             </div>
+            <div class="total-row" style="border-top: 2px solid #1e3a8a; padding-top: 8px; margin-top: 8px;">
+              <span style="font-weight: 900; color: #000; font-size: 16px;">کۆی گشتی بەهای بارکراو:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 19px; font-weight: 900;">${finalTotalValue.toLocaleString()} د.ع</span>
+            </div>
           </div>
 
           <div class="signatures">
             <div>
-              <div>واژۆی بەرپرسی کۆگا (ڕادەستکار)</div>
-              <div class="sig-line">ناو و واژۆ</div>
+              <div>واژۆی مارکێت/کۆگا</div>
+              <div class="sig-line"></div>
             </div>
             <div>
-              <div>واژۆی شۆفێری کاشڤان (وەرگر)</div>
-              <div class="sig-line">${transfer.cashvanName}</div>
+              <div>واژۆی شوفێر</div>
+              <div class="sig-line"></div>
             </div>
           </div>
-
-          <script>
-            window.onload = () => {
-              window.print();
-            };
-          </script>
         </body>
       </html>
     `;
@@ -722,17 +727,24 @@ export default function WarehouseCashvanView() {
 
   // Print Requisition (Pre-order) Receipt
   const printRequisition = (req: CashvanRequisition) => {
+    const mergedItems = mergeReceiptItemsWithGifts(req.items || [], items);
     let totalUnits = 0;
-    const itemsHtml = req.items.map((item, idx) => {
+    let totalAmount = 0;
+
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const qty = item.quantity || 0;
+      const qty = item.soldQuantity + item.giftQuantity;
       totalUnits += qty;
+      totalAmount += item.lineTotal;
+
       return `
         <tr>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${idx + 1}</td>
           <td style="border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; color: #000;">${item.name}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-size: 14px; color: #000;">${qty}</td>
           <td style="text-align: center; border: 1.5px solid #1e3a8a; padding: 8px; color: #000; font-weight: 800;">${unitLabel}</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-family: monospace; color: #1e3a8a; font-weight: 900;" dir="ltr">${item.price.toLocaleString()} د.ع</td>
+          <td style="text-align: left; border: 1.5px solid #1e3a8a; padding: 8px; font-weight: 900; font-family: monospace; color: #000;" dir="ltr">${item.lineTotal.toLocaleString()} د.ع</td>
         </tr>
       `;
     }).join('');
@@ -765,8 +777,6 @@ export default function WarehouseCashvanView() {
         </head>
         <body>
           ${renderReceiptHeaderHtml({
-            title: 'وەسڵی داواکاری پێشوەختەی کاشڤان (تەڵەبیە)',
-            subtitle: 'داواکاری ئامادەکردنی باری کاشڤان لە کۆگای سەرەکی',
             repName: req.cashvanName,
             repPhone: cashvans.find(c => c.name === req.cashvanName)?.phone,
             invoiceNo: req.requisitionNo || ('REQ-' + req.id.slice(-6)),
@@ -785,8 +795,10 @@ export default function WarehouseCashvanView() {
               <tr>
                 <th style="width: 40px; text-align: center;">#</th>
                 <th>ناوی کاڵا</th>
-                <th style="text-align: center; width: 130px;">بڕی داواکراو</th>
-                <th style="text-align: center; width: 110px;">یەکە</th>
+                <th style="text-align: center; width: 100px;">بڕی داواکراو</th>
+                <th style="text-align: center; width: 85px;">یەکە</th>
+                <th style="text-align: left; width: 105px;">نرخی دانە</th>
+                <th style="text-align: left; width: 115px;">کۆی گشتی</th>
               </tr>
             </thead>
             <tbody>
@@ -794,9 +806,15 @@ export default function WarehouseCashvanView() {
             </tbody>
           </table>
 
-          <div style="padding: 14px; background: #fff; border: 2px solid #1e3a8a; border-radius: 8px; display: flex; justify-content: space-between; font-size: 15px; font-weight: 900; color: #000;">
-            <span>کۆی گشتی ژمارەی کاڵا داواکراوەکان:</span>
-            <span dir="ltr" style="color: #1e3a8a;">${totalUnits} دانە / کارتۆن (${req.items.length} جۆر کاڵا)</span>
+          <div style="padding: 14px; background: #fff; border: 2px solid #1e3a8a; border-radius: 8px; font-size: 15px; font-weight: 900; color: #000;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+              <span>کۆی گشتی ژمارەی کاڵا داواکراوەکان:</span>
+              <span dir="ltr" style="color: #1e3a8a;">${totalUnits} دانە / کارتۆن (${mergedItems.length} جۆر کاڵا)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; border-top: 2px solid #1e3a8a; padding-top: 6px;">
+              <span>کۆی گشتی بەهای کاڵاکان:</span>
+              <span dir="ltr" style="color: #1e3a8a; font-size: 17px;">${totalAmount.toLocaleString()} د.ع</span>
+            </div>
           </div>
 
           ${req.notes ? `
@@ -807,20 +825,14 @@ export default function WarehouseCashvanView() {
 
           <div class="signatures">
             <div>
-              <div>واژۆی شۆفێری کاشڤان (داواکار)</div>
-              <div class="sig-line">${req.cashvanName}</div>
+              <div>واژۆی مارکێت/کۆگا</div>
+              <div class="sig-line"></div>
             </div>
             <div>
-              <div>واژۆی بەرپرسی کۆگا (ئامادەکار)</div>
-              <div class="sig-line">ناو و واژۆ</div>
+              <div>واژۆی شوفێر</div>
+              <div class="sig-line"></div>
             </div>
           </div>
-
-          <script>
-            window.onload = () => {
-              window.print();
-            };
-          </script>
         </body>
       </html>
     `;
@@ -880,6 +892,11 @@ export default function WarehouseCashvanView() {
 
     setIsProcessing(true);
     try {
+      if ((editingRequisition as any).stockDeducted && editingRequisition.items) {
+        await restoreWarehouseStock(editingRequisition.items);
+        await deductWarehouseStock(editReqItems);
+      }
+
       await updateDoc(doc(db, 'cashvan_requisitions', editingRequisition.id), {
         cashvanName: editReqCashvanName || editingRequisition.cashvanName,
         items: editReqItems,

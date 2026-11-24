@@ -8,7 +8,7 @@ import { format, startOfDay, endOfDay, subDays, isSameDay } from 'date-fns';
 import ConfirmModal from '../common/ConfirmModal';
 import SimpleMarketDebtPayModal from '../common/SimpleMarketDebtPayModal';
 import MarketDailyScheduleCard from '../common/MarketDailyScheduleCard';
-import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPopup, printMarketDebtReceiptPopup, renderReceiptHeaderHtml } from '../../lib/statementPrinter';
+import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPopup, printMarketDebtReceiptPopup, renderReceiptHeaderHtml, printHtml, mergeReceiptItemsWithGifts } from '../../lib/statementPrinter';
 import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
 import { getStoredSession } from '../../lib/authService';
 import { getCompanySettings } from '../../lib/companySettings';
@@ -542,17 +542,7 @@ export default function OrdersView({
       return rel === marketName.trim().toLowerCase();
     });
     const html = generateStatementHtml(marketName, marketTrans, { roleTitle: 'مارکێت', isThermal: !isA4Mode });
-    const printWin = isA4Mode
-      ? window.open('', '_blank')
-      : window.open('', '_blank', 'width=420,height=750');
-    if (printWin) {
-      printWin.document.write(html);
-      printWin.document.close();
-      printWin.focus();
-      setTimeout(() => {
-        printWin.print();
-      }, 400);
-    }
+    printHtml(html, { isThermal: !isA4Mode });
   };
 
   // --- ORDER FORM HANDLERS ---
@@ -835,16 +825,17 @@ export default function OrdersView({
     setEditOrderMarketName(order.marketName || '');
     setEditOrderRepName(order.repName || '');
     setEditOrderPaymentType(order.paymentStatus || order.paymentType || 'debt');
+    const mergedEditItems = mergeReceiptItemsWithGifts(order.items || [], items);
     setEditOrderItems(
-      (order.items || []).map((it) => ({
+      mergedEditItems.map((it) => ({
         itemId: it.itemId,
         name: it.name,
-        quantity: it.quantity || 0,
-        giftQuantity: it.giftQuantity || 0,
-        unit: it.unit || 'carton',
-        price: it.price || 0,
-        totalPrice: it.totalPrice || ((it.quantity || 0) * (it.price || 0)),
-        isGift: !!it.isGift
+        quantity: it.soldQuantity,
+        giftQuantity: it.giftQuantity,
+        unit: it.unit,
+        price: it.price,
+        totalPrice: it.lineTotal,
+        isGift: it.soldQuantity <= 0 && it.giftQuantity > 0
       }))
     );
     setEditOrderSearchTerm('');
@@ -949,10 +940,11 @@ export default function OrdersView({
     setEditOrderItems((prev) =>
       prev.map((it, idx) => {
         if (idx === index) {
+          const safeGift = Math.max(0, giftQty);
           return {
             ...it,
-            giftQuantity: Math.max(0, giftQty),
-            isGift: giftQty > 0
+            giftQuantity: safeGift,
+            isGift: (it.quantity || 0) <= 0 && safeGift > 0
           };
         }
         return it;
@@ -977,13 +969,15 @@ export default function OrdersView({
       let totalProfit = 0;
 
       const orderItems = editOrderItems.map((it) => {
-        const itemObj = items.find((i) => i.id === it.itemId);
+        const itemObj = items.find((i) => i.id === it.itemId || i.name === it.name);
         const itemCost = it.unit === 'packet'
           ? (itemObj?.packetCostPrice || itemObj?.costPrice || 0)
           : (itemObj?.cartonCostPrice || itemObj?.costPrice || 0);
-        
-        const lineTotal = (it.quantity || 0) * (it.price || 0);
-        const lineProfit = lineTotal - ((it.quantity || 0) + (it.giftQuantity || 0)) * itemCost;
+        const qty = Number(it.quantity) || 0;
+        const giftQty = Number(it.giftQuantity) || 0;
+        const unitPrice = qty > 0 ? (Number(it.price) || 0) : 0;
+        const lineTotal = qty * unitPrice;
+        const lineProfit = lineTotal - (qty + giftQty) * itemCost;
 
         totalAmount += lineTotal;
         totalProfit += lineProfit;
@@ -991,12 +985,12 @@ export default function OrdersView({
         return {
           itemId: it.itemId,
           name: it.name,
-          quantity: it.quantity,
-          giftQuantity: it.giftQuantity || 0,
+          quantity: qty,
+          giftQuantity: giftQty,
           unit: it.unit,
-          price: it.price,
+          price: unitPrice,
           totalPrice: lineTotal,
-          isGift: !!it.isGift
+          isGift: qty <= 0 && giftQty > 0
         };
       });
 
@@ -1011,7 +1005,7 @@ export default function OrdersView({
         lastEditedBy: isWarehouseMode ? 'warehouse' : (role || 'sales_rep')
       };
 
-      if (editingOrder.items) {
+      if (editingOrder.items && (editingOrder as any).stockDeducted !== false) {
         await restoreWarehouseStock(editingOrder.items as any);
       }
       await deductWarehouseStock(orderItems);
@@ -1704,15 +1698,11 @@ export default function OrdersView({
   };
 
   const printCashvanReceipt = async (sale: any, invoiceIdParam?: string) => {
-    const printWindow = isA4Mode
-      ? window.open('', '_blank')
-      : window.open('', '', 'width=420,height=750');
-    if (!printWindow) return;
-
     const invoiceId = invoiceIdParam || sale.invoiceNo || sale.invoiceId || sale.id?.slice(-6) || '---';
 
     const repObj = reps.find(r => r.name === sale.cashvanName || r.name === repName);
     const cashvanPhone = sale.cashvanPhone || repObj?.phone || (getStoredSession() as any)?.phone || '0750 000 0000';
+    const isDebtSale = sale.paymentType === 'debt' || sale.paymentStatus === 'debt';
 
     let oldDebt = 0;
     const cleanMarket = (sale.marketName || '').trim();
@@ -1724,7 +1714,10 @@ export default function OrdersView({
       const snapshot = await getDocs(q);
       snapshot.forEach(doc => {
         const data = doc.data();
-        if (data.invoiceNo !== invoiceId) {
+        const isSameSale =
+          (data.invoiceNo && (data.invoiceNo === invoiceId || data.invoiceNo === sale.invoiceNo || data.invoiceNo === sale.invoiceId)) ||
+          (data.saleId && data.saleId === sale.id);
+        if (!isSameSale) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
@@ -1748,30 +1741,30 @@ export default function OrdersView({
         }
       }
       if (liveDebt > 0) {
-        oldDebt = sale.paymentType === 'debt' ? Math.max(0, liveDebt - (sale.totalAmount || 0)) : liveDebt;
+        oldDebt = isDebtSale ? Math.max(0, liveDebt - (sale.totalAmount || 0)) : liveDebt;
       }
     }
 
-    const totalCartonCount = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && !i.isGift && (i.price > 0 || !i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
-    const totalCartonGifts = (sale.items || []).filter((i: any) => (i.unit || 'carton') === 'carton' && (i.isGift || i.price === 0 || i.name?.includes('(هەدیە)'))).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
-    const totalPacketCount = (sale.items || []).filter((i: any) => i.unit === 'packet' && !i.isGift && i.price > 0).reduce((s: number, i: any) => s + (i.quantity || 0), 0);
+    const mergedItems = mergeReceiptItemsWithGifts(sale.items || [], items);
+    const totalCartonCount = mergedItems.filter(i => i.unit === 'carton').reduce((s, i) => s + i.soldQuantity, 0);
+    const totalCartonGifts = mergedItems.filter(i => i.unit === 'carton').reduce((s, i) => s + i.giftQuantity, 0);
+    const totalPacketCount = mergedItems.filter(i => i.unit === 'packet').reduce((s, i) => s + i.soldQuantity, 0);
+    const totalPacketGifts = mergedItems.filter(i => i.unit === 'packet').reduce((s, i) => s + i.giftQuantity, 0);
+    const computedSaleTotal = mergedItems.reduce((s, i) => s + i.lineTotal, 0);
+    const finalSaleTotal = computedSaleTotal > 0 ? computedSaleTotal : (Number(sale.totalAmount) || 0);
+    const totalMarketDebt = isDebtSale ? (oldDebt + finalSaleTotal) : oldDebt;
 
     if (isA4Mode) {
-      const a4ItemsHtml = (sale.items || []).map((item: any, idx: number) => {
+      const a4ItemsHtml = mergedItems.map((item, idx) => {
         const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-        const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
-        const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
-        const itemTotal = (item.price || 0) * (item.quantity || 0);
         return `
           <tr>
             <td style="text-align: center; color: #000; font-weight: 800;">${idx + 1}</td>
-            <td style="text-align: right; font-weight: 900; color: #000;">
-              ${cleanName}
-              ${isGift ? '<span style="border: 1.5px solid #1e3a8a; color: #1e3a8a; font-size: 11px; font-weight: 900; padding: 1px 6px; border-radius: 4px; margin-right: 6px;">(هەدیە 🎁)</span>' : ''}
-            </td>
-            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
-            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${isGift ? '0' : (item.price || 0).toLocaleString()}</td>
-            <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${isGift ? '0' : itemTotal.toLocaleString()}</td>
+            <td style="text-align: right; font-weight: 900; color: #000;">${item.name}</td>
+            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${item.soldQuantity} ${unitLabel}</td>
+            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #92400e;">${item.giftQuantity > 0 ? item.giftQuantity + ' 🎁' : '-'}</td>
+            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${item.soldQuantity > 0 ? item.price.toLocaleString() : '0'}</td>
+            <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${item.lineTotal.toLocaleString()}</td>
           </tr>
         `;
       }).join('');
@@ -1817,7 +1810,7 @@ export default function OrdersView({
               <div class="info-row"><span class="label">ژمارەی وەسڵ:</span><span class="val" dir="ltr" style="font-family: monospace;">#${invoiceId}</span></div>
               <div class="info-row"><span class="label">ناوی کڕیار / مارکێت:</span><span class="val">${sale.marketName}</span></div>
               <div class="info-row"><span class="label">کاشڤان:</span><span class="val">${sale.cashvanName}</span></div>
-              <div class="info-row"><span class="label">شێوازی پارەدان:</span><span class="val" style="color: ${sale.paymentType === 'cash' ? '#14532d' : '#92400e'};">${sale.paymentType === 'cash' ? 'نەقد (کاش)' : 'قەرز'}</span></div>
+              <div class="info-row"><span class="label">شێوازی پارەدان:</span><span class="val" style="color: ${!isDebtSale ? '#14532d' : '#92400e'};">${!isDebtSale ? 'نەقد (کاش)' : 'قەرز'}</span></div>
               <div class="info-row"><span class="label">بەروار و کات:</span><span class="val" dir="ltr">${format(sale.date || Date.now(), 'yyyy/MM/dd HH:mm')}</span></div>
             </div>
             <table>
@@ -1825,61 +1818,56 @@ export default function OrdersView({
                 <tr>
                   <th style="width: 45px; text-align: center;">#</th>
                   <th style="text-align: right;">ناوی کاڵا</th>
-                  <th style="width: 120px; text-align: center;">بڕ</th>
-                  <th style="width: 120px; text-align: center;">نرخ</th>
-                  <th style="width: 140px; text-align: left;">کۆ</th>
+                  <th style="width: 110px; text-align: center;">بڕ</th>
+                  <th style="width: 90px; text-align: center;">هەدیە 🎁</th>
+                  <th style="width: 110px; text-align: center;">نرخ</th>
+                  <th style="width: 130px; text-align: left;">کۆی گشتی</th>
                 </tr>
               </thead>
               <tbody>${a4ItemsHtml}</tbody>
             </table>
             <div class="summary">
               <div class="summary-row main">
-                <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
-                <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
+                <span>کۆی ئەم وەسڵە (${!isDebtSale ? 'نەقد' : 'قەرز'}):</span>
+                <span dir="ltr">${finalSaleTotal.toLocaleString()} د.ع</span>
               </div>
               <div style="text-align: center; margin: 10px 0; padding: 8px 12px; border: 2px solid #1e3a8a; border-radius: 6px; background: #fff;">
                 <div style="font-size: 16px; font-weight: 900; color: #000;">
                   ژمارەی کارتۆن: <span dir="ltr" style="font-size: 18px; font-weight: 900; font-family: monospace; color: #1e3a8a;">${totalCartonCount} کارتۆن</span>
                   ${totalCartonGifts > 0 ? `<span style="font-size: 13px; font-weight: 900; color: #000;"> (+ ${totalCartonGifts} هەدیە)</span>` : ''}
                   ${totalPacketCount > 0 ? `<span style="font-size: 13px; font-weight: 900; color: #000;"> (+ ${totalPacketCount} پاکەت)</span>` : ''}
+                  ${totalPacketGifts > 0 ? `<span style="font-size: 13px; font-weight: 900; color: #000;"> (+ ${totalPacketGifts} پاکەت هەدیە)</span>` : ''}
                 </div>
               </div>
-              ${sale.paymentType === 'debt' ? `
-                ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
-                <div class="summary-row total-debt"><span>کۆی گشتی ماوە (قەرز):</span><span dir="ltr">${(oldDebt + (sale.totalAmount || 0)).toLocaleString()} د.ع</span></div>
+              ${isDebtSale ? `
+                ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت / کۆگا:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
+                <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
               ` : `
-                <div class="summary-row total-debt"><span>قەرزی ماوەی مارکێت (کۆی قەرز):</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>
+                <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
               `}
             </div>
             <div class="signatures">
-              <div><div>واژووی وەرگر</div><div class="sig-line"></div></div>
+              <div><div>واژووی مارکێت/کۆگا</div><div class="sig-line"></div></div>
               <div><div>واژووی شوفێر</div><div class="sig-line"></div></div>
             </div>
             <div class="footer-note">سوپاس بۆ مامەڵەکردنتان لەگەڵ کۆمپانیای RF</div>
-            <script>window.onload = function() { window.print(); }</script>
           </body>
         </html>
       `;
-      printWindow.document.write(a4Html);
-      printWindow.document.close();
+      printHtml(a4Html, { isThermal: false });
       return;
     }
 
-    const itemsHtml = (sale.items || []).map((item: any, idx: number) => {
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
-      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
-      const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
         <tr>
-          <td style="text-align: center; color: #000; font-size: 12.5px; font-weight: 900; padding: 6px 2px;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: 900; font-size: 13.5px; padding: 6px 3px; word-break: break-word; color: #000;">
-            ${cleanName}
-            ${isGift ? '<span style="border: 2px solid #000; color: #000; font-size: 11px; font-weight: 900; padding: 1px 4px; border-radius: 3px; margin-right: 3px;">(هەدیە 🎁)</span>' : ''}
-          </td>
-          <td style="text-align: center; font-weight: 900; font-size: 13px; padding: 6px 2px; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-weight: 900; font-size: 13px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : (item.price || 0).toLocaleString()}</td>
-          <td style="text-align: left; font-weight: 900; font-size: 13px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">${isGift ? '<strong style="color: #000;">0</strong>' : itemTotal.toLocaleString()}</td>
+          <td style="text-align: center; color: #000; font-size: 12px; font-weight: 900; padding: 6px 2px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: 900; font-size: 12.5px; padding: 6px 2px; word-break: break-word; color: #000;">${item.name}</td>
+          <td style="text-align: center; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;">${item.soldQuantity} ${unitLabel}</td>
+          <td style="text-align: center; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;">${item.giftQuantity > 0 ? item.giftQuantity : '-'}</td>
+          <td style="text-align: center; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">${item.soldQuantity > 0 ? item.price.toLocaleString() : '0'}</td>
+          <td style="text-align: left; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">${item.lineTotal.toLocaleString()}</td>
         </tr>
       `;
     }).join('');
@@ -1919,9 +1907,9 @@ export default function OrdersView({
             .info-row { display: flex; justify-content: space-between; padding: 2px 0; color: #000; }
             .info-row .label { color: #000; font-weight: 900; }
             .info-row .val { font-weight: 900; color: #000; }
-            table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; font-size: 13px; color: #000; }
-            th { background: #fff; color: #000; padding: 5px 2px; border-top: 2px solid #000; border-bottom: 2px solid #000; font-weight: 900; font-size: 13px; }
-            td { padding: 6px 2px; border-bottom: 1.5px dashed #000; font-size: 13px; font-weight: 900; color: #000; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; font-size: 12.5px; color: #000; }
+            th { background: #fff; color: #000; padding: 5px 2px; border-top: 2px solid #000; border-bottom: 2px solid #000; font-weight: 900; font-size: 12px; }
+            td { padding: 6px 2px; border-bottom: 1.5px dashed #000; font-size: 12.5px; font-weight: 900; color: #000; }
             .summary { margin-top: 8px; border-top: 2px dashed #000; padding-top: 6px; color: #000; }
             .summary-row { display: flex; justify-content: space-between; font-size: 13.5px; font-weight: 900; margin-bottom: 4px; color: #000; }
             .summary-row.main { font-size: 16px; font-weight: 900; color: #000; background: #fff; border: 2px solid #000; padding: 6px 7px; border-radius: 4px; margin-top: 5px; }
@@ -1958,7 +1946,7 @@ export default function OrdersView({
                 <div class="info-row">
                   <span class="label">شێوازی پارەدان:</span>
                   <strong style="color: #000; font-weight: 900;">
-                    ${sale.paymentType === 'cash' ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
+                    ${!isDebtSale ? 'نەقد (کاش) 💵' : 'قەرز 💳'}
                   </strong>
                 </div>
                 <div class="info-row">
@@ -1971,9 +1959,10 @@ export default function OrdersView({
                 <thead>
                   <tr>
                     <th style="width: 7%; text-align: center;">#</th>
-                    <th style="width: 41%; text-align: right;">ناوی کاڵا</th>
-                    <th style="width: 17%; text-align: center;">بڕ</th>
-                    <th style="width: 17%; text-align: center;">نرخ</th>
+                    <th style="width: 34%; text-align: right;">ناوی کاڵا</th>
+                    <th style="width: 14%; text-align: center;">بڕ</th>
+                    <th style="width: 11%; text-align: center;">هەدیە</th>
+                    <th style="width: 16%; text-align: center;">نرخ</th>
                     <th style="width: 18%; text-align: left;">کۆ</th>
                   </tr>
                 </thead>
@@ -1984,8 +1973,8 @@ export default function OrdersView({
 
               <div class="summary">
                 <div class="summary-row main">
-                  <span>کۆی ئەم وەسڵە (${sale.paymentType === 'cash' ? 'نەقد' : 'قەرز'}):</span>
-                  <span dir="ltr">${(sale.totalAmount || 0).toLocaleString()} د.ع</span>
+                  <span>کۆی ئەم وەسڵە (${!isDebtSale ? 'نەقد' : 'قەرز'}):</span>
+                  <span dir="ltr">${finalSaleTotal.toLocaleString()} د.ع</span>
                 </div>
 
                 <div style="text-align: center; margin: 8px 0; padding: 6px 8px; border: 2px solid #000; border-radius: 4px; background: #fff;">
@@ -1993,24 +1982,25 @@ export default function OrdersView({
                     ژمارەی کارتۆن: <span dir="ltr" style="font-size: 18px; font-weight: 900; font-family: monospace;">${totalCartonCount} کارتۆن</span>
                     ${totalCartonGifts > 0 ? `<span style="font-size: 13px; font-weight: 900;"> (+ ${totalCartonGifts} هەدیە)</span>` : ''}
                     ${totalPacketCount > 0 ? `<span style="font-size: 13px; font-weight: 900;"> (+ ${totalPacketCount} پاکەت)</span>` : ''}
+                    ${totalPacketGifts > 0 ? `<span style="font-size: 13px; font-weight: 900;"> (+ ${totalPacketGifts} پاکەت هەدیە)</span>` : ''}
                   </div>
                 </div>
 
-                ${sale.paymentType === 'debt' ? `
+                ${isDebtSale ? `
                   ${oldDebt > 0 ? `
                     <div class="summary-row" style="margin-top: 5px; font-weight: 900; color: #000;">
-                      <span>قەرزی پێشووی مارکێت:</span>
+                      <span>قەرزی پێشووی مارکێت / کۆگا:</span>
                       <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
                     </div>
                   ` : ''}
                   <div class="summary-row total-debt">
-                    <span>کۆی گشتی ماوە (قەرز):</span>
-                    <span dir="ltr">${(oldDebt + (sale.totalAmount || 0)).toLocaleString()} د.ع</span>
+                    <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+                    <span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span>
                   </div>
                 ` : `
                   <div class="summary-row total-debt" style="margin-top: 5px;">
-                    <span>قەرزی ماوەی مارکێت (کۆی قەرز):</span>
-                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                    <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+                    <span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span>
                   </div>
                 `}
               </div>
@@ -2020,27 +2010,18 @@ export default function OrdersView({
               </div>
             </div>
           </div>
-
-          <script>
-            window.onload = function() { window.print(); }
-          </script>
         </body>
       </html>
     `;
-    printWindow.document.write(html);
-    printWindow.document.close();
+    printHtml(html, { isThermal: true });
   };
 
   const printOrderReceipt = async (order: Order, invoiceIdParam?: string) => {
-    const printWindow = isA4Mode
-      ? window.open('', '_blank')
-      : window.open('', '_blank', 'width=420,height=750');
-    if (!printWindow) return;
-
     const invoiceId = invoiceIdParam || order.invoiceId || order.invoiceNo || order.id.slice(-6);
 
     const repObj = reps.find(r => r.name === order.repName || r.name === repName);
     const repPhone = (order as any).repPhone || repObj?.phone || (getStoredSession() as any)?.phone || '-';
+    const isDebtOrder = order.paymentStatus === 'debt' || (order as any).paymentType === 'debt';
 
     let oldDebt = 0;
     const cleanMarket = (order.marketName || '').trim();
@@ -2052,7 +2033,10 @@ export default function OrdersView({
       const snapshot = await getDocs(q);
       snapshot.forEach(doc => {
         const data = doc.data();
-        if (data.invoiceNo !== invoiceId) {
+        const isSameOrder =
+          (data.invoiceNo && (data.invoiceNo === invoiceId || data.invoiceNo === order.invoiceNo || data.invoiceNo === order.invoiceId)) ||
+          (data.orderId && data.orderId === order.id);
+        if (!isSameOrder) {
           if (data.type === 'debt' || data.type === 'market_debt') {
             oldDebt += data.amount || 0;
           } else if (data.type === 'paid_debt' || data.type === 'market_paid_debt') {
@@ -2076,33 +2060,32 @@ export default function OrdersView({
         }
       }
       if (liveDebt > 0) {
-        oldDebt = order.paymentStatus === 'debt' ? Math.max(0, liveDebt - (order.totalAmount || 0)) : liveDebt;
+        oldDebt = isDebtOrder ? Math.max(0, liveDebt - (order.totalAmount || 0)) : liveDebt;
       }
     }
 
-    const totalOrderCartons = (order.items || []).reduce((acc, item) => {
-      if (item.unit !== 'packet') {
-        return acc + (Number(item.quantity) || 0);
-      }
-      return acc;
-    }, 0);
+    const mergedItems = mergeReceiptItemsWithGifts(order.items || [], items);
+    const totalOrderCartons = mergedItems
+      .filter(i => i.unit !== 'packet')
+      .reduce((acc, i) => acc + i.soldQuantity, 0);
+    const totalOrderCartonGifts = mergedItems
+      .filter(i => i.unit !== 'packet')
+      .reduce((acc, i) => acc + i.giftQuantity, 0);
+    const computedOrderTotal = mergedItems.reduce((acc, i) => acc + i.lineTotal, 0);
+    const finalOrderTotal = computedOrderTotal > 0 ? computedOrderTotal : (Number(order.totalAmount) || 0);
+    const totalMarketDebt = isDebtOrder ? (oldDebt + finalOrderTotal) : oldDebt;
 
     if (isA4Mode) {
-      const a4ItemsHtml = (order.items || []).map((item, idx) => {
+      const a4ItemsHtml = mergedItems.map((item, idx) => {
         const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-        const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
-        const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
-        const itemTotal = (item.price || 0) * (item.quantity || 0);
         return `
           <tr>
             <td style="text-align: center; color: #000; font-weight: 800;">${idx + 1}</td>
-            <td style="text-align: right; font-weight: 900; color: #000;">
-              ${cleanName}
-              ${isGift ? '<span style="border: 1.5px solid #1e3a8a; color: #1e3a8a; font-size: 11px; font-weight: 900; padding: 1px 6px; border-radius: 4px; margin-right: 6px;">(هەدیە 🎁)</span>' : ''}
-            </td>
-            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
-            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${isGift ? '0' : (item.price || 0).toLocaleString()}</td>
-            <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${isGift ? '0' : itemTotal.toLocaleString()}</td>
+            <td style="text-align: right; font-weight: 900; color: #000;">${item.name}</td>
+            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #000;">${item.soldQuantity} ${unitLabel}</td>
+            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #92400e;">${item.giftQuantity > 0 ? item.giftQuantity + ' 🎁' : '-'}</td>
+            <td style="text-align: center; font-weight: 900; white-space: nowrap; color: #1e3a8a; font-family: monospace;" dir="ltr">${item.soldQuantity > 0 ? item.price.toLocaleString() : '0'}</td>
+            <td style="text-align: left; font-weight: 900; white-space: nowrap; color: #000; font-family: monospace;" dir="ltr">${item.lineTotal.toLocaleString()}</td>
           </tr>
         `;
       }).join('');
@@ -2150,7 +2133,7 @@ export default function OrdersView({
               <div class="info-row"><span class="label">ژمارەی وەسڵ:</span><span class="val" dir="ltr" style="font-family: monospace;">#${invoiceId}</span></div>
               <div class="info-row"><span class="label">ناوی کڕیار / مارکێت:</span><span class="val">${order.marketName}</span></div>
               <div class="info-row"><span class="label">مەندووب:</span><span class="val">${order.repName}</span></div>
-              <div class="info-row"><span class="label">شێوازی پارەدان:</span><span class="val" style="color: ${order.paymentStatus === 'cash' ? '#14532d' : '#92400e'};">${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}</span></div>
+              <div class="info-row"><span class="label">شێوازی پارەدان:</span><span class="val" style="color: ${!isDebtOrder ? '#14532d' : '#92400e'};">${!isDebtOrder ? 'نەقد' : 'قەرز'}</span></div>
               <div class="info-row"><span class="label">بەروار و کات:</span><span class="val" dir="ltr">${format(order.timestamp, 'yyyy/MM/dd HH:mm')}</span></div>
             </div>
             <table>
@@ -2158,60 +2141,54 @@ export default function OrdersView({
                 <tr>
                   <th style="width: 45px; text-align: center;">#</th>
                   <th style="text-align: right;">ناوی کاڵا</th>
-                  <th style="width: 120px; text-align: center;">بڕ</th>
-                  <th style="width: 120px; text-align: center;">نرخ</th>
-                  <th style="width: 140px; text-align: left;">کۆی</th>
+                  <th style="width: 110px; text-align: center;">بڕ</th>
+                  <th style="width: 90px; text-align: center;">هەدیە 🎁</th>
+                  <th style="width: 110px; text-align: center;">نرخ</th>
+                  <th style="width: 130px; text-align: left;">کۆی گشتی</th>
                 </tr>
               </thead>
               <tbody>${a4ItemsHtml}</tbody>
             </table>
             <div class="summary">
               <div class="summary-row main">
-                <span>کۆی ئەم وەسڵە (${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}):</span>
-                <span dir="ltr">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
+                <span>کۆی ئەم وەسڵە (${!isDebtOrder ? 'نەقد' : 'قەرز'}):</span>
+                <span dir="ltr">${finalOrderTotal.toLocaleString()} د.ع</span>
               </div>
               <div style="text-align: center; margin: 10px 0; padding: 8px 12px; border: 2px solid #1e3a8a; border-radius: 6px; background: #fff;">
-                <div style="font-size: 16px; font-weight: 900; color: #000;">کۆی ژمارەی کارتۆن: <span dir="ltr" style="font-size: 18px; color: #1e3a8a;">${totalOrderCartons} کارتۆن</span></div>
+                <div style="font-size: 16px; font-weight: 900; color: #000;">کۆی ژمارەی کارتۆن: <span dir="ltr" style="font-size: 18px; color: #1e3a8a;">${totalOrderCartons} کارتۆن</span>${totalOrderCartonGifts > 0 ? ` <span style="font-size: 13px; color: #92400e;">(+ ${totalOrderCartonGifts} هەدیە)</span>` : ''}</div>
               </div>
-              ${order.paymentStatus === 'debt' ? `
-                ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
-                <div class="summary-row total-debt"><span>کۆی گشتی ماوە (قەرز):</span><span dir="ltr">${(oldDebt + (order.totalAmount || 0)).toLocaleString()} د.ع</span></div>
+              ${isDebtOrder ? `
+                ${oldDebt > 0 ? `<div class="summary-row"><span>قەرزی پێشووی مارکێت / کۆگا:</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>` : ''}
+                <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
               ` : `
-                <div class="summary-row total-debt"><span>قەرزی ماوەی مارکێت (کۆی قەرز):</span><span dir="ltr">${oldDebt.toLocaleString()} د.ع</span></div>
+                <div class="summary-row total-debt"><span>کۆی گشتی قەرزی مارکێت / کۆگا:</span><span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span></div>
               `}
             </div>
             <div class="signatures">
-              <div><div>واژووی وەرگر</div><div class="sig-line"></div></div>
+              <div><div>واژووی مارکێت/کۆگا</div><div class="sig-line"></div></div>
               <div><div>واژووی شوفێر</div><div class="sig-line"></div></div>
             </div>
             <div class="footer-note">سوپاس بۆ مامەڵەکردنتان لەگەڵ کۆمپانیای RF</div>
-            <script>window.onload = function() { window.print(); }</script>
           </body>
         </html>
       `;
-      printWindow.document.write(a4Html);
-      printWindow.document.close();
+      printHtml(a4Html, { isThermal: false });
       return;
     }
 
-    const itemsHtml = (order.items || []).map((item, idx) => {
+    const itemsHtml = mergedItems.map((item, idx) => {
       const unitLabel = item.unit === 'packet' ? 'پاکەت' : 'کارتۆن';
-      const isGift = item.isGift || item.price === 0 || (item.name && item.name.includes('(هەدیە)'));
-      const cleanName = (item.name || '').replace('(هەدیە)', '').trim();
-      const itemTotal = (item.price || 0) * (item.quantity || 0);
       return `
         <tr>
-          <td style="text-align: center; color: #000; font-size: 12.5px; font-weight: 900; padding: 6px 2px;">${idx + 1}</td>
-          <td style="text-align: right; font-weight: 900; font-size: 13.5px; padding: 6px 3px; word-break: break-word; color: #000;">
-            ${cleanName}
-            ${isGift ? '<span style="border: 2px solid #000; color: #000; font-size: 11px; font-weight: 900; padding: 1px 4px; border-radius: 3px; margin-right: 3px;">(هەدیە 🎁)</span>' : ''}
+          <td style="text-align: center; color: #000; font-size: 12px; font-weight: 900; padding: 6px 2px;">${idx + 1}</td>
+          <td style="text-align: right; font-weight: 900; font-size: 12.5px; padding: 6px 2px; word-break: break-word; color: #000;">${item.name}</td>
+          <td style="text-align: center; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;">${item.soldQuantity} ${unitLabel}</td>
+          <td style="text-align: center; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;">${item.giftQuantity > 0 ? item.giftQuantity : '-'}</td>
+          <td style="text-align: center; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">
+            ${item.soldQuantity > 0 ? item.price.toLocaleString() : '0'}
           </td>
-          <td style="text-align: center; font-weight: 900; font-size: 13px; padding: 6px 2px; white-space: nowrap; color: #000;">${item.quantity} ${unitLabel}</td>
-          <td style="text-align: center; font-weight: 900; font-size: 13px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">
-            ${isGift ? '<strong style="color: #000;">0</strong>' : (item.price || 0).toLocaleString()}
-          </td>
-          <td style="text-align: left; font-weight: 900; font-size: 13px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">
-            ${isGift ? '<strong style="color: #000;">0</strong>' : itemTotal.toLocaleString()}
+          <td style="text-align: left; font-weight: 900; font-size: 12.5px; padding: 6px 2px; white-space: nowrap; color: #000;" dir="ltr">
+            ${item.lineTotal.toLocaleString()}
           </td>
         </tr>
       `;
@@ -2253,9 +2230,9 @@ export default function OrdersView({
             .info-row { display: flex; justify-content: space-between; padding: 2px 0; color: #000; }
             .info-row .label { color: #000; font-weight: 900; }
             .info-row .val { font-weight: 900; color: #000; }
-            table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; font-size: 13px; color: #000; }
-            th { background: #fff; color: #000; padding: 5px 2px; border-top: 2px solid #000; border-bottom: 2px solid #000; font-weight: 900; font-size: 13px; }
-            td { padding: 6px 2px; border-bottom: 1.5px dashed #000; font-size: 13px; font-weight: 900; color: #000; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 6px; font-size: 12.5px; color: #000; }
+            th { background: #fff; color: #000; padding: 5px 2px; border-top: 2px solid #000; border-bottom: 2px solid #000; font-weight: 900; font-size: 12px; }
+            td { padding: 6px 2px; border-bottom: 1.5px dashed #000; font-size: 12.5px; font-weight: 900; color: #000; }
             .summary { margin-top: 8px; border-top: 2px dashed #000; padding-top: 6px; color: #000; }
             .summary-row { display: flex; justify-content: space-between; font-size: 13.5px; font-weight: 900; margin-bottom: 4px; color: #000; }
             .summary-row.main { font-size: 16px; font-weight: 900; color: #000; background: #fff; border: 2px solid #000; padding: 6px 7px; border-radius: 4px; margin-top: 5px; }
@@ -2298,7 +2275,7 @@ export default function OrdersView({
                 <div class="info-row">
                   <span class="label">شێوازی پارەدان:</span>
                   <strong style="color: #000; font-weight: 900;">
-                    ${order.paymentStatus === 'cash' ? 'نەقد 💵' : 'قەرز 💳'}
+                    ${!isDebtOrder ? 'نەقد 💵' : 'قەرز 💳'}
                   </strong>
                 </div>
                 <div class="info-row">
@@ -2311,9 +2288,10 @@ export default function OrdersView({
                 <thead>
                   <tr>
                     <th style="width: 7%; text-align: center;">#</th>
-                    <th style="width: 41%; text-align: right;">ناوی کاڵا</th>
-                    <th style="width: 17%; text-align: center;">بڕ</th>
-                    <th style="width: 17%; text-align: center;">نرخ</th>
+                    <th style="width: 34%; text-align: right;">ناوی کاڵا</th>
+                    <th style="width: 14%; text-align: center;">بڕ</th>
+                    <th style="width: 11%; text-align: center;">هەدیە</th>
+                    <th style="width: 16%; text-align: center;">نرخ</th>
                     <th style="width: 18%; text-align: left;">کۆی</th>
                   </tr>
                 </thead>
@@ -2324,28 +2302,29 @@ export default function OrdersView({
 
               <div class="summary">
                 <div class="summary-row main">
-                  <span>کۆی ئەم وەسڵە (${order.paymentStatus === 'cash' ? 'نەقد' : 'قەرز'}):</span>
-                  <span dir="ltr">${(order.totalAmount || 0).toLocaleString()} د.ع</span>
+                  <span>کۆی ئەم وەسڵە (${!isDebtOrder ? 'نەقد' : 'قەرز'}):</span>
+                  <span dir="ltr">${finalOrderTotal.toLocaleString()} د.ع</span>
                 </div>
                 <div style="text-align: center; margin: 8px 0; padding: 6px 8px; border: 2px solid #000; border-radius: 4px; background: #fff;">
                   <span style="font-size: 16px; font-weight: 900;">کۆی ژمارەی کارتۆن: </span>
                   <span dir="ltr" style="font-size: 18px; font-weight: 900; font-family: monospace;">${totalOrderCartons} کارتۆن</span>
+                  ${totalOrderCartonGifts > 0 ? `<span style="font-size: 13px; font-weight: 900;"> (+ ${totalOrderCartonGifts} هەدیە)</span>` : ''}
                 </div>
-                ${order.paymentStatus === 'debt' ? `
+                ${isDebtOrder ? `
                   ${oldDebt > 0 ? `
                     <div class="summary-row" style="margin-top: 5px; font-weight: 900; color: #000;">
-                      <span>قەرزی پێشووی مارکێت:</span>
+                      <span>قەرزی پێشووی مارکێت / کۆگا:</span>
                       <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
                     </div>
                   ` : ''}
                   <div class="summary-row total-debt">
-                    <span>کۆی گشتی ماوە (قەرز):</span>
-                    <span dir="ltr">${(oldDebt + (order.totalAmount || 0)).toLocaleString()} د.ع</span>
+                    <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+                    <span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span>
                   </div>
                 ` : `
                   <div class="summary-row total-debt" style="margin-top: 5px;">
-                    <span>قەرزی ماوەی مارکێت (کۆی قەرز):</span>
-                    <span dir="ltr">${oldDebt.toLocaleString()} د.ع</span>
+                    <span>کۆی گشتی قەرزی مارکێت / کۆگا:</span>
+                    <span dir="ltr">${totalMarketDebt.toLocaleString()} د.ع</span>
                   </div>
                 `}
               </div>
@@ -2356,7 +2335,7 @@ export default function OrdersView({
                   <div class="sig-line"></div>
                 </div>
                 <div>
-                  <div>واژووی مارکێت</div>
+                  <div>واژووی مارکێت/کۆگا</div>
                   <div class="sig-line"></div>
                 </div>
               </div>
@@ -2366,15 +2345,10 @@ export default function OrdersView({
               </div>
             </div>
           </div>
-
-          <script>
-            window.onload = function() { window.print(); }
-          </script>
         </body>
       </html>
     `;
-    printWindow.document.write(html);
-    printWindow.document.close();
+    printHtml(html, { isThermal: true });
   };
 
   // --- UNIFIED ACTIVITIES FOR BOTTOM HISTORY ---
@@ -4295,10 +4269,18 @@ export default function OrdersView({
         onConfirm={async () => {
           if (!deletingOrder) return;
           try {
-            if (deletingOrder.items) {
+            if (deletingOrder.items && (deletingOrder as any).stockDeducted !== false) {
               await restoreWarehouseStock(deletingOrder.items as any);
             }
             await updateDoc(doc(db, 'orders', deletingOrder.id), { status: 'deleted' });
+
+            const invKey = deletingOrder.invoiceId || deletingOrder.invoiceNo || deletingOrder.id;
+            const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', invKey));
+            const snapTr = await getDocs(qTr);
+            for (const d of snapTr.docs) {
+              await deleteDoc(doc(db, 'transactions', d.id));
+            }
+
             setDeletingOrder(null);
           } catch (e) {
             console.error(e);
