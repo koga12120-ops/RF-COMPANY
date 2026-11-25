@@ -12,7 +12,7 @@ import { printDailyRepReceiptPopup, generateStatementHtml, printPaymentReceiptPo
 import { getNextInvoiceNumber } from '../../lib/invoiceSequence';
 import { getStoredSession } from '../../lib/authService';
 import { getCompanySettings } from '../../lib/companySettings';
-import { deductWarehouseStock, restoreWarehouseStock } from '../../lib/invoiceSync';
+import { deductWarehouseStock, restoreWarehouseStock, restoreCashvanSaleInventory, syncCashvanSaleInventoryEdit, deleteCashvanSaleTransactions } from '../../lib/invoiceSync';
 import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
 
 interface ActivityItem {
@@ -304,15 +304,17 @@ export default function OrdersView({
 
   // Listen to cashvan_inventory for the current active rep / cashvan
   useEffect(() => {
-    if (!repName) return;
-    const qInv = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', repName));
+    const cleanRep = (repName || '').trim().toLowerCase();
+    if (!cleanRep) return;
+    const qInv = query(collection(db, 'cashvan_inventory'));
     const unsubInv = onSnapshot(
       qInv,
       (snapshot) => {
         const data: any[] = [];
         snapshot.forEach(doc => {
           const invData = doc.data();
-          if ((invData.quantity || 0) > 0) {
+          const invVan = (invData.cashvanName || '').trim().toLowerCase();
+          if (invVan === cleanRep && (invData.quantity || 0) > 0) {
             data.push({ id: doc.id, ...invData });
           }
         });
@@ -1038,44 +1040,21 @@ export default function OrdersView({
   };
 
   // --- CASHVAN SALE EDIT & DELETE HANDLERS ---
-  const adjustVanInventoryStock = async (vanName: string, itemId: string, itemName: string, unit: string = 'carton', delta: number) => {
-    try {
-      const cleanVan = vanName.trim();
-      const qV = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', cleanVan));
-      const snapV = await getDocs(qV);
-      const matched = snapV.docs.find(d => {
-        const data = d.data();
-        return data.itemId === itemId || d.id === `${cleanVan}_${itemId}` || data.name === itemName;
-      });
-
-      if (matched) {
-        const curQty = matched.data().quantity || 0;
-        const newQty = Math.max(0, Math.round((curQty + delta) * 1000) / 1000);
-        await updateDoc(doc(db, 'cashvan_inventory', matched.id), {
-          quantity: newQty,
-          lastUpdated: Date.now()
-        });
-      } else if (delta > 0) {
-        const newDocId = `${cleanVan}_${itemId || Date.now()}`;
-        await setDoc(doc(db, 'cashvan_inventory', newDocId), {
-          cashvanName: cleanVan,
-          itemId: itemId || '',
-          name: itemName,
-          unit: unit || 'carton',
-          quantity: Math.round(delta * 1000) / 1000,
-          lastUpdated: Date.now()
-        }, { merge: true });
-      }
-    } catch (err) {
-      console.error('Error adjusting van inventory stock:', err);
-    }
-  };
-
   const getAvailableStockForEditSaleItem = (itemId: string, itemName: string) => {
-    const vItem = vanInventory.find(v => (v.itemId === itemId || v.id === itemId || v.name === itemName));
+    const cleanName = normalizeKurdishArabicText((itemName || '').replace(/\(هەدیە\)/g, '').trim()).toLowerCase();
+    const matchItem = (candidateId?: string, candidateName?: string) => {
+      if (itemId && candidateId && (candidateId === itemId || candidateId.endsWith(`_${itemId}`) || itemId.endsWith(`_${candidateId}`))) {
+        return true;
+      }
+      const candClean = normalizeKurdishArabicText((candidateName || '').replace(/\(هەدیە\)/g, '').trim()).toLowerCase();
+      return !!cleanName && candClean === cleanName;
+    };
+
+    const vItem = vanInventory.find(v => matchItem(v.itemId || v.id, v.name));
     const curVanQty = vItem ? (vItem.quantity || 0) : 0;
-    const origItem = editingSale?.items?.find((it: any) => (it.itemId === itemId || it.name === itemName));
-    const origQty = origItem ? (origItem.quantity || 0) : 0;
+    const origQty = (editingSale?.items || [])
+      .filter((it: any) => matchItem(it.itemId || it.id, it.name))
+      .reduce((acc: number, it: any) => acc + (Number(it.quantity) || 0) + (Number(it.giftQuantity) || 0), 0);
     return {
       vanStock: curVanQty,
       origQty: origQty,
@@ -1086,31 +1065,34 @@ export default function OrdersView({
   const handleConfirmDeleteSale = async () => {
     if (!deletingSale) return;
     try {
-      await updateDoc(doc(db, 'cashvan_sales', deletingSale.id), {
+      const saleRef = doc(db, 'cashvan_sales', deletingSale.id);
+      const freshSnap = await getDoc(saleRef);
+      if (!freshSnap.exists() || freshSnap.data().status === 'deleted') {
+        setDeletingSale(null);
+        return;
+      }
+
+      const freshData = freshSnap.data();
+      const targetVanName = (freshData.cashvanName || deletingSale.cashvanName || repName || '').trim();
+      const saleItems = freshData.items || deletingSale.items || [];
+
+      // Return items (sold + gift) back into van inventory first
+      if (targetVanName && saleItems.length > 0) {
+        await restoreCashvanSaleInventory(targetVanName, saleItems, items);
+      }
+
+      await updateDoc(saleRef, {
         status: 'deleted',
         deletedAt: Date.now(),
         deletedBy: repName || 'کاشڤان'
       });
 
-      // Return items back into van inventory
-      const targetVanName = (deletingSale.cashvanName || repName || '').trim();
-      if (targetVanName && deletingSale.items) {
-        for (const it of deletingSale.items) {
-          const qty = it.quantity || 0;
-          if (qty > 0) {
-            await adjustVanInventoryStock(targetVanName, it.itemId, it.name, it.unit, qty);
-          }
-        }
-      }
+      await deleteCashvanSaleTransactions(
+        deletingSale.id,
+        freshData.invoiceNo || deletingSale.invoiceNo,
+        freshData.invoiceId || deletingSale.invoiceId
+      );
 
-      const inv = deletingSale.invoiceNo || deletingSale.invoiceId;
-      if (inv) {
-        const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', inv));
-        const snapTr = await getDocs(qTr);
-        for (const d of snapTr.docs) {
-          await deleteDoc(doc(db, 'transactions', d.id));
-        }
-      }
       setDeletingSale(null);
       alert('فرۆشتنی کاشڤان سڕایەوە و کاڵاکان بە سەرکەوتوویی گەڕێنرانەوە بۆ ناو ڤان');
     } catch (e: any) {
@@ -1302,42 +1284,10 @@ export default function OrdersView({
         };
       });
 
-      // Synchronize Van Inventory! (Return reduced quantities or deduct increased quantities)
+      // Synchronize Van Inventory! (Return reduced quantities or deduct increased quantities, aggregating paid + gift)
       const targetVanName = (editingSale.cashvanName || repName || '').trim();
-      if (targetVanName) {
-        const oldItemsMap = new Map<string, any>();
-        (editingSale.items || []).forEach((it: any) => {
-          const key = it.itemId || it.name;
-          oldItemsMap.set(key, it);
-        });
-
-        const newItemsMap = new Map<string, any>();
-        sanitizedItems.forEach((it: any) => {
-          const key = it.itemId || it.name;
-          newItemsMap.set(key, it);
-        });
-
-        // 1. Items in old sale: check if reduced, increased, or removed
-        for (const [key, oldIt] of oldItemsMap.entries()) {
-          const newIt = newItemsMap.get(key);
-          const oldQty = oldIt.quantity || 0;
-          const newQty = newIt ? (newIt.quantity || 0) : 0;
-          const delta = oldQty - newQty; // If delta > 0: returned to van; If delta < 0: deducted from van
-
-          if (delta !== 0) {
-            await adjustVanInventoryStock(targetVanName, oldIt.itemId, oldIt.name, oldIt.unit, delta);
-          }
-        }
-
-        // 2. Items added in new sale that were not in old sale
-        for (const [key, newIt] of newItemsMap.entries()) {
-          if (!oldItemsMap.has(key)) {
-            const deductQty = newIt.quantity || 0;
-            if (deductQty > 0) {
-              await adjustVanInventoryStock(targetVanName, newIt.itemId, newIt.name, newIt.unit, -deductQty);
-            }
-          }
-        }
+      if (targetVanName && editingSale.status !== 'deleted') {
+        await syncCashvanSaleInventoryEdit(targetVanName, editingSale.items || [], sanitizedItems, items);
       }
 
       await updateDoc(doc(db, 'cashvan_sales', editingSale.id), {

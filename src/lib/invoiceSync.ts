@@ -1,4 +1,4 @@
-import { collection, doc, getDocs, query, where, writeBatch, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where, writeBatch, addDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { handleFirestoreError, OperationType } from './firestoreErrors';
 import { Item, StockHistory, Transaction } from '../types';
@@ -638,3 +638,224 @@ export async function restoreWarehouseStock(itemsToRestore: StockAdjustmentItem[
     throw error;
   }
 }
+
+function stripGiftSuffix(name?: string): string {
+  return (name || '').replace(/\(هەدیە\)/g, '').trim();
+}
+
+function extractRawVanItemId(vanName: string, itemId?: string): string {
+  const idStr = (itemId || '').trim();
+  if (!idStr) return '';
+  const cleanVan = vanName.trim();
+  const prefix = `${cleanVan}_`;
+  if (idStr.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return idStr.slice(prefix.length);
+  }
+  return idStr;
+}
+
+function aggregateCashvanSaleItems(vanName: string, itemsList: any[] = []) {
+  const map = new Map<string, { itemId: string; rawItemId: string; name: string; normName: string; unit: 'carton' | 'packet'; barcode: string; price: number; qty: number }>();
+  for (const it of itemsList) {
+    const qty = (Number(it.quantity) || 0) + (Number(it.giftQuantity) || 0);
+    if (qty <= 0) continue;
+    const rawItemId = extractRawVanItemId(vanName, it.itemId || it.id);
+    const cleanName = stripGiftSuffix(it.name);
+    const normName = normalizeKurdishArabicText(cleanName).toLowerCase();
+    const key = rawItemId ? `id:${rawItemId}` : `name:${normName}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.qty = Math.round((existing.qty + qty) * 1000) / 1000;
+      if (!existing.price && it.price) existing.price = Number(it.price) || 0;
+      if (!existing.barcode && it.barcode && it.barcode !== '-') existing.barcode = it.barcode;
+    } else {
+      map.set(key, {
+        itemId: (it.itemId || it.id || '').trim(),
+        rawItemId,
+        name: cleanName,
+        normName,
+        unit: it.unit === 'packet' ? 'packet' : 'carton',
+        barcode: it.barcode && it.barcode !== '-' ? it.barcode : '',
+        price: Number(it.price) || 0,
+        qty: Math.round(qty * 1000) / 1000,
+      });
+    }
+  }
+  return map;
+}
+
+async function applyCashvanInventoryDeltas(
+  vanName: string,
+  deltas: Array<{ itemId?: string; rawItemId?: string; name?: string; normName?: string; unit?: 'carton' | 'packet'; barcode?: string; price?: number; delta: number }>,
+  catalogItems?: Item[]
+) {
+  const cleanVan = (vanName || '').trim();
+  if (!cleanVan || deltas.length === 0) return;
+  const cleanVanLower = cleanVan.toLowerCase();
+
+  const invSnap = await getDocs(collection(db, 'cashvan_inventory'));
+  const vanDocs: Array<{ id: string; data: any; ref: any }> = [];
+  invSnap.forEach((d) => {
+    const data = d.data();
+    const docVan = (data.cashvanName || '').trim().toLowerCase();
+    if (docVan === cleanVanLower || d.id.toLowerCase().startsWith(`${cleanVanLower}_`)) {
+      vanDocs.push({ id: d.id, data, ref: d.ref });
+    }
+  });
+
+  let resolvedCatalog = catalogItems;
+
+  for (const entry of deltas) {
+    if (!entry.delta) continue;
+    const cleanName = stripGiftSuffix(entry.name);
+    const normName = entry.normName || normalizeKurdishArabicText(cleanName).toLowerCase();
+    const rawId = entry.rawItemId || extractRawVanItemId(cleanVan, entry.itemId);
+
+    const matched = vanDocs.find((d) => {
+      const dItemId = (d.data.itemId || '').trim();
+      const dRawId = extractRawVanItemId(cleanVan, dItemId);
+      if (rawId && (dItemId === rawId || dRawId === rawId || d.id === `${cleanVan}_${rawId}` || d.id.toLowerCase() === `${cleanVanLower}_${rawId.toLowerCase()}`)) {
+        return true;
+      }
+      if (entry.itemId && (dItemId === entry.itemId || d.id === entry.itemId)) {
+        return true;
+      }
+      const dNormName = normalizeKurdishArabicText(stripGiftSuffix(d.data.name)).toLowerCase();
+      return !!normName && dNormName === normName;
+    });
+
+    if (matched) {
+      const curQty = Number(matched.data.quantity || 0);
+      const newQty = Math.max(0, Math.round((curQty + entry.delta) * 1000) / 1000);
+      await updateDoc(matched.ref, {
+        quantity: newQty,
+        cashvanName: matched.data.cashvanName || cleanVan,
+        lastUpdated: Date.now(),
+      });
+      matched.data.quantity = newQty;
+    } else if (entry.delta > 0) {
+      if (!resolvedCatalog) {
+        const itemsSnap = await getDocs(collection(db, 'items'));
+        resolvedCatalog = [];
+        itemsSnap.forEach((d) => resolvedCatalog!.push({ ...(d.data() as Item), id: d.id }));
+      }
+
+      const catItem = resolvedCatalog.find((i) =>
+        (rawId && i.id === rawId) ||
+        (entry.itemId && i.id === entry.itemId) ||
+        (normName && normalizeKurdishArabicText((i.name || '').trim()).toLowerCase() === normName)
+      );
+
+      const finalItemId = rawId || catItem?.id || '';
+      const newDocId = `${cleanVan}_${finalItemId || Date.now()}`;
+      const unit = entry.unit || (catItem?.packetSellingPrice && !catItem?.cartonSellingPrice ? 'packet' : 'carton');
+      const restoredQty = Math.round(entry.delta * 1000) / 1000;
+
+      const newDocRef = doc(db, 'cashvan_inventory', newDocId);
+      const payload = {
+        cashvanName: cleanVan,
+        itemId: finalItemId,
+        name: catItem?.name || cleanName || 'کاڵا',
+        quantity: restoredQty,
+        unit,
+        barcode: catItem?.barcode || entry.barcode || '',
+        costPrice: unit === 'packet' ? (catItem?.packetCostPrice || catItem?.costPrice || 0) : (catItem?.cartonCostPrice || catItem?.costPrice || 0),
+        sellingPrice: unit === 'packet' ? (catItem?.packetSellingPrice || catItem?.sellingPrice || entry.price || 0) : (catItem?.cartonSellingPrice || catItem?.sellingPrice || entry.price || 0),
+        wholesalePrice: unit === 'packet' ? (catItem?.packetWholesalePrice || catItem?.wholesalePrice || 0) : (catItem?.cartonWholesalePrice || catItem?.wholesalePrice || 0),
+        cartonCostPrice: catItem?.cartonCostPrice || 0,
+        cartonSellingPrice: catItem?.cartonSellingPrice || 0,
+        cartonWholesalePrice: catItem?.cartonWholesalePrice || 0,
+        packetCostPrice: catItem?.packetCostPrice || 0,
+        packetSellingPrice: catItem?.packetSellingPrice || 0,
+        packetWholesalePrice: catItem?.packetWholesalePrice || 0,
+        createdAt: Date.now(),
+        lastUpdated: Date.now(),
+      };
+
+      await setDoc(newDocRef, payload, { merge: true });
+      vanDocs.push({ id: newDocId, data: payload, ref: newDocRef });
+    }
+  }
+}
+
+/**
+ * Restores sold & gift items from a deleted Cashvan sale back into `cashvan_inventory`.
+ */
+export async function restoreCashvanSaleInventory(vanName: string, saleItems: any[] = [], catalogItems?: Item[]) {
+  if (!vanName || !saleItems || saleItems.length === 0) return;
+  try {
+    const agg = aggregateCashvanSaleItems(vanName, saleItems);
+    const deltas = Array.from(agg.values()).map((it) => ({
+      ...it,
+      delta: it.qty,
+    }));
+    await applyCashvanInventoryDeltas(vanName, deltas, catalogItems);
+  } catch (error) {
+    console.error('Error restoring cashvan sale inventory:', error);
+    handleFirestoreError(error, OperationType.UPDATE, 'cashvan_inventory');
+    throw error;
+  }
+}
+
+/**
+ * Synchronizes `cashvan_inventory` when an existing Cashvan sale is edited (aggregates regular + gift lines safely).
+ */
+export async function syncCashvanSaleInventoryEdit(vanName: string, oldItems: any[] = [], newItems: any[] = [], catalogItems?: Item[]) {
+  if (!vanName) return;
+  try {
+    const oldMap = aggregateCashvanSaleItems(vanName, oldItems);
+    const newMap = aggregateCashvanSaleItems(vanName, newItems);
+    const deltas: Array<{ itemId?: string; rawItemId?: string; name?: string; normName?: string; unit?: 'carton' | 'packet'; barcode?: string; price?: number; delta: number }> = [];
+
+    for (const [key, oldIt] of oldMap.entries()) {
+      const newIt = newMap.get(key);
+      const diff = Math.round((oldIt.qty - (newIt?.qty || 0)) * 1000) / 1000;
+      if (diff !== 0) {
+        deltas.push({ ...oldIt, delta: diff });
+      }
+    }
+
+    for (const [key, newIt] of newMap.entries()) {
+      if (!oldMap.has(key) && newIt.qty > 0) {
+        deltas.push({ ...newIt, delta: -newIt.qty });
+      }
+    }
+
+    await applyCashvanInventoryDeltas(vanName, deltas, catalogItems);
+  } catch (error) {
+    console.error('Error syncing cashvan sale edit inventory:', error);
+    handleFirestoreError(error, OperationType.UPDATE, 'cashvan_inventory');
+    throw error;
+  }
+}
+
+/**
+ * Deletes all ledger transactions linked to a Cashvan sale by saleId, invoiceNo, or invoiceId.
+ */
+export async function deleteCashvanSaleTransactions(saleId: string, invoiceNo?: string, invoiceId?: string) {
+  const deletedIds = new Set<string>();
+  const invoiceKeys = Array.from(new Set([invoiceNo, invoiceId].filter((v): v is string => !!v && v.trim() !== '').map((v) => v.trim())));
+
+  for (const inv of invoiceKeys) {
+    const qInv = query(collection(db, 'transactions'), where('invoiceNo', '==', inv));
+    const snapInv = await getDocs(qInv);
+    for (const d of snapInv.docs) {
+      if (!deletedIds.has(d.id)) {
+        await deleteDoc(doc(db, 'transactions', d.id));
+        deletedIds.add(d.id);
+      }
+    }
+  }
+
+  if (saleId) {
+    const qSale = query(collection(db, 'transactions'), where('saleId', '==', saleId));
+    const snapSale = await getDocs(qSale);
+    for (const d of snapSale.docs) {
+      if (!deletedIds.has(d.id)) {
+        await deleteDoc(doc(db, 'transactions', d.id));
+        deletedIds.add(d.id);
+      }
+    }
+  }
+}
+

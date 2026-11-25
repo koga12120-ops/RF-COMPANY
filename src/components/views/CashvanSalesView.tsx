@@ -95,14 +95,15 @@ export default function CashvanSalesView({ onlyPreorder = false }: { onlyPreorde
   useEffect(() => {
     if (!activeCashvanName) return;
 
-    const qInv = query(collection(db, 'cashvan_inventory'), where('cashvanName', '==', activeCashvanName));
+    const cleanTarget = activeCashvanName.trim().toLowerCase();
+    const qInv = query(collection(db, 'cashvan_inventory'));
     const unsubInv = onSnapshot(
       qInv,
       (snapshot) => {
         const data: any[] = [];
         snapshot.forEach(doc => {
           const invData = doc.data();
-          if ((invData.quantity || 0) > 0) {
+          if ((invData.cashvanName || '').trim().toLowerCase() === cleanTarget && (invData.quantity || 0) > 0) {
             data.push({ id: doc.id, ...invData });
           }
         });

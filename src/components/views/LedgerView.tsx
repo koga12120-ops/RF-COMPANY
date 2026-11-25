@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, where, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDoc, getDocs, where, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { Transaction } from '../../types';
@@ -14,6 +14,7 @@ import ConfirmModal from '../common/ConfirmModal';
 import { printStatementPopup, renderReceiptHeaderHtml, printExpenseVoucherPopup, printExpensesListReportPopup, printHtml } from '../../lib/statementPrinter';
 import { getCompanySettings } from '../../lib/companySettings';
 import { normalizeKurdishArabicText } from '../../lib/similaritySearch';
+import { restoreWarehouseStock, restoreCashvanSaleInventory, deleteCashvanSaleTransactions } from '../../lib/invoiceSync';
 
 export const PRESET_EXPENSE_CATEGORIES = [
   'بەنزین و سووتەمەنی',
@@ -610,22 +611,38 @@ export default function LedgerView() {
       const { id, sourceCollection, invoiceNo } = deletingDeal;
 
       if (sourceCollection === 'orders') {
-        await deleteDoc(doc(db, 'orders', id));
-        if (invoiceNo) {
-          const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', invoiceNo));
-          const snapTr = await getDocs(qTr);
-          for (const d of snapTr.docs) {
+        const orderRef = doc(db, 'orders', id);
+        const orderSnap = await getDoc(orderRef);
+        if (orderSnap.exists()) {
+          const orderData = orderSnap.data();
+          if ((orderData.stockDeducted || orderData.status === 'completed') && orderData.status !== 'deleted') {
+            await restoreWarehouseStock(orderData.items || []);
+          }
+          await deleteDoc(orderRef);
+          const invKeys = Array.from(new Set([invoiceNo, orderData.invoiceNo, orderData.invoiceId].filter((v): v is string => !!v && String(v).trim() !== '')));
+          for (const inv of invKeys) {
+            const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', inv));
+            const snapTr = await getDocs(qTr);
+            for (const d of snapTr.docs) {
+              await deleteDoc(doc(db, 'transactions', d.id));
+            }
+          }
+          const qOrdTr = query(collection(db, 'transactions'), where('orderId', '==', id));
+          const snapOrdTr = await getDocs(qOrdTr);
+          for (const d of snapOrdTr.docs) {
             await deleteDoc(doc(db, 'transactions', d.id));
           }
         }
       } else if (sourceCollection === 'cashvan_sales') {
-        await deleteDoc(doc(db, 'cashvan_sales', id));
-        if (invoiceNo) {
-          const qTr = query(collection(db, 'transactions'), where('invoiceNo', '==', invoiceNo));
-          const snapTr = await getDocs(qTr);
-          for (const d of snapTr.docs) {
-            await deleteDoc(doc(db, 'transactions', d.id));
+        const saleRef = doc(db, 'cashvan_sales', id);
+        const saleSnap = await getDoc(saleRef);
+        if (saleSnap.exists()) {
+          const saleData = saleSnap.data();
+          if (saleData.status !== 'deleted' && saleData.cashvanName && (saleData.items || []).length > 0) {
+            await restoreCashvanSaleInventory(saleData.cashvanName, saleData.items || []);
           }
+          await deleteDoc(saleRef);
+          await deleteCashvanSaleTransactions(id, invoiceNo || saleData.invoiceNo, saleData.invoiceId);
         }
       } else {
         await deleteDoc(doc(db, 'transactions', id));

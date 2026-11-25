@@ -136,9 +136,10 @@ export default function WarehouseCashvanView() {
       qInv,
       (snap) => {
         const vanItems: any[] = [];
+        const cleanTarget = selectedCashvan.trim().toLowerCase();
         snap.forEach(d => {
           const data = d.data();
-          if (data.cashvanName === selectedCashvan && (data.quantity > 0 || data.cartonQuantity > 0 || data.packetQuantity > 0)) {
+          if ((data.cashvanName || '').trim().toLowerCase() === cleanTarget && (data.quantity > 0 || data.cartonQuantity > 0 || data.packetQuantity > 0)) {
             vanItems.push({ id: d.id, ...data });
           }
         });

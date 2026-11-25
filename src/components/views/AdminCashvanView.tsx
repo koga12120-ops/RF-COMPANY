@@ -16,7 +16,7 @@ import {
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firestoreErrors';
 import { renameRepOrCashvan, syncAllRepsAndCashvans } from '../../lib/syncHelper';
-import { restoreWarehouseStock } from '../../lib/invoiceSync';
+import { restoreWarehouseStock, restoreCashvanSaleInventory, syncCashvanSaleInventoryEdit, deleteCashvanSaleTransactions } from '../../lib/invoiceSync';
 import { CashvanSale, CashvanTransfer, Order, Transaction, Market, Item, SalesRep } from '../../types';
 import { 
   Plus,
@@ -779,53 +779,35 @@ export default function AdminCashvanView() {
     if (!deletingSale) return;
     setIsProcessing(true);
     try {
-      const cvSnap = await getDocs(query(collection(db, 'cashvans'), where('name', '==', deletingSale.cashvanName)));
-      if (!cvSnap.empty) {
-        const cvDoc = cvSnap.docs[0];
-        const cvData = cvDoc.data();
-        let cvInventory = cvData.inventory || [];
-
-        for (const saleItem of deletingSale.items) {
-          const itemDocSnap = await getDoc(doc(db, 'items', saleItem.itemId));
-          const conversionFactor = itemDocSnap.exists() && itemDocSnap.data().conversionFactor ? itemDocSnap.data().conversionFactor : 1;
-          const returnedPackets = saleItem.unit === 'packet' ? saleItem.quantity : saleItem.quantity * conversionFactor;
-
-          const invIndex = cvInventory.findIndex((i: any) => i.itemId === saleItem.itemId);
-          if (invIndex > -1) {
-            cvInventory[invIndex].quantity = (cvInventory[invIndex].quantity || 0) + returnedPackets;
-          } else {
-            cvInventory.push({
-              itemId: saleItem.itemId,
-              name: saleItem.name,
-              quantity: returnedPackets,
-              unit: 'packet'
-            });
-          }
-        }
-
-        await updateDoc(doc(db, 'cashvans', cvDoc.id), {
-          inventory: cvInventory
-        });
+      const saleRef = doc(db, 'cashvan_sales', deletingSale.id);
+      const freshSnap = await getDoc(saleRef);
+      if (!freshSnap.exists() || freshSnap.data().status === 'deleted') {
+        setDeletingSale(null);
+        return;
       }
 
-      await updateDoc(doc(db, 'cashvan_sales', deletingSale.id), {
+      const freshData = freshSnap.data();
+      const targetVanName = (freshData.cashvanName || deletingSale.cashvanName || '').trim();
+      const saleItems = freshData.items || deletingSale.items || [];
+
+      if (targetVanName && saleItems.length > 0) {
+        await restoreCashvanSaleInventory(targetVanName, saleItems, items);
+      }
+
+      await updateDoc(saleRef, {
         status: 'deleted',
         deletedAt: Date.now(),
         deletedBy: auth.currentUser?.displayName || 'بەڕێوەبەر'
       });
 
-      // Also remove associated transaction from ledger
-      const invoiceKey = deletingSale.invoiceNo || deletingSale.id;
-      const qExisting = query(
-        collection(db, 'transactions'),
-        where('invoiceNo', '==', invoiceKey)
+      await deleteCashvanSaleTransactions(
+        deletingSale.id,
+        freshData.invoiceNo || deletingSale.invoiceNo,
+        freshData.invoiceId || deletingSale.invoiceId
       );
-      const existingSnap = await getDocs(qExisting);
-      existingSnap.forEach(async (tDoc) => {
-        await deleteDoc(doc(db, 'transactions', tDoc.id));
-      });
 
       setDeletingSale(null);
+      alert('فرۆشتنی کاشڤان سڕایەوە و کاڵاکان بە سەرکەوتوویی گەڕێندرانەوە بۆ ناو ڤان');
     } catch (error) {
       console.error(error);
       alert('هەڵەیەک ڕوویدا لە کاتی سڕینەوەی فرۆشتن');
@@ -953,6 +935,15 @@ export default function AdminCashvanView() {
 
       if (editSaleItems.length === 0) {
         finalAmount = parseFloat(editSaleAmount) || 0;
+      }
+
+      if (editingSale.cashvanName && editingSale.status !== 'deleted') {
+        await syncCashvanSaleInventoryEdit(
+          editingSale.cashvanName,
+          editingSale.items || [],
+          sanitizedItems,
+          items
+        );
       }
 
       await updateDoc(doc(db, 'cashvan_sales', editingSale.id), {
